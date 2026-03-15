@@ -4,7 +4,7 @@
         {
             "label": "CMake Build & Run",
             "type": "shell",
-            "command": "mingw32-make && SaveBox2.exe",
+            "command": "mingw32-make && savebox_server.exe",
             "options": {
                 "cwd": "${workspaceFolder}/backend/build"
             },
