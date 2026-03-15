@@ -1,8 +1,31 @@
 #include <catch2/catch_test_macros.hpp>
+#include "AuthService.hpp"
+#include <string>
 
-// Não existe 'int main()' aqui! O Catch2 faz isso sozinho.
 
-TEST_CASE("Testando a matemática básica do servidor", "[geral]") {
-    // Aqui vai a lógica do teste depois
-    REQUIRE(1 + 1 == 2);
+
+
+TEST_CASE("Hashing e Verificação de Senhas", "[auth][security]") {
+    AuthService auth;
+
+    SECTION("Hash não deve ser vazio nem igual à senha original") {
+        std::string hash = auth.hash_password("minha_senha_123");
+
+        REQUIRE_FALSE(hash.empty());
+        REQUIRE(hash != "minha_senha_123");
+    }
+
+    SECTION("Verificação deve aceitar a senha correta") {
+        std::string hash = auth.hash_password("minha_senha_123");
+
+        bool is_valid = auth.verify_password("minha_senha_123", hash);
+        REQUIRE(is_valid == true);
+    }
+
+    SECTION("Verificação deve rejeitar uma senha incorreta") {
+        std::string hash = auth.hash_password("minha_senha_123");
+
+        bool is_valid = auth.verify_password("senha_errada", hash);
+        REQUIRE(is_valid == false);
+    }
 }

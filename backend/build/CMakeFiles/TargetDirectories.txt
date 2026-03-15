@@ -1,4 +1,0 @@
-C:/Users/Vinicius/Documents/Github/SaveBox2/backend/build/CMakeFiles/savebox_server.dir
-C:/Users/Vinicius/Documents/Github/SaveBox2/backend/build/CMakeFiles/savebox_tests.dir
-C:/Users/Vinicius/Documents/Github/SaveBox2/backend/build/CMakeFiles/edit_cache.dir
-C:/Users/Vinicius/Documents/Github/SaveBox2/backend/build/CMakeFiles/rebuild_cache.dir

@@ -1,8 +1,27 @@
-#include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_session.hpp>
+#include <iostream>
+#include <cstdlib>
 
-// Não existe 'int main()' aqui! O Catch2 faz isso sozinho.
 
-TEST_CASE("Testando a matemática básica do servidor", "[geral]") {
-    // Aqui vai a lógica do teste depois
-    REQUIRE(1 + 1 == 2);
+
+
+int main(int argc, char* argv[]) {
+    std::cout << "====================================================\n";
+    std::cout << "[PRE-FLIGHT CHECK] Iniciando bateria de testes do SaveBox2...\n";
+    std::cout << "====================================================\n";
+
+    Catch::Session session;
+    
+    int returnCode = session.applyCommandLine(argc, argv);
+    if (returnCode != 0) {
+        return returnCode;
+    }
+
+    int result = session.run();
+
+    std::cout << "====================================================\n";
+    std::cout << "[FIM DOS TESTES] Bateria finalizada.\n";
+    std::cout << "====================================================\n";
+
+    return result;
 }
