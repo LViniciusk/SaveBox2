@@ -67,7 +67,7 @@ target_link_directories(savebox_tests PRIVATE ${PQXX_LIBRARY_DIRS} ${SODIUM_LIBR
 
 target_link_libraries(savebox_tests PRIVATE
     Threads::Threads
-    Catch2::Catch2WithMain
+    Catch2::Catch2
     ${PQXX_LIBRARIES}
     ${SODIUM_LIBRARIES}
     ${ZIP_LIBRARIES} # 3. Faltava o ZIP aqui!
