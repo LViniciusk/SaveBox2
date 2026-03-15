@@ -1,0 +1,3 @@
+C:/Users/Vinicius/Documents/Github/SaveBox2/backend/build/CMakeFiles/SaveBox2.dir
+C:/Users/Vinicius/Documents/Github/SaveBox2/backend/build/CMakeFiles/edit_cache.dir
+C:/Users/Vinicius/Documents/Github/SaveBox2/backend/build/CMakeFiles/rebuild_cache.dir

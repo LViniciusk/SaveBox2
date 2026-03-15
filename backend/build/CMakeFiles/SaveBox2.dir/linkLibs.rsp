@@ -1,0 +1,1 @@
+ C:/msys64/ucrt64/lib/libssl.dll.a C:/msys64/ucrt64/lib/libcrypto.dll.a C:/msys64/ucrt64/lib/libzip.dll.a -lpqxx -lws2_32 -lwsock32 -lcrypt32 -lkernel32 -luser32 -lgdi32 -lwinspool -lshell32 -lole32 -loleaut32 -luuid -lcomdlg32 -ladvapi32 

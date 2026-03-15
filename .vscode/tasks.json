@@ -1,0 +1,19 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake Build & Run",
+            "type": "shell",
+            "command": "mingw32-make && SaveBox2.exe",
+            "options": {
+                "cwd": "${workspaceFolder}/backend/build"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "detail": "Compila via Makefile e executa o backend"
+        }
+    ]
+}
