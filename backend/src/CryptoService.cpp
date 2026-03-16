@@ -96,3 +96,20 @@ std::string CryptoService::decrypt_text(const std::string& cipher_base64) {
 
     return std::string(reinterpret_cast<const char*>(plaintext.data()), plaintext.size());
 }
+
+std::string CryptoService::generate_blind_index(const std::string& plain_text) const {
+    std::vector<uint8_t> hash(crypto_generichash_BYTES);
+
+    if (crypto_generichash(
+            hash.data(), hash.size(),
+            reinterpret_cast<const uint8_t*>(plain_text.data()), plain_text.size(),
+            key_.data(), key_.size()) != 0) {
+        throw std::runtime_error("Falha ao gerar blind index.");
+    }
+
+    // crypto_generichash_BYTES = 32 bytes → 64 hex chars + null terminator
+    std::vector<char> hex_buf(crypto_generichash_BYTES * 2 + 1);
+    sodium_bin2hex(hex_buf.data(), hex_buf.size(), hash.data(), hash.size());
+
+    return std::string(hex_buf.data());
+}

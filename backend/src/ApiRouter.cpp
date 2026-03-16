@@ -1,7 +1,8 @@
 #include "ApiRouter.hpp"
+#include <optional>
 
-ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth)
-    : pool_(&pool), auth_(&auth) {}
+ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr, CryptoService& crypto)
+    : pool_(&pool), auth_(&auth), folder_mgr_(&folder_mgr), crypto_(&crypto) {}
 
 std::string ApiRouter::handle_healthcheck() const {
     return R"({"status":"online"})";
@@ -86,6 +87,36 @@ crow::response ApiRouter::handle_login(const crow::request& req) {
     }
 }
 
+crow::response ApiRouter::handle_create_folder(const crow::request& req) {
+    try {
+        auto body = crow::json::load(req.body);
+        if (!body || !body.has("user_id") || !body.has("name")) {
+            return crow::response(400, R"({"error":"JSON invalido"})");
+        }
+
+        uint64_t user_id = body["user_id"].i();
+        std::string name = body["name"].s();
+
+        std::optional<uint64_t> parent_id_opt;
+        if (body.has("parent_id") && body["parent_id"].t() != crow::json::type::Null) {
+            parent_id_opt = static_cast<uint64_t>(body["parent_id"].i());
+        }
+
+        std::string encrypted_name = crypto_->encrypt_text(name);
+        std::string blind_index = crypto_->generate_blind_index(name);
+
+        uint64_t folder_id = folder_mgr_->create_folder(user_id, parent_id_opt, encrypted_name, blind_index);
+
+        return crow::response(201,
+            R"({"message":"Pasta criada", "folder_id":)" + std::to_string(folder_id) + "}");
+
+    } catch (const pqxx::unique_violation& e) {
+        return crow::response(409, R"({"error":"Pasta ja existe"})");
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 void ApiRouter::setup_routes(crow::SimpleApp& app) {
     CROW_ROUTE(app, "/health")
     ([this]() {
@@ -104,6 +135,13 @@ void ApiRouter::setup_routes(crow::SimpleApp& app) {
     CROW_ROUTE(app, "/login").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
         auto res = handle_login(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/folders").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        auto res = handle_create_folder(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });
