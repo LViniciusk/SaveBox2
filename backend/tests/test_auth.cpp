@@ -1,12 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
-#include "AuthService.hpp"
+#include "services/AuthService.hpp"
 #include <string>
 
 
 
 
 TEST_CASE("Hashing e Verificação de Senhas", "[auth][security]") {
-    AuthService auth;
+    AuthService auth("uma_pimenta_secreta_muito_longa_e_aleatoria_aqui");
 
     SECTION("Hash não deve ser vazio nem igual à senha original") {
         std::string hash = auth.hash_password("minha_senha_123");

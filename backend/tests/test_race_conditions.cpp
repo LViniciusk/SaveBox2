@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "storage/FolderManager.hpp"
+#include "database/FolderManager.hpp"
 #include "database/DatabasePool.hpp"
 #include "test_helpers.hpp"
 #include <vector>
