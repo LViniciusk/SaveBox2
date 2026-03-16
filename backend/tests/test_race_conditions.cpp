@@ -1,12 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
-#include "FolderManager.hpp"
-#include "DatabasePool.hpp"
+#include "storage/FolderManager.hpp"
+#include "database/DatabasePool.hpp"
+#include "test_helpers.hpp"
 #include <vector>
 #include <thread>
 #include <atomic>
 #include <pqxx/pqxx>
-
-extern std::string get_secure_conn_string();
 
 
 
@@ -58,7 +57,7 @@ TEST_CASE("Race Condition - Criação de Pastas Simultâneas", "[concurrency][fo
     {
         auto conn = pool.acquire_connection();
         pqxx::work W(*conn);
-        W.exec_params("DELETE FROM users WHERE id = $1;", fake_user_id);
+        W.exec("DELETE FROM users WHERE id = $1;", pqxx::params{fake_user_id});
         W.commit();
     }
 }

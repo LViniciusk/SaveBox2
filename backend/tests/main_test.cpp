@@ -6,9 +6,6 @@
 
 
 int main(int argc, char* argv[]) {
-    std::cout << "====================================================\n";
-    std::cout << "[PRE-FLIGHT CHECK] Iniciando bateria de testes do SaveBox2...\n";
-    std::cout << "====================================================\n";
 
     Catch::Session session;
     
@@ -19,9 +16,6 @@ int main(int argc, char* argv[]) {
 
     int result = session.run();
 
-    std::cout << "====================================================\n";
-    std::cout << "[FIM DOS TESTES] Bateria finalizada.\n";
-    std::cout << "====================================================\n";
 
     return result;
 }

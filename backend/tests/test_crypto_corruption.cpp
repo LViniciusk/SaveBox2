@@ -5,7 +5,7 @@
 
 
 TEST_CASE("Crypto Service - Dados Corrompidos e Extremos", "[crypto][security]") {
-    CryptoService crypto("super_chave_mestra_do_servidor_123456789012");
+    CryptoService crypto("01234567890123456789012345678901");
 
     SECTION("Descriptografar lixo não deve dar Segfault, deve lançar exceção controlada") {
         std::string corrupted_cipher = "IssoNaoEhUmBase64Valido!@#$()";

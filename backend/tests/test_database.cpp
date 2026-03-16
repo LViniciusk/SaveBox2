@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "DatabasePool.hpp"
+#include "database/DatabasePool.hpp"
 #include <vector>
 #include <thread>
 #include <chrono>

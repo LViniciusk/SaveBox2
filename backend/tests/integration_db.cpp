@@ -1,8 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "DatabasePool.hpp"
+#include "database/DatabasePool.hpp"
+#include "test_helpers.hpp"
 #include <pqxx/pqxx>
-
-extern std::string get_secure_conn_string();
 
 
 
@@ -24,7 +23,10 @@ TEST_CASE("Integração Bruta - Regras de Negócio do PostgreSQL", "[db][integra
             pqxx::integrity_constraint_violation
         );
 
-        W.exec("DELETE FROM users WHERE username = 'clone_user';");
-        W.commit();
+        W.abort();
+
+        pqxx::work W_limpeza(*conn);
+        W_limpeza.exec("DELETE FROM users WHERE username = 'clone_user';");
+        W_limpeza.commit();
     }
 }

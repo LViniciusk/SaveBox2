@@ -6,7 +6,7 @@
 
 
 TEST_CASE("Criptografia Reversível", "[crypto][security]") {
-    CryptoService crypto("super_chave_mestra_do_servidor_123456789012");
+    CryptoService crypto("01234567890123456789012345678901");
 
     std::string original = "relatorio_financeiro.pdf";
 

@@ -1,10 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
-#include "DatabasePool.hpp"
-#include "GarbageCollector.hpp"
+#include "database/DatabasePool.hpp"
+#include "storage/GarbageCollector.hpp"
+#include "test_helpers.hpp"
 #include <filesystem>
 #include <fstream>
-
-extern std::string get_secure_conn_string(); 
 
 
 

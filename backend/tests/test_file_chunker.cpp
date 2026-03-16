@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "FileChunker.hpp"
+#include "storage/FileChunker.hpp"
 #include <vector>
 #include <cstdint>
 #include <cstddef>
@@ -8,7 +8,9 @@
 
 
 TEST_CASE("Montagem de Arquivo por Chunks", "[storage][chunker]") {
-    FileChunker chunker("caminho_ficticio/arquivo_temp.bin");
+    std::string path = "caminho_ficticio/arquivo_temp.bin";
+    std::filesystem::remove(path);
+    FileChunker chunker(path);
 
     SECTION("Append de chunks individuais deve retornar true") {
         std::vector<uint8_t> chunk1 = { 0x48, 0x65, 0x6C, 0x6C, 0x6F }; // "Hello"

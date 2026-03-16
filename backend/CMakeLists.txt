@@ -60,7 +60,7 @@ target_link_libraries(savebox_server PRIVATE
 add_executable(savebox_tests ${TEST_FILES} ${CORE_SOURCES})
 
 # 1. Faltava o ${ZIP_INCLUDE_DIRS}
-target_include_directories(savebox_tests PRIVATE include ${PQXX_INCLUDE_DIRS} ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
+target_include_directories(savebox_tests PRIVATE include tests ${PQXX_INCLUDE_DIRS} ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
 
 # 2. Faltava a linha inteira de link_directories nos testes!
 target_link_directories(savebox_tests PRIVATE ${PQXX_LIBRARY_DIRS} ${SODIUM_LIBRARY_DIRS} ${ZIP_LIBRARY_DIRS})
