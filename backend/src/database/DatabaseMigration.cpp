@@ -33,7 +33,8 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 id BIGSERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 parent_id BIGINT REFERENCES folders(id) ON DELETE CASCADE,
-                encrypted_name TEXT NOT NULL, 
+                encrypted_name TEXT NOT NULL,
+                name_hash VARCHAR(128) NOT NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         )");
@@ -55,7 +56,8 @@ bool DatabaseMigration::run(DatabasePool& pool) {
         // Índices
         w.exec("CREATE INDEX IF NOT EXISTS idx_folders_user_parent ON folders(user_id, parent_id);");
         w.exec("CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_id);");
-        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_folders_unique_name ON folders(user_id, COALESCE(parent_id, 0), encrypted_name);");
+        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_root_folder ON folders (user_id, name_hash) WHERE parent_id IS NULL;");
+        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_sub_folder ON folders (user_id, parent_id, name_hash) WHERE parent_id IS NOT NULL;");
 
         // Confirma a transação
         w.commit();

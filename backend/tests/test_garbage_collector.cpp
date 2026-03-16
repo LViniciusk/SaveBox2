@@ -35,13 +35,13 @@ TEST_CASE("Garbage Collector - Limpeza de Uploads Fantasmas", "[gc][cleanup][int
             auto res_u = W.exec("INSERT INTO users (username, password_hash) VALUES ('fantasma_gc', 'hash') RETURNING id;");
             fake_user_id = res_u[0][0].as<uint64_t>();
 
-            auto res_f = W.exec_params("INSERT INTO folders (user_id, encrypted_name) VALUES ($1, 'pasta_fantasma') RETURNING id;", fake_user_id);
+            auto res_f = W.exec("INSERT INTO folders (user_id, encrypted_name, name_hash) VALUES ($1, 'pasta_fantasma', 'hash_fantasma') RETURNING id;", pqxx::params{fake_user_id});
             fake_folder_id = res_f[0][0].as<uint64_t>();
 
-            W.exec_params(
+            W.exec(
                 "INSERT INTO files (user_id, folder_id, encrypted_name, physical_path, size_bytes, is_upload_complete, created_at) "
                 "VALUES ($1, $2, 'arquivo_cripto', $3, 1024, FALSE, NOW() - INTERVAL '48 hours');",
-                fake_user_id, fake_folder_id, fake_file_path
+                pqxx::params{fake_user_id, fake_folder_id, fake_file_path}
             );
             W.commit();
         }
@@ -62,11 +62,11 @@ TEST_CASE("Garbage Collector - Limpeza de Uploads Fantasmas", "[gc][cleanup][int
         {
             auto conn = pool.acquire_connection();
             pqxx::work W(*conn);
-            auto res = W.exec_params("SELECT count(*) FROM files WHERE physical_path = $1;", fake_file_path);
+            auto res = W.exec("SELECT count(*) FROM files WHERE physical_path = $1;", pqxx::params{fake_file_path});
 
             REQUIRE(res[0][0].as<int>() == 0);
 
-            W.exec_params("DELETE FROM users WHERE id = $1;", fake_user_id);
+            W.exec("DELETE FROM users WHERE id = $1;", pqxx::params{fake_user_id});
             W.commit();
         }
     }

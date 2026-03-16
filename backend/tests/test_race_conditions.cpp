@@ -38,7 +38,7 @@ TEST_CASE("Race Condition - Criação de Pastas Simultâneas", "[concurrency][fo
         for (int i = 0; i < num_threads; ++i) {
             threads.emplace_back([&]() {
                 try {
-                    uint64_t id = manager.create_folder(fake_user_id, std::nullopt, folder_name);
+                    uint64_t id = manager.create_folder(fake_user_id, std::nullopt, folder_name, "hash_disputada");
                     if (id > 0) success_count++;
                 } catch (...) {
                     error_count++;

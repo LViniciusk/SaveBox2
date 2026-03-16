@@ -8,7 +8,8 @@ FolderManager::FolderManager(DatabasePool& pool)
 
 uint64_t FolderManager::create_folder(uint64_t user_id,
                                       std::optional<uint64_t> parent_id,
-                                      const std::string& encrypted_name) {
+                                      const std::string& encrypted_name,
+                                      const std::string& name_hash) {
     auto conn = pool_.acquire_connection();
     pqxx::work W(*conn);
 
@@ -16,15 +17,15 @@ uint64_t FolderManager::create_folder(uint64_t user_id,
 
     if (parent_id.has_value()) {
         res = W.exec(
-            "INSERT INTO folders (user_id, parent_id, encrypted_name) "
-            "VALUES ($1, $2, $3) RETURNING id;",
-            pqxx::params{user_id, parent_id.value(), encrypted_name}
+            "INSERT INTO folders (user_id, parent_id, encrypted_name, name_hash) "
+            "VALUES ($1, $2, $3, $4) RETURNING id;",
+            pqxx::params{user_id, parent_id.value(), encrypted_name, name_hash}
         );
     } else {
         res = W.exec(
-            "INSERT INTO folders (user_id, parent_id, encrypted_name) "
-            "VALUES ($1, NULL, $2) RETURNING id;",
-            pqxx::params{user_id, encrypted_name}
+            "INSERT INTO folders (user_id, parent_id, encrypted_name, name_hash) "
+            "VALUES ($1, NULL, $2, $3) RETURNING id;",
+            pqxx::params{user_id, encrypted_name, name_hash}
         );
     }
 

@@ -26,22 +26,32 @@ TEST_CASE("Gestão de Pastas - Hierarquia e Cascata", "[folders][hierarchy][casc
     }
 
     SECTION("Criar pasta raiz retorna um ID válido") {
-        uint64_t parent_id = manager.create_folder(fake_user_id, std::nullopt, "Pasta Raiz");
+        uint64_t parent_id = manager.create_folder(fake_user_id, std::nullopt, "Pasta Raiz", "hash_pasta_raiz");
         REQUIRE(parent_id > 0);
     }
 
     SECTION("Criar subpasta dentro de uma pasta existente") {
-        uint64_t parent_id = manager.create_folder(fake_user_id, std::nullopt, "Pasta Raiz");
+        uint64_t parent_id = manager.create_folder(fake_user_id, std::nullopt, "Pasta Raiz", "hash_pasta_raiz2");
         REQUIRE(parent_id > 0);
 
-        uint64_t child_id = manager.create_folder(fake_user_id, parent_id, "Subpasta");
+        uint64_t child_id = manager.create_folder(fake_user_id, parent_id, "Subpasta", "hash_subpasta");
         REQUIRE(child_id > 0);
         REQUIRE(child_id != parent_id);
     }
 
+    SECTION("Impedir criação de pastas duplicadas na mesma raiz (Blind Index)") {
+        uint64_t id1 = manager.create_folder(fake_user_id, std::nullopt, "Fotos", "hash_fotos");
+        REQUIRE(id1 > 0);
+
+        REQUIRE_THROWS_AS(
+            manager.create_folder(fake_user_id, std::nullopt, "Fotos_Copia", "hash_fotos"),
+            pqxx::unique_violation
+        );
+    }
+
     SECTION("Deletar pasta pai remove toda a hierarquia (Cascata)") {
-        uint64_t parent_id = manager.create_folder(fake_user_id, std::nullopt, "Pasta Para Deletar");    
-        uint64_t child_id = manager.create_folder(fake_user_id, parent_id, "Subpasta Filha");
+        uint64_t parent_id = manager.create_folder(fake_user_id, std::nullopt, "Pasta Para Deletar", "hash_deletar");    
+        uint64_t child_id = manager.create_folder(fake_user_id, parent_id, "Subpasta Filha", "hash_filha");
 
         bool success = manager.delete_folder(parent_id);
         REQUIRE(success == true);

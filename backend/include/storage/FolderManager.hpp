@@ -11,7 +11,8 @@ public:
 
     uint64_t create_folder(uint64_t user_id,
                            std::optional<uint64_t> parent_id,
-                           const std::string& encrypted_name);
+                           const std::string& encrypted_name,
+                           const std::string& name_hash);
 
     bool delete_folder(uint64_t folder_id);
     bool folder_exists(uint64_t folder_id);
