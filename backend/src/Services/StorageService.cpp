@@ -1,4 +1,4 @@
-#include "storage/StorageService.hpp"
+#include "services/StorageService.hpp"
 
 StorageService::StorageService(const std::string& base_vault_path)
     : base_vault_path_(base_vault_path) {}

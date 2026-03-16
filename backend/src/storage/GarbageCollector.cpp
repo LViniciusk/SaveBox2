@@ -1,5 +1,4 @@
 #include "storage/GarbageCollector.hpp"
-
 #include <pqxx/pqxx>
 #include <iostream>
 #include <vector>

@@ -1,20 +1,25 @@
-#include "ApiRouter.hpp"
+#include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "AuthService.hpp"
-#include "storage/FolderManager.hpp"
-#include "CryptoService.hpp"
+#include "services/AuthService.hpp"
+#include "database/FolderManager.hpp"
+#include "services/CryptoService.hpp"
+#include "utils.hpp"
 #include <crow_all.h>
 #include <iostream>
-#include "../tests/test_helpers.hpp"
+
+
+
 
 int main() {
     std::string conn_str = get_secure_conn_string();
+    std::string pepper = get_pepper();
+    std::string crypto_key = get_crypto_key();
 
     // Instancia as dependências
     DatabasePool pool(2, conn_str);
-    AuthService auth;
+    AuthService auth(pepper);
     FolderManager folder_mgr(pool);
-    CryptoService crypto("01234567890123456789012345678901");
+    CryptoService crypto(crypto_key);
 
     // Instancia o servidor web Crow
     crow::SimpleApp app;

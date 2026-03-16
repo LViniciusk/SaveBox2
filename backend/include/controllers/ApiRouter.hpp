@@ -2,9 +2,9 @@
 
 #include "crow_all.h"
 #include "database/DatabasePool.hpp"
-#include "AuthService.hpp"
-#include "storage/FolderManager.hpp"
-#include "CryptoService.hpp"
+#include "services/AuthService.hpp"
+#include "database/FolderManager.hpp"
+#include "services/CryptoService.hpp"
 #include <string>
 
 class ApiRouter {
