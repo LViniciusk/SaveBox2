@@ -15,7 +15,7 @@ public:
                            const std::string& encrypted_name,
                            const std::string& name_hash);
 
-    bool delete_folder(uint64_t folder_id);
+    std::vector<uint64_t> delete_folder(uint64_t folder_id, uint64_t user_id);
     bool folder_exists(uint64_t folder_id);
 
     crow::json::wvalue get_folder_contents(int folder_id, int user_id);

@@ -53,8 +53,7 @@ TEST_CASE("Gestão de Pastas - Hierarquia e Cascata", "[folders][hierarchy][casc
         uint64_t parent_id = manager.create_folder(fake_user_id, std::nullopt, "Pasta Para Deletar", "hash_deletar");    
         uint64_t child_id = manager.create_folder(fake_user_id, parent_id, "Subpasta Filha", "hash_filha");
 
-        bool success = manager.delete_folder(parent_id);
-        REQUIRE(success == true);
+        REQUIRE_NOTHROW(manager.delete_folder(parent_id, fake_user_id));
 
         bool parent_exists = manager.folder_exists(parent_id);
         bool child_exists = manager.folder_exists(child_id);

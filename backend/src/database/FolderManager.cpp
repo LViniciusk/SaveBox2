@@ -34,18 +34,40 @@ uint64_t FolderManager::create_folder(uint64_t user_id,
     return res[0][0].as<uint64_t>();
 }
 
-bool FolderManager::delete_folder(uint64_t folder_id) {
+std::vector<uint64_t> FolderManager::delete_folder(uint64_t folder_id, uint64_t user_id) {
     auto conn = pool_.acquire_connection();
-    pqxx::work W(*conn);
+    pqxx::work txn(*conn);
 
-    pqxx::result res = W.exec(
-        "DELETE FROM folders WHERE id = $1;",
+    auto check = txn.exec(
+        "SELECT id FROM folders WHERE id = $1 AND user_id = $2",
+        pqxx::params{folder_id, user_id}
+    );
+    if (check.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+
+    auto file_res = txn.exec(
+        "WITH RECURSIVE folder_tree AS ( "
+        "  SELECT id FROM folders WHERE id = $1 "
+        "  UNION ALL "
+        "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
+        ") "
+        "SELECT id FROM files WHERE folder_id IN (SELECT id FROM folder_tree)",
         pqxx::params{folder_id}
     );
 
-    W.commit();
+    std::vector<uint64_t> files_to_delete;
+    for (const auto& row : file_res) {
+        files_to_delete.push_back(row[0].as<uint64_t>());
+    }
 
-    return res.affected_rows() > 0;
+    txn.exec(
+        "DELETE FROM folders WHERE id = $1 AND user_id = $2;",
+        pqxx::params{folder_id, user_id}
+    );
+
+    txn.commit();
+    return files_to_delete;
 }
 
 bool FolderManager::folder_exists(uint64_t folder_id) {

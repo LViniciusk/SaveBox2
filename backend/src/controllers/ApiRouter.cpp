@@ -373,6 +373,30 @@ crow::response ApiRouter::handle_delete_file(const crow::request& req, int file_
     }
 }
 
+crow::response ApiRouter::handle_delete_folder(const crow::request& req, int folder_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    }
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        std::vector<uint64_t> deleted_files = folder_mgr_->delete_folder(static_cast<uint64_t>(folder_id), user_id);
+        
+        for (uint64_t fid : deleted_files) {
+            chunker_->delete_file(fid);
+        }
+        
+        return crow::response(200, R"({"message":"Pasta e todo o seu conteudo foram deletados com sucesso"})");
+        
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Pasta nao encontrada"})");
+        if (msg == "FORBIDDEN") return crow::response(403, R"({"error":"Proibido"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 crow::response ApiRouter::handle_update_file(const crow::request& req, int file_id) {
     auto user_id_opt = authenticate_request(req);
     if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
@@ -505,6 +529,11 @@ void ApiRouter::setup_routes(crow::SimpleApp& app) {
     CROW_ROUTE(app, "/files/<int>").methods(crow::HTTPMethod::Delete)
     ([this](const crow::request& req, int file_id) {
         return handle_delete_file(req, file_id);
+    });
+
+    CROW_ROUTE(app, "/folders/<int>").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req, int folder_id) {
+        return handle_delete_folder(req, folder_id);
     });
 
     CROW_ROUTE(app, "/files/<int>").methods(crow::HTTPMethod::Put)
