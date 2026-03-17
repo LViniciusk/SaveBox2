@@ -3,6 +3,8 @@
 #include "database/DatabasePool.hpp"
 #include "services/AuthService.hpp"
 #include "database/FolderManager.hpp"
+#include "database/FileManager.hpp"
+#include "storage/FileChunker.hpp"
 #include "test_helpers.hpp"
 #include <crow_all.h>
 #include <string>
@@ -15,8 +17,10 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
     DatabasePool pool(2, conn_str);
     AuthService auth("A_noite_é_mais_escura_perto_do_amanhecer", "eu_trouxe_uma_primavera_pra_você");
     FolderManager folder_mgr(pool);
+    FileManager file_mgr(pool);
+    FileChunker file_chunker("./savebox_storage/");
 
-    ApiRouter router(pool, auth, folder_mgr);
+    ApiRouter router(pool, auth, folder_mgr, &file_mgr, &file_chunker);
 
     int fake_user_id = 0;
     int fake_folder_id = 0;
@@ -38,10 +42,12 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         txn.commit();
     }
 
+    std::string token = auth.generate_token(static_cast<uint64_t>(fake_user_id));
+
     SECTION("Inicializar, enviar chunks e completar upload") {
         crow::request req_init;
-        req_init.body = R"({"user_id": )" + std::to_string(fake_user_id)
-                      + R"(, "folder_id": )" + std::to_string(fake_folder_id)
+        req_init.add_header("Authorization", "Bearer " + token);
+        req_init.body = R"({"folder_id": )" + std::to_string(fake_folder_id)
                       + R"(, "encrypted_name": "base64_file_name", "name_hash": "file_hash_123", "size_bytes": 1024, "total_chunks": 2})";
 
         crow::response res_init = router.handle_init_file_upload(req_init);
@@ -52,6 +58,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         int file_id = init_body["file_id"].i();
 
         crow::request req_chunk1;
+        req_chunk1.add_header("Authorization", "Bearer " + token);
         req_chunk1.add_header("X-Chunk-Index", "0");
         req_chunk1.body = std::string(512, '\xAB'); 
 
@@ -60,6 +67,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         REQUIRE(res_chunk1.code == 200);
 
         crow::request req_chunk2;
+        req_chunk2.add_header("Authorization", "Bearer " + token);
         req_chunk2.add_header("X-Chunk-Index", "1");
         req_chunk2.body = std::string(512, '\xCD');
 
@@ -71,8 +79,8 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
 
     SECTION("Upload Interrompido - arquivo permanece incompleto no banco") {
         crow::request req_init_broken;
-        req_init_broken.body = R"({"user_id": )" + std::to_string(fake_user_id)
-                             + R"(, "folder_id": )" + std::to_string(fake_folder_id)
+        req_init_broken.add_header("Authorization", "Bearer " + token);
+        req_init_broken.body = R"({"folder_id": )" + std::to_string(fake_folder_id)
                              + R"(, "encrypted_name": "base64_broken_file", "name_hash": "file_hash_broken", "size_bytes": 1536, "total_chunks": 3})";
 
         crow::response res_init_broken = router.handle_init_file_upload(req_init_broken);
@@ -82,6 +90,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         int file_id_broken = init_broken_body["file_id"].i();
 
         crow::request req_chunk_broken;
+        req_chunk_broken.add_header("Authorization", "Bearer " + token);
         req_chunk_broken.add_header("X-Chunk-Index", "0");
         req_chunk_broken.body = std::string(512, '\xFF');
 

@@ -1,8 +1,10 @@
 #include "controllers/ApiRouter.hpp"
 #include <optional>
 
-ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr)
-    : pool_(&pool), auth_(&auth), folder_mgr_(&folder_mgr) {}
+ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr,
+                     FileManager* file_mgr, FileChunker* chunker)
+    : pool_(&pool), auth_(&auth), folder_mgr_(&folder_mgr),
+      file_mgr_(file_mgr), chunker_(chunker) {}
 
 std::string ApiRouter::handle_healthcheck() const {
     return R"({"status":"online"})";
@@ -41,7 +43,7 @@ crow::response ApiRouter::handle_register(const crow::request& req) {
 
         int user_id = result[0][0].as<int>();
         return crow::response(201,
-            R"({"message":"Usuario Criado", "token":")" + auth_->generate_token(user_id) + R"("})");
+            R"({"message":"Usuario criado", "token":")" + auth_->generate_token(user_id) + R"("})");
 
     } catch (const std::exception& e) {
         return crow::response(500, R"({"error":"Erro interno"})");
@@ -125,14 +127,73 @@ std::optional<uint64_t> ApiRouter::authenticate_request(const crow::request& req
     if (auth_header.empty() || auth_header.rfind("Bearer ", 0) != 0) {
         return std::nullopt;
     }
-    std::string token = auth_header.substr(7); // skip "Bearer "
+    std::string token = auth_header.substr(7); 
     return auth_->verify_token(token);
 }
 
+crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
+    try {
+        auto user_id_opt = authenticate_request(req);
+        if (!user_id_opt) {
+            return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+        }
+        uint64_t user_id = *user_id_opt;
+
+        auto body = crow::json::load(req.body);
+        if (!body || !body.has("folder_id") || !body.has("encrypted_name") ||
+            !body.has("name_hash") || !body.has("size_bytes") || !body.has("total_chunks")) {
+            return crow::response(400, R"({"error":"JSON invalido"})");
+        }
+
+        uint64_t folder_id      = static_cast<uint64_t>(body["folder_id"].i());
+        std::string enc_name    = body["encrypted_name"].s();
+        std::string name_hash   = body["name_hash"].s();
+        uint64_t size_bytes     = static_cast<uint64_t>(body["size_bytes"].i());
+        int total_chunks        = static_cast<int>(body["total_chunks"].i());
+
+        int file_id = file_mgr_->init_upload(user_id, folder_id, enc_name, name_hash, size_bytes, total_chunks);
+
+        return crow::response(201, R"({"file_id":)" + std::to_string(file_id) + "}");
+
+    } catch (const std::exception&) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_upload_chunk(const crow::request& req, int file_id) {
+    try {
+        auto user_id_opt = authenticate_request(req);
+        if (!user_id_opt) {
+            return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+        }
+        uint64_t user_id = *user_id_opt;
+
+        std::string chunk_index_str = req.get_header_value("X-Chunk-Index");
+        if (chunk_index_str.empty()) {
+            return crow::response(400, R"({"error":"Cabecalho X-Chunk-Index ausente"})");
+        }
+        int chunk_index = std::stoi(chunk_index_str);
+
+        chunker_->append_chunk(static_cast<uint64_t>(file_id), chunk_index, req.body);
+
+        int total = file_mgr_->get_total_chunks(static_cast<uint64_t>(file_id));
+
+        if (chunk_index == total - 1) {
+            file_mgr_->mark_upload_complete(static_cast<uint64_t>(file_id), user_id);
+            return crow::response(200, R"({"status":"completed"})");
+        }
+
+        return crow::response(200, R"({"status":"uploading"})");
+
+    } catch (const std::exception&) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 void ApiRouter::setup_routes(crow::SimpleApp& app) {
-    CROW_ROUTE(app, "/health")
+    CROW_ROUTE(app, "/health").methods(crow::HTTPMethod::Get)
     ([this]() {
-        crow::response res(handle_healthcheck());
+        auto res = crow::response(handle_healthcheck());
         res.set_header("Content-Type", "application/json");
         return res;
     });
@@ -154,6 +215,18 @@ void ApiRouter::setup_routes(crow::SimpleApp& app) {
     CROW_ROUTE(app, "/folders").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
         auto res = handle_create_folder(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/files").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        return handle_init_file_upload(req);
+    });
+
+    CROW_ROUTE(app, "/files/<int>/chunks").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req, int file_id) {
+        auto res = handle_upload_chunk(req, file_id);
         res.set_header("Content-Type", "application/json");
         return res;
     });

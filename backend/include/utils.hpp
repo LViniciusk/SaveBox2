@@ -57,3 +57,8 @@ inline std::string get_jwt_secret() {
     auto& cfg = Utils::get();
     return cfg.get_var("SAVEBOX_JWT_SECRET", "Com_ou_sem_susanoo");
 }
+
+inline std::string get_storage_path() {
+    auto& cfg = Utils::get();
+    return cfg.get_var("SAVEBOX_STORAGE_PATH", "Módulo_lunar");
+}

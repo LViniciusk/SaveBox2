@@ -1,4 +1,5 @@
 #include "storage/FileChunker.hpp"
+#include <iostream>
 
 FileChunker::FileChunker(const std::string& temp_file_path)
     : temp_file_path_(temp_file_path) {
@@ -40,4 +41,31 @@ size_t FileChunker::get_current_size() const {
 
 bool FileChunker::finalize_upload(size_t expected_total_size) const {
     return get_current_size() == expected_total_size;
+}
+
+void FileChunker::append_chunk(uint64_t file_id, int chunk_index, const std::string& binary_data) {
+    const uint64_t MAX_ALLOWED_CHUNK = 5 * 1024 * 1024;
+
+    if (binary_data.size() > MAX_ALLOWED_CHUNK) {
+        std::cerr << "[SECURITY] Tentativa de upload de chunk maior que 5MB para o arquivo: " << file_id << std::endl;
+        return; 
+    }
+
+    std::filesystem::create_directories(temp_file_path_);
+    auto file_path = temp_file_path_ / (std::to_string(file_id) + ".dat");
+
+    std::fstream fs;
+    fs.open(file_path, std::ios::binary | std::ios::in | std::ios::out);
+
+    if (!fs.is_open()) {
+        fs.open(file_path, std::ios::binary | std::ios::out);
+    }
+
+    if (fs.is_open()) {
+        uint64_t offset = static_cast<uint64_t>(chunk_index) * MAX_ALLOWED_CHUNK;
+
+        fs.seekp(offset); 
+        fs.write(binary_data.data(), static_cast<std::streamsize>(binary_data.size()));
+        fs.close();
+    }
 }
