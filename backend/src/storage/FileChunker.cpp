@@ -8,47 +8,18 @@ FileChunker::FileChunker(const std::string& temp_file_path)
     }
 }
 
+
 bool FileChunker::validate_chunk_size(size_t chunk_size) const {
     return chunk_size <= MAX_CHUNK_SIZE;
 }
 
-bool FileChunker::append_chunk(const std::vector<uint8_t>& chunk_data) {
-    try {
-        std::ofstream ofs(temp_file_path_, std::ios::binary | std::ios::app);
-        if (!ofs.is_open()) {
-            return false;
-        }
 
-        ofs.write(reinterpret_cast<const char*>(chunk_data.data()),
-                  static_cast<std::streamsize>(chunk_data.size()));
-
-        return ofs.good();
-    } catch (const std::exception&) {
-        return false;
-    }
-}
-
-size_t FileChunker::get_current_size() const {
-    try {
-        if (!std::filesystem::exists(temp_file_path_)) {
-            return 0;
-        }
-        return static_cast<size_t>(std::filesystem::file_size(temp_file_path_));
-    } catch (const std::filesystem::filesystem_error&) {
-        return 0;
-    }
-}
-
-bool FileChunker::finalize_upload(size_t expected_total_size) const {
-    return get_current_size() == expected_total_size;
-}
-
-void FileChunker::append_chunk(uint64_t file_id, int chunk_index, const std::string& binary_data) {
+bool FileChunker::write_chunk(uint64_t file_id, int chunk_index, const std::string& binary_data) {
     const uint64_t MAX_ALLOWED_CHUNK = 5 * 1024 * 1024;
 
     if (binary_data.size() > MAX_ALLOWED_CHUNK) {
         std::cerr << "[SECURITY] Tentativa de upload de chunk maior que 5MB para o arquivo: " << file_id << std::endl;
-        return; 
+        return false;
     }
 
     std::filesystem::create_directories(temp_file_path_);
@@ -64,8 +35,23 @@ void FileChunker::append_chunk(uint64_t file_id, int chunk_index, const std::str
     if (fs.is_open()) {
         uint64_t offset = static_cast<uint64_t>(chunk_index) * MAX_ALLOWED_CHUNK;
 
-        fs.seekp(offset); 
+        fs.seekp(offset);
         fs.write(binary_data.data(), static_cast<std::streamsize>(binary_data.size()));
         fs.close();
+        return true;
     }
+
+    return false;
+}
+
+std::string FileChunker::read_entire_file(uint64_t file_id) const {
+    auto file_path = temp_file_path_ / (std::to_string(file_id) + ".dat");
+
+    std::ifstream ifs(file_path, std::ios::binary);
+    if (!ifs.is_open()) {
+        throw std::runtime_error("NOT_FOUND_ON_DISK");
+    }
+
+    return std::string(std::istreambuf_iterator<char>(ifs),
+                       std::istreambuf_iterator<char>());
 }

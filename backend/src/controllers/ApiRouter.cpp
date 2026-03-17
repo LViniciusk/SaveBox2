@@ -174,7 +174,7 @@ crow::response ApiRouter::handle_upload_chunk(const crow::request& req, int file
         }
         int chunk_index = std::stoi(chunk_index_str);
 
-        chunker_->append_chunk(static_cast<uint64_t>(file_id), chunk_index, req.body);
+        chunker_->write_chunk(static_cast<uint64_t>(file_id), chunk_index, req.body);
 
         int total = file_mgr_->get_total_chunks(static_cast<uint64_t>(file_id));
 
@@ -186,6 +186,33 @@ crow::response ApiRouter::handle_upload_chunk(const crow::request& req, int file
         return crow::response(200, R"({"status":"uploading"})");
 
     } catch (const std::exception&) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_download_file(const crow::request& req, int file_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    }
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        file_mgr_->can_user_download(static_cast<uint64_t>(file_id), user_id);
+        std::string content = chunker_->read_entire_file(static_cast<uint64_t>(file_id));
+
+        crow::response res(200, content);
+        res.set_header("Content-Type", "application/octet-stream");
+        return res;
+
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg.find("NOT_FOUND") != std::string::npos) {
+            return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
+        }
+        if (msg.find("INCOMPLETE") != std::string::npos) {
+            return crow::response(400, R"({"error":"Upload incompleto"})");
+        }
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -229,5 +256,10 @@ void ApiRouter::setup_routes(crow::SimpleApp& app) {
         auto res = handle_upload_chunk(req, file_id);
         res.set_header("Content-Type", "application/json");
         return res;
+    });
+
+    CROW_ROUTE(app, "/files/<int>/download").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, int file_id) {
+        return handle_download_file(req, file_id);
     });
 }

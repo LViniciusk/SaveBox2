@@ -14,10 +14,8 @@ public:
     explicit FileChunker(const std::string& temp_file_path);
 
     bool validate_chunk_size(size_t chunk_size) const;
-    bool append_chunk(const std::vector<uint8_t>& chunk_data);
-    void append_chunk(uint64_t file_id, int chunk_index, const std::string& binary_data);
-    size_t get_current_size() const;
-    bool finalize_upload(size_t expected_total_size) const;
+    bool write_chunk(uint64_t file_id, int chunk_index, const std::string& binary_data);
+    std::string read_entire_file(uint64_t file_id) const;
 
 private:
     std::filesystem::path temp_file_path_;

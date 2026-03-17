@@ -48,3 +48,23 @@ int FileManager::get_total_chunks(uint64_t file_id) {
     if (result.empty()) return 0;
     return result[0][0].as<int>();
 }
+
+bool FileManager::can_user_download(uint64_t file_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto result = txn.exec(
+        "SELECT is_upload_complete FROM files WHERE id = $1 AND user_id = $2",
+        pqxx::params{file_id, user_id}
+    );
+    txn.commit();
+
+    if (result.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+
+    if (!result[0][0].as<bool>()) {
+        throw std::runtime_error("INCOMPLETE");
+    }
+
+    return true;
+}
