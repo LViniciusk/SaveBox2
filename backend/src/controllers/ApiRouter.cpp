@@ -202,10 +202,66 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
 
     try {
         file_mgr_->can_user_download(static_cast<uint64_t>(file_id), user_id);
-        std::string content = chunker_->read_entire_file(static_cast<uint64_t>(file_id));
+        
+        size_t total_size = chunker_->get_file_size(file_id);
+        std::string range_header = req.get_header_value("Range");
 
-        crow::response res(200, content);
+        if (range_header.empty()) {
+            std::string content = chunker_->read_entire_file(static_cast<uint64_t>(file_id));
+            crow::response res(200, content);
+            res.set_header("Content-Type", "application/octet-stream");
+            res.set_header("Accept-Ranges", "bytes");
+            return res;
+        }
+
+        std::string prefix = "bytes=";
+        if (range_header.find(prefix) != 0) {
+            return crow::response(416);
+        }
+
+        std::string range_val = range_header.substr(prefix.length());
+        size_t dash_pos = range_val.find('-');
+        if (dash_pos == std::string::npos) {
+            return crow::response(416);
+        }
+
+        std::string start_str = range_val.substr(0, dash_pos);
+        std::string end_str = range_val.substr(dash_pos + 1);
+
+        size_t start = 0;
+        if (!start_str.empty()) {
+            start = std::stoull(start_str);
+        }
+
+        if (start >= total_size) {
+            crow::response res(416);
+            res.set_header("Content-Range", "bytes */" + std::to_string(total_size));
+            return res;
+        }
+
+        size_t end = total_size - 1;
+        if (!end_str.empty()) {
+            end = std::stoull(end_str);
+        }
+
+        if (end >= total_size) {
+            end = total_size - 1;
+        }
+
+        if (start > end) {
+            crow::response res(416);
+            res.set_header("Content-Range", "bytes */" + std::to_string(total_size));
+            return res;
+        }
+
+        size_t length = end - start + 1;
+        std::string data = chunker_->read_file_portion(file_id, start, length);
+
+        crow::response res(206, data);
+        res.set_header("Content-Range", "bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" + std::to_string(total_size));
         res.set_header("Content-Type", "application/octet-stream");
+        res.set_header("Accept-Ranges", "bytes");
+
         return res;
 
     } catch (const std::exception& e) {

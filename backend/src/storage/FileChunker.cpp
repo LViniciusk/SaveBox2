@@ -55,3 +55,26 @@ std::string FileChunker::read_entire_file(uint64_t file_id) const {
     return std::string(std::istreambuf_iterator<char>(ifs),
                        std::istreambuf_iterator<char>());
 }
+
+size_t FileChunker::get_file_size(uint64_t file_id) const {
+    auto file_path = temp_file_path_ / (std::to_string(file_id) + ".dat");
+    if (!std::filesystem::exists(file_path)) {
+        throw std::runtime_error("NOT_FOUND_ON_DISK");
+    }
+    return std::filesystem::file_size(file_path);
+}
+
+std::string FileChunker::read_file_portion(uint64_t file_id, size_t offset, size_t length) const {
+    auto file_path = temp_file_path_ / (std::to_string(file_id) + ".dat");
+    std::ifstream ifs(file_path, std::ios::binary);
+    if (!ifs.is_open()) {
+        throw std::runtime_error("NOT_FOUND_ON_DISK");
+    }
+
+    ifs.seekg(offset, std::ios::beg);
+    std::string buffer(length, '\0');
+    ifs.read(&buffer[0], length);
+    buffer.resize(ifs.gcount());
+    
+    return buffer;
+}
