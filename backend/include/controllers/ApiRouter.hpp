@@ -23,6 +23,9 @@ public:
     crow::response handle_init_file_upload(const crow::request& req);
     crow::response handle_upload_chunk(const crow::request& req, int file_id);
     crow::response handle_download_file(const crow::request& req, int file_id);
+    crow::response handle_list_folder_contents(const crow::request& req, int folder_id);
+    crow::response handle_get_tree(const crow::request& req);
+    crow::response handle_get_uploaded_chunks(const crow::request& req, int file_id);
 
     void setup_routes(crow::SimpleApp& app);
 

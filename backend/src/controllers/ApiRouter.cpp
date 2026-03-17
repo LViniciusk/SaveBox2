@@ -175,11 +175,14 @@ crow::response ApiRouter::handle_upload_chunk(const crow::request& req, int file
         int chunk_index = std::stoi(chunk_index_str);
 
         chunker_->write_chunk(static_cast<uint64_t>(file_id), chunk_index, req.body);
+        
+        file_mgr_->record_chunk_saved(file_id, chunk_index);
 
-        int total = file_mgr_->get_total_chunks(static_cast<uint64_t>(file_id));
+        int saved_chunks_count = file_mgr_->count_uploaded_chunks(static_cast<uint64_t>(file_id));
+        int file_info_total_chunks = file_mgr_->get_total_chunks(static_cast<uint64_t>(file_id));
 
-        if (chunk_index == total - 1) {
-            file_mgr_->mark_upload_complete(static_cast<uint64_t>(file_id), user_id);
+        if (saved_chunks_count == file_info_total_chunks) {
+            file_mgr_->mark_upload_complete(static_cast<uint64_t>(file_id));
             return crow::response(200, R"({"status":"completed"})");
         }
 
@@ -212,6 +215,81 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
         }
         if (msg.find("INCOMPLETE") != std::string::npos) {
             return crow::response(400, R"({"error":"Upload incompleto"})");
+        }
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_list_folder_contents(const crow::request& req, int folder_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    }
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        auto contents = folder_mgr_->get_folder_contents(folder_id, static_cast<int>(user_id));
+        crow::response res(200, contents.dump());
+        res.set_header("Content-Type", "application/json");
+        return res;
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg.find("NOT_FOUND") != std::string::npos) {
+            return crow::response(404, R"({"error":"Pasta nao encontrada"})");
+        }
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_get_tree(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    }
+    uint64_t user_id = *user_id_opt;
+
+    char* limit_str = req.url_params.get("file_limit");
+    char* offset_str = req.url_params.get("file_offset");
+
+    if (!limit_str || !offset_str) {
+        return crow::response(400, "Missing pagination parameters");
+    }
+
+    try {
+        int limit = std::stoi(limit_str);
+        int offset = std::stoi(offset_str);
+
+        auto folders = folder_mgr_->get_all_folders(user_id);
+        auto files = file_mgr_->get_user_files_paginated(user_id, limit, offset);
+
+        crow::json::wvalue response;
+        response["folders"] = std::move(folders);
+        response["files"] = std::move(files);
+        return crow::response(200, response);
+    } catch (const std::exception& e) {
+        return crow::response(400, "Invalid pagination parameters");
+    }
+}
+
+crow::response ApiRouter::handle_get_uploaded_chunks(const crow::request& req, int file_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    }
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        std::vector<int> chunks = file_mgr_->get_uploaded_chunks(file_id, user_id);
+        crow::json::wvalue res;
+        res["uploaded_chunks"] = chunks;
+        return crow::response(200, res);
+
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") {
+            return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
+        } else if (msg == "ALREADY_COMPLETE") {
+            return crow::response(400, R"({"error":"Upload ja finalizado"})");
         }
         return crow::response(500, R"({"error":"Erro interno"})");
     }
@@ -261,5 +339,20 @@ void ApiRouter::setup_routes(crow::SimpleApp& app) {
     CROW_ROUTE(app, "/files/<int>/download").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req, int file_id) {
         return handle_download_file(req, file_id);
+    });
+
+    CROW_ROUTE(app, "/folders/<int>/contents").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, int folder_id) {
+        return handle_list_folder_contents(req, folder_id);
+    });
+
+    CROW_ROUTE(app, "/tree").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) {
+        return handle_get_tree(req);
+    });
+
+    CROW_ROUTE(app, "/files/<int>/uploaded-chunks").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, int file_id) {
+        return handle_get_uploaded_chunks(req, file_id);
     });
 }
