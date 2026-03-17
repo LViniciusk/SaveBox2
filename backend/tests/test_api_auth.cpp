@@ -6,10 +6,13 @@
 #include "test_helpers.hpp"
 #include <crow_all.h>
 
+
+
+
 TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("uma_pimenta_secreta_muito_longa_e_aleatoria_aqui");
+    AuthService auth("Lords_do_Underground", "A_flor");
     FolderManager folder_mgr(pool);
     ApiRouter router(pool, auth, folder_mgr);
 
@@ -51,6 +54,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
 
         REQUIRE(res.code == 200);
         REQUIRE(res.body.find("Login efetuado") != std::string::npos);
+        REQUIRE(res.body.find("token") != std::string::npos);
     }
 
     SECTION("Login com Senha Errada") {

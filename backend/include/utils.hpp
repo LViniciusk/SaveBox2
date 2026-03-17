@@ -53,7 +53,7 @@ inline std::string get_pepper() {
     return cfg.get_var("SAVEBOX_PEPPER", "Garotos_do_Relogio");
 }
 
-inline std::string get_crypto_key() {
+inline std::string get_jwt_secret() {
     auto& cfg = Utils::get();
-    return cfg.get_var("CRYPTO_KEY", "A_noite_é_mais_escura_perto_do_amanhecer");
+    return cfg.get_var("SAVEBOX_JWT_SECRET", "Com_ou_sem_susanoo");
 }

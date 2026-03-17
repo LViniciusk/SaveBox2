@@ -1,16 +1,21 @@
 #include "services/AuthService.hpp"
+#include <jwt-cpp/jwt.h>
 #include <sodium.h>
 #include <stdexcept>
 #include <cstring>
 #include <vector>
+#include <chrono>
 
-AuthService::AuthService(const std::string& server_pepper) 
-    : pepper_(server_pepper) {
+AuthService::AuthService(const std::string& pepper, const std::string& jwt_secret)
+    : pepper_(pepper), jwt_secret_(jwt_secret) {
     if (sodium_init() == -1) {
         throw std::runtime_error("Falha critica: libsodium nao pode ser inicializada.");
     }
     if (pepper_.empty()) {
         throw std::invalid_argument("O Pepper do servidor nao pode ser vazio.");
+    }
+    if (jwt_secret_.empty()) {
+        throw std::invalid_argument("O segredo JWT nao pode ser vazio.");
     }
 }
 
@@ -63,4 +68,32 @@ bool AuthService::verify_password(const std::string& plain_password, const std::
     sodium_memzero(peppered_password.data(), peppered_password.size());
 
     return is_valid;
+}
+
+std::string AuthService::generate_token(uint64_t user_id) const {
+    auto now = std::chrono::system_clock::now();
+    auto expiry = now + std::chrono::hours(24);
+
+    return jwt::create()
+        .set_type("JWT")
+        .set_issued_at(now)
+        .set_expires_at(expiry)
+        .set_payload_claim("user_id", jwt::claim(std::to_string(user_id)))
+        .sign(jwt::algorithm::hs256{jwt_secret_});
+}
+
+std::optional<uint64_t> AuthService::verify_token(const std::string& token) const {
+    try {
+        auto verifier = jwt::verify()
+            .allow_algorithm(jwt::algorithm::hs256{jwt_secret_})
+            .with_type("JWT");
+
+        auto decoded = jwt::decode(token);
+        verifier.verify(decoded);
+
+        uint64_t user_id = std::stoull(decoded.get_payload_claim("user_id").as_string());
+        return user_id;
+    } catch (...) {
+        return std::nullopt;
+    }
 }

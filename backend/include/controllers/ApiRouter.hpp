@@ -4,6 +4,8 @@
 #include "database/DatabasePool.hpp"
 #include "services/AuthService.hpp"
 #include "database/FolderManager.hpp"
+#include <optional>
+#include <cstdint>
 #include <string>
 
 class ApiRouter {
@@ -22,4 +24,6 @@ private:
     DatabasePool* pool_ = nullptr;
     AuthService* auth_ = nullptr;
     FolderManager* folder_mgr_ = nullptr;
+
+    std::optional<uint64_t> authenticate_request(const crow::request& req) const;
 };

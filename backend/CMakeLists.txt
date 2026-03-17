@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # ----------------------------------------------------------------------
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(OpenSSL REQUIRED)
 
 # Nossas bibliotecas de produção
 pkg_check_modules(PQXX REQUIRED libpqxx)
@@ -17,6 +18,7 @@ pkg_check_modules(ZIP REQUIRED libzip)
 
 # O nosso framework de testes (Catch2)
 find_package(Catch2 3 CONFIG REQUIRED)
+
 
 # ----------------------------------------------------------------------
 # FASE 2: SEPARANDO O CÓDIGO FONTE (O Pulo do Gato)
@@ -48,6 +50,8 @@ target_link_libraries(savebox_server PRIVATE
     ${PQXX_LIBRARIES}
     ${SODIUM_LIBRARIES}
     ${ZIP_LIBRARIES}
+    OpenSSL::SSL
+    OpenSSL::Crypto
     ws2_32
     mswsock
     crypt32
@@ -70,7 +74,9 @@ target_link_libraries(savebox_tests PRIVATE
     Catch2::Catch2
     ${PQXX_LIBRARIES}
     ${SODIUM_LIBRARIES}
-    ${ZIP_LIBRARIES} # 3. Faltava o ZIP aqui!
+    ${ZIP_LIBRARIES}
+    OpenSSL::SSL
+    OpenSSL::Crypto
     ws2_32
     mswsock
     crypt32

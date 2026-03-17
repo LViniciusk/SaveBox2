@@ -12,10 +12,11 @@
 int main() {
     std::string conn_str = get_secure_conn_string();
     std::string pepper = get_pepper();
+    std::string jwt_secret = get_jwt_secret();
 
     // Instancia as dependências
     DatabasePool pool(2, conn_str);
-    AuthService auth(pepper);
+    AuthService auth(pepper, jwt_secret);
     FolderManager folder_mgr(pool);
 
     // Instancia o servidor web Crow

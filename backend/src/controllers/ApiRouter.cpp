@@ -41,7 +41,7 @@ crow::response ApiRouter::handle_register(const crow::request& req) {
 
         int user_id = result[0][0].as<int>();
         return crow::response(201,
-            R"({"message":"Usuario criado", "user_id":)" + std::to_string(user_id) + "}");
+            R"({"message":"Usuario Criado", "token":")" + auth_->generate_token(user_id) + R"("})");
 
     } catch (const std::exception& e) {
         return crow::response(500, R"({"error":"Erro interno"})");
@@ -80,7 +80,7 @@ crow::response ApiRouter::handle_login(const crow::request& req) {
         }
 
         return crow::response(200,
-            R"({"message":"Login efetuado", "user_id":)" + std::to_string(user_id) + "}");
+            R"({"message":"Login efetuado", "token":")" + auth_->generate_token(user_id) + R"("})");
 
     } catch (const std::exception& e) {
         return crow::response(500, R"({"error":"Erro interno"})");
@@ -89,12 +89,17 @@ crow::response ApiRouter::handle_login(const crow::request& req) {
 
 crow::response ApiRouter::handle_create_folder(const crow::request& req) {
     try {
+        auto user_id_opt = authenticate_request(req);
+        if (!user_id_opt) {
+            return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+        }
+        uint64_t user_id = *user_id_opt;
+
         auto body = crow::json::load(req.body);
-        if (!body || !body.has("user_id") || !body.has("encrypted_name") || !body.has("name_hash")) {
+        if (!body || !body.has("encrypted_name") || !body.has("name_hash")) {
             return crow::response(400, R"({"error":"JSON invalido"})");
         }
 
-        uint64_t user_id = body["user_id"].i();
         std::string encrypted_name = body["encrypted_name"].s();
         std::string name_hash = body["name_hash"].s();
 
@@ -113,6 +118,15 @@ crow::response ApiRouter::handle_create_folder(const crow::request& req) {
     } catch (const std::exception& e) {
         return crow::response(500, R"({"error":"Erro interno"})");
     }
+}
+
+std::optional<uint64_t> ApiRouter::authenticate_request(const crow::request& req) const {
+    auto auth_header = req.get_header_value("Authorization");
+    if (auth_header.empty() || auth_header.rfind("Bearer ", 0) != 0) {
+        return std::nullopt;
+    }
+    std::string token = auth_header.substr(7); // skip "Bearer "
+    return auth_->verify_token(token);
 }
 
 void ApiRouter::setup_routes(crow::SimpleApp& app) {
