@@ -173,3 +173,80 @@ void FileManager::delete_file(uint64_t file_id, uint64_t user_id) {
 
     txn.commit();
 }
+
+crow::json::wvalue FileManager::update_file(uint64_t file_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& folder_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto result = txn.exec(
+        "SELECT id FROM files WHERE id = $1 AND user_id = $2",
+        pqxx::params{file_id, user_id}
+    );
+    if (result.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+
+
+    if (folder_id.has_value() && folder_id.value() != 0) {
+        auto folder_res = txn.exec(
+            "SELECT id FROM folders WHERE id = $1 AND user_id = $2",
+            pqxx::params{folder_id.value(), user_id}
+        );
+        if (folder_res.empty()) {
+            throw std::runtime_error("FORBIDDEN");
+        }
+    }
+
+    bool has_name = enc_name.has_value() && name_hash.has_value();
+    bool has_folder = folder_id.has_value();
+
+    if (!has_name && !has_folder) {
+        throw std::runtime_error("BAD_REQUEST");
+    }
+
+
+    if (has_name || has_folder) {
+        if (has_folder) {
+            if (folder_id.value() == 0) {
+                if (has_name) {
+                    txn.exec("UPDATE files SET encrypted_name = $1, name_hash = $2, folder_id = NULL WHERE id = $3 AND user_id = $4",
+                             pqxx::params{enc_name.value(), name_hash.value(), file_id, user_id});
+                } else {
+                    txn.exec("UPDATE files SET folder_id = NULL WHERE id = $1 AND user_id = $2",
+                             pqxx::params{file_id, user_id});
+                }
+            } else {
+                if (has_name) {
+                    txn.exec("UPDATE files SET encrypted_name = $1, name_hash = $2, folder_id = $3 WHERE id = $4 AND user_id = $5",
+                             pqxx::params{enc_name.value(), name_hash.value(), folder_id.value(), file_id, user_id});
+                } else {
+                    txn.exec("UPDATE files SET folder_id = $1 WHERE id = $2 AND user_id = $3",
+                             pqxx::params{folder_id.value(), file_id, user_id});
+                }
+            }
+        } else {
+            if (has_name) {
+                txn.exec("UPDATE files SET encrypted_name = $1, name_hash = $2 WHERE id = $3 AND user_id = $4",
+                         pqxx::params{enc_name.value(), name_hash.value(), file_id, user_id});
+            }
+        }
+    }
+
+    auto res = txn.exec(
+        "SELECT encrypted_name, name_hash, folder_id FROM files WHERE id = $1", 
+        pqxx::params{file_id}
+    );
+    
+    crow::json::wvalue ret;
+    ret["encrypted_name"] = res[0][0].as<std::string>();
+    ret["name_hash"] = res[0][1].as<std::string>();
+    
+    if (res[0][2].is_null()) {
+        ret["folder_id"] = nullptr;
+    } else {
+        ret["folder_id"] = res[0][2].as<int>();
+    }
+
+    txn.commit();
+    return ret; 
+}

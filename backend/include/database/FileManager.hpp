@@ -23,6 +23,7 @@ public:
     void record_chunk_saved(uint64_t file_id, int chunk_index);
     int count_uploaded_chunks(uint64_t file_id);
     void delete_file(uint64_t file_id, uint64_t user_id);
+    crow::json::wvalue update_file(uint64_t file_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& folder_id);
 
 private:
     DatabasePool& pool_;
