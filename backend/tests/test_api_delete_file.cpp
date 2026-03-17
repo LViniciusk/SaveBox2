@@ -53,6 +53,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
             "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", 
             pqxx::params{user_a_id, folder_a_id, "file_1_ok", "hash1", 100, 1, true});
+
         file_1_ok_id = res_f1[0][0].as<int>();
 
 
@@ -60,6 +61,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
             "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", 
             pqxx::params{user_a_id, folder_a_id, "file_2_inc", "hash2", 200, 2, false});
+
         file_2_incompleto_id = res_f2[0][0].as<int>();
 
 
@@ -67,6 +69,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
             "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", 
             pqxx::params{user_a_id, folder_a_id, "file_3_orfao", "hash3", 300, 1, true});
+
         file_3_orfao_id = res_f3[0][0].as<int>();
 
 
@@ -74,6 +77,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
             "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", 
             pqxx::params{user_b_id, folder_b_id, "file_4_alheio", "hash4", 400, 1, true});
+
         file_4_alheio_id = res_f4[0][0].as<int>();
 
         txn.commit();
@@ -125,6 +129,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
         auto conn = pool.acquire_connection();
         pqxx::nontransaction txn(*conn);
         auto check = txn.exec("SELECT count(*) FROM files WHERE id = " + std::to_string(file_4_alheio_id));
+        
         REQUIRE(check[0][0].as<int>() == 1);
         
         REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_4_alheio_id) + ".dat") == true);
@@ -142,6 +147,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
         auto conn = pool.acquire_connection();
         pqxx::nontransaction txn(*conn);
         auto check = txn.exec("SELECT count(*) FROM files WHERE id = " + std::to_string(file_2_incompleto_id));
+
         REQUIRE(check[0][0].as<int>() == 0);
         
         REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_2_incompleto_id) + ".dat") == false);
@@ -159,6 +165,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
         auto conn = pool.acquire_connection();
         pqxx::nontransaction txn(*conn);
         auto check = txn.exec("SELECT count(*) FROM files WHERE id = " + std::to_string(file_3_orfao_id));
+
         REQUIRE(check[0][0].as<int>() == 0);
     }
 
@@ -174,6 +181,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
         auto conn = pool.acquire_connection();
         pqxx::nontransaction txn(*conn);
         auto check = txn.exec("SELECT count(*) FROM files WHERE id = " + std::to_string(file_1_ok_id));
+
         REQUIRE(check[0][0].as<int>() == 0);
         
         REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_1_ok_id) + ".dat") == false);

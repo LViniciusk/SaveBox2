@@ -33,14 +33,20 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
         txn.exec("DELETE FROM users WHERE username = 'download_resume_user'");
         
         auto res_u = txn.exec("INSERT INTO users (username, password_hash) VALUES ('download_resume_user', 'hash_resume') RETURNING id");
+
         user_id = res_u[0][0].as<int>();
 
+
         auto f1 = txn.exec("INSERT INTO folders (user_id, encrypted_name, name_hash) VALUES ($1, $2, $3) RETURNING id", pqxx::params{user_id, "root_enc", "hash1"});
+
         int folder_id = f1[0][0].as<int>();
+
 
         auto file_res = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", 
             pqxx::params{user_id, folder_id, "file_resume", "fhash_resume", 10, 1, true});
+
         file_id = file_res[0][0].as<int>();
+        
 
         txn.commit();
     }

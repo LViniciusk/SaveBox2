@@ -361,12 +361,82 @@ crow::response ApiRouter::handle_delete_file(const crow::request& req, int file_
     try {
         file_mgr_->delete_file(static_cast<uint64_t>(file_id), user_id);
         chunker_->delete_file(static_cast<uint64_t>(file_id));
-        return crow::response(200);
+        
+        return crow::response(200, R"({"message":"Arquivo deletado com sucesso"})");
+        
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "NOT_FOUND") {
             return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
         }
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_update_file(const crow::request& req, int file_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    auto body = crow::json::load(req.body);
+    if (!body) return crow::response(400, R"({"error":"JSON invalido"})");
+
+    std::optional<std::string> enc_name;
+    std::optional<std::string> name_hash;
+    std::optional<uint64_t> folder_id;
+
+    if (body.has("encrypted_name")) enc_name = body["encrypted_name"].s();
+    if (body.has("name_hash")) name_hash = body["name_hash"].s();
+    if (body.has("folder_id")) {
+        if (body["folder_id"].t() == crow::json::type::Null) {
+            folder_id = 0; // 0 significa "Mover para a Raiz"
+        } else {
+            folder_id = static_cast<uint64_t>(body["folder_id"].i());
+        }
+    }
+
+    try {
+        crow::json::wvalue updated_json = file_mgr_->update_file(static_cast<uint64_t>(file_id), user_id, enc_name, name_hash, folder_id);
+        return crow::response(200, updated_json);
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Nao encontrado"})");
+        if (msg == "FORBIDDEN") return crow::response(403, R"({"error":"Proibido"})");
+        if (msg == "BAD_REQUEST") return crow::response(400, R"({"error":"Requisicao invalida"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_update_folder(const crow::request& req, int folder_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    auto body = crow::json::load(req.body);
+    if (!body) return crow::response(400, R"({"error":"JSON invalido"})");
+
+    std::optional<std::string> enc_name;
+    std::optional<std::string> name_hash;
+    std::optional<uint64_t> parent_id;
+
+    if (body.has("encrypted_name")) enc_name = body["encrypted_name"].s();
+    if (body.has("name_hash")) name_hash = body["name_hash"].s();
+    if (body.has("parent_id")) {
+        if (body["parent_id"].t() == crow::json::type::Null) {
+            parent_id = 0; // 0 significa "Mover para a Raiz"
+        } else {
+            parent_id = static_cast<uint64_t>(body["parent_id"].i());
+        }
+    }
+
+    try {
+        crow::json::wvalue updated_json = folder_mgr_->update_folder(static_cast<uint64_t>(folder_id), user_id, enc_name, name_hash, parent_id);
+        return crow::response(200, updated_json);
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Nao encontrado"})");
+        if (msg == "FORBIDDEN") return crow::response(403, R"({"error":"Proibido"})");
+        if (msg == "BAD_REQUEST") return crow::response(400, R"({"error":"Requisicao invalida"})");
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -435,5 +505,15 @@ void ApiRouter::setup_routes(crow::SimpleApp& app) {
     CROW_ROUTE(app, "/files/<int>").methods(crow::HTTPMethod::Delete)
     ([this](const crow::request& req, int file_id) {
         return handle_delete_file(req, file_id);
+    });
+
+    CROW_ROUTE(app, "/files/<int>").methods(crow::HTTPMethod::Put)
+    ([this](const crow::request& req, int file_id) {
+        return handle_update_file(req, file_id);
+    });
+
+    CROW_ROUTE(app, "/folders/<int>").methods(crow::HTTPMethod::Put)
+    ([this](const crow::request& req, int folder_id) {
+        return handle_update_folder(req, folder_id);
     });
 }

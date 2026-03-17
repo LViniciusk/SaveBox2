@@ -131,3 +131,71 @@ std::vector<crow::json::wvalue> FolderManager::get_all_folders(uint64_t user_id)
     txn.commit();
     return folders;
 }
+
+crow::json::wvalue FolderManager::update_folder(uint64_t folder_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& parent_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto result = txn.exec(
+        "SELECT id FROM folders WHERE id = $1 AND user_id = $2",
+        pqxx::params{folder_id, user_id}
+    );
+    if (result.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+
+    if (parent_id.has_value()) {
+        if (parent_id.value() == folder_id) {
+            throw std::runtime_error("BAD_REQUEST");
+        }
+        if (parent_id.value() != 0) { // 0 means moving to root
+            auto parent_res = txn.exec(
+                "SELECT id FROM folders WHERE id = $1 AND user_id = $2",
+                pqxx::params{parent_id.value(), user_id}
+            );
+            if (parent_res.empty()) {
+                throw std::runtime_error("FORBIDDEN");
+            }
+        }
+    }
+
+    bool has_name = enc_name.has_value() && name_hash.has_value();
+    bool has_parent = parent_id.has_value();
+
+    if (has_name || has_parent) {
+        if (has_parent) {
+            if (parent_id.value() == 0) {
+                if (has_name) {
+                    txn.exec("UPDATE folders SET encrypted_name = $1, name_hash = $2, parent_id = NULL WHERE id = $3 AND user_id = $4",
+                             pqxx::params{enc_name.value(), name_hash.value(), folder_id, user_id});
+                } else {
+                    txn.exec("UPDATE folders SET parent_id = NULL WHERE id = $1 AND user_id = $2",
+                             pqxx::params{folder_id, user_id});
+                }
+            } else {
+                if (has_name) {
+                    txn.exec("UPDATE folders SET encrypted_name = $1, name_hash = $2, parent_id = $3 WHERE id = $4 AND user_id = $5",
+                             pqxx::params{enc_name.value(), name_hash.value(), parent_id.value(), folder_id, user_id});
+                } else {
+                    txn.exec("UPDATE folders SET parent_id = $1 WHERE id = $2 AND user_id = $3",
+                             pqxx::params{parent_id.value(), folder_id, user_id});
+                }
+            }
+        } else {
+            if (has_name) {
+                txn.exec("UPDATE folders SET encrypted_name = $1, name_hash = $2 WHERE id = $3 AND user_id = $4",
+                         pqxx::params{enc_name.value(), name_hash.value(), folder_id, user_id});
+            }
+        }
+    }
+
+    auto res = txn.exec("SELECT encrypted_name, name_hash, parent_id FROM folders WHERE id = $1", pqxx::params{folder_id});
+    crow::json::wvalue ret;
+    ret["encrypted_name"] = res[0][0].as<std::string>();    
+    ret["name_hash"] = res[0][1].as<std::string>();
+    if (res[0][2].is_null()) ret["parent_id"] = nullptr;
+    else ret["parent_id"] = res[0][2].as<int>();
+    
+    txn.commit();
+    return ret;
+}
