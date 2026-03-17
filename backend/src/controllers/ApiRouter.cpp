@@ -351,6 +351,26 @@ crow::response ApiRouter::handle_get_uploaded_chunks(const crow::request& req, i
     }
 }
 
+crow::response ApiRouter::handle_delete_file(const crow::request& req, int file_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    }
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        file_mgr_->delete_file(static_cast<uint64_t>(file_id), user_id);
+        chunker_->delete_file(static_cast<uint64_t>(file_id));
+        return crow::response(200);
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") {
+            return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
+        }
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 void ApiRouter::setup_routes(crow::SimpleApp& app) {
     CROW_ROUTE(app, "/health").methods(crow::HTTPMethod::Get)
     ([this]() {
@@ -410,5 +430,10 @@ void ApiRouter::setup_routes(crow::SimpleApp& app) {
     CROW_ROUTE(app, "/files/<int>/uploaded-chunks").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req, int file_id) {
         return handle_get_uploaded_chunks(req, file_id);
+    });
+
+    CROW_ROUTE(app, "/files/<int>").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req, int file_id) {
+        return handle_delete_file(req, file_id);
     });
 }

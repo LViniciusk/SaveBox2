@@ -11,7 +11,7 @@
 TEST_CASE("API Upload Resume - Listagem de Chunks Enviados", "[api][upload][resume]") {
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("Secret_123", "Resume_Secret_JWT_987654321");
+    AuthService auth("Eu_sou_eterno_aceita", "a_jovem_promessa");
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
     FileChunker chunker("test_chunks_dir");

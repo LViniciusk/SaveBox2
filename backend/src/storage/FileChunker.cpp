@@ -78,3 +78,11 @@ std::string FileChunker::read_file_portion(uint64_t file_id, size_t offset, size
     
     return buffer;
 }
+
+void FileChunker::delete_file(uint64_t file_id) const {
+    auto file_path = temp_file_path_ / (std::to_string(file_id) + ".dat");
+    std::error_code ec;
+    if (std::filesystem::exists(file_path, ec)) {
+        std::filesystem::remove(file_path, ec);
+    }
+}

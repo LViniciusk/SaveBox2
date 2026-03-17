@@ -18,6 +18,7 @@ public:
     std::string read_entire_file(uint64_t file_id) const;
     size_t get_file_size(uint64_t file_id) const;
     std::string read_file_portion(uint64_t file_id, size_t offset, size_t length) const;
+    void delete_file(uint64_t file_id) const;
 
 private:
     std::filesystem::path temp_file_path_;

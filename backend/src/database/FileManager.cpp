@@ -152,3 +152,24 @@ void FileManager::record_chunk_saved(uint64_t file_id, int chunk_index) {
     );
     txn.commit();
 }
+
+void FileManager::delete_file(uint64_t file_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto result = txn.exec(
+        "SELECT id FROM files WHERE id = $1 AND user_id = $2",
+        pqxx::params{file_id, user_id}
+    );
+
+    if (result.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+
+    txn.exec(
+        "DELETE FROM files WHERE id = $1 AND user_id = $2",
+        pqxx::params{file_id, user_id}
+    );
+
+    txn.commit();
+}

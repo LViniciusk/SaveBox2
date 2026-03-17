@@ -17,7 +17,7 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
 
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("Segredo_muito_forte_aqui", "Meu_jwt_secret_secreto_da_download_resume");
+    AuthService auth("Minha_flor_serviu_pra_que_você_achasse_alguem", "um_outro_alguem_que_me_tomou_o_seu_amor");
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
     FileChunker chunker(test_dir);
