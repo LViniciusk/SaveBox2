@@ -22,6 +22,7 @@ public:
     std::vector<int> get_uploaded_chunks(uint64_t file_id, uint64_t user_id);
     void record_chunk_saved(uint64_t file_id, int chunk_index);
     int count_uploaded_chunks(uint64_t file_id);
+    void delete_file(uint64_t file_id, uint64_t user_id);
 
 private:
     DatabasePool& pool_;

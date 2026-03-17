@@ -10,7 +10,7 @@
 TEST_CASE("API Tree - Sincronização do Cofre", "[api][tree]") {
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("Segredo_muito_forte_aqui", "Meu_jwt_secret_secreto_da_tree");
+    AuthService auth("Confeso_que_hoje_eu_te_amo_muito_mais_que_ontem", "carai_a_dois_meses_atras_eu_nem_usava_emoji");
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
     

@@ -6,7 +6,7 @@
 
 
 TEST_CASE("Hashing e Verificação de Senhas", "[auth][security]") {
-    AuthService auth("Ultimo_romance", "savebox_jwt_secret_de_teste_longo_suficiente");
+    AuthService auth("Ultimo_romance", "vento");
 
     SECTION("Hash não deve ser vazio nem igual à senha original") {
         std::string hash = auth.hash_password("minha_senha_123");
