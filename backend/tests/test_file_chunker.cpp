@@ -1,47 +1,50 @@
 #include <catch2/catch_test_macros.hpp>
 #include "storage/FileChunker.hpp"
-#include <vector>
+#include <string>
+#include <filesystem>
 #include <cstdint>
 #include <cstddef>
 
 
+TEST_CASE("FileChunker - Escrita Cirurgica", "[storage][chunker]") {
+    const std::string test_dir = "./test_storage_chunker/";
+    const uint64_t fake_file_id = 999;
+    const uint64_t MAX_CHUNK = 5 * 1024 * 1024;
 
+    std::filesystem::remove_all(test_dir);
+    FileChunker chunker(test_dir);
 
-TEST_CASE("Montagem de Arquivo por Chunks", "[storage][chunker]") {
-    std::string path = "caminho_ficticio/arquivo_temp.bin";
-    std::filesystem::remove(path);
-    FileChunker chunker(path);
+    auto file_path = std::filesystem::path(test_dir) / (std::to_string(fake_file_id) + ".dat");
 
-    SECTION("Append de chunks individuais deve retornar true") {
-        std::vector<uint8_t> chunk1 = { 0x48, 0x65, 0x6C, 0x6C, 0x6F }; // "Hello"
-        std::vector<uint8_t> chunk2 = { 0x57, 0x6F, 0x72, 0x6C, 0x64 }; // "World"
+    SECTION("Escrita Simples") {
+        bool ok = chunker.write_chunk(fake_file_id, 0, "Hello");
 
-        REQUIRE(chunker.append_chunk(chunk1) == true);
-        REQUIRE(chunker.append_chunk(chunk2) == true);
+        REQUIRE(ok == true);
+        REQUIRE(std::filesystem::file_size(file_path) == 5);
     }
 
-    SECTION("Tamanho acumulado deve ser a soma dos chunks") {
-        std::vector<uint8_t> chunk1 = { 0x48, 0x65, 0x6C, 0x6C, 0x6F }; // 5 bytes
-        std::vector<uint8_t> chunk2 = { 0x57, 0x6F, 0x72, 0x6C, 0x64 }; // 5 bytes
+    SECTION("Trava de Seguranca") {
+        std::string payload(MAX_CHUNK + 1, 'X');
 
-        chunker.append_chunk(chunk1);
-        chunker.append_chunk(chunk2);
+        bool ok = chunker.write_chunk(fake_file_id, 0, payload);
 
-        size_t total_size = chunker.get_current_size();
-        
-        REQUIRE(total_size == (chunk1.size() + chunk2.size()));
+        REQUIRE(ok == false);
     }
 
-    SECTION("Finalizar upload deve fechar o arquivo com sucesso") {
-        std::vector<uint8_t> chunk1 = { 0x48, 0x65, 0x6C, 0x6C, 0x6F };
-        std::vector<uint8_t> chunk2 = { 0x57, 0x6F, 0x72, 0x6C, 0x64 };
+    SECTION("Salto com Offset (Sparse File)") {
+        chunker.write_chunk(fake_file_id, 0, "Hello");
+        chunker.write_chunk(fake_file_id, 1, "World");
 
-        chunker.append_chunk(chunk1);
-        chunker.append_chunk(chunk2);
-
-        size_t expected_total_size = chunk1.size() + chunk2.size();
-        bool is_complete = chunker.finalize_upload(expected_total_size);
-
-        REQUIRE(is_complete == true);
+        auto expected_size = MAX_CHUNK + 5;
+        REQUIRE(std::filesystem::file_size(file_path) == expected_size);
     }
+
+    SECTION("Idempotencia (Sobrescrita)") {
+        chunker.write_chunk(fake_file_id, 0, "Test");
+        chunker.write_chunk(fake_file_id, 0, "Test");
+
+        REQUIRE(std::filesystem::file_size(file_path) == 4);
+    }
+
+    std::filesystem::remove_all(test_dir);
 }
