@@ -2,7 +2,6 @@
 #include "database/DatabasePool.hpp"
 #include "services/AuthService.hpp"
 #include "database/FolderManager.hpp"
-#include "services/CryptoService.hpp"
 #include "utils.hpp"
 #include <crow_all.h>
 #include <iostream>
@@ -13,19 +12,17 @@
 int main() {
     std::string conn_str = get_secure_conn_string();
     std::string pepper = get_pepper();
-    std::string crypto_key = get_crypto_key();
 
     // Instancia as dependências
     DatabasePool pool(2, conn_str);
     AuthService auth(pepper);
     FolderManager folder_mgr(pool);
-    CryptoService crypto(crypto_key);
 
     // Instancia o servidor web Crow
     crow::SimpleApp app;
 
     // Instancia o roteador com injeção de dependência
-    ApiRouter router(pool, auth, folder_mgr, crypto);
+    ApiRouter router(pool, auth, folder_mgr);
 
     // Acopla as rotas ao servidor
     router.setup_routes(app);

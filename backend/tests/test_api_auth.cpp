@@ -3,7 +3,6 @@
 #include "database/DatabasePool.hpp"
 #include "services/AuthService.hpp"
 #include "database/FolderManager.hpp"
-#include "services/CryptoService.hpp"
 #include "test_helpers.hpp"
 #include <crow_all.h>
 
@@ -12,8 +11,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
     DatabasePool pool(2, conn_str);
     AuthService auth("uma_pimenta_secreta_muito_longa_e_aleatoria_aqui");
     FolderManager folder_mgr(pool);
-    CryptoService crypto("01234567890123456789012345678901");
-    ApiRouter router(pool, auth, folder_mgr, crypto);
+    ApiRouter router(pool, auth, folder_mgr);
 
     {
         auto conn = pool.acquire_connection();

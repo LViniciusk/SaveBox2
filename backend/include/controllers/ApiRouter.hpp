@@ -4,13 +4,12 @@
 #include "database/DatabasePool.hpp"
 #include "services/AuthService.hpp"
 #include "database/FolderManager.hpp"
-#include "services/CryptoService.hpp"
 #include <string>
 
 class ApiRouter {
 public:
     ApiRouter() = default;
-    ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr, CryptoService& crypto);
+    ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr);
 
     std::string handle_healthcheck() const;
     crow::response handle_register(const crow::request& req);
@@ -23,5 +22,4 @@ private:
     DatabasePool* pool_ = nullptr;
     AuthService* auth_ = nullptr;
     FolderManager* folder_mgr_ = nullptr;
-    CryptoService* crypto_ = nullptr;
 };
