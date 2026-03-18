@@ -24,10 +24,10 @@ int main() {
     FileManager file_mgr(pool);
     FileChunker chunker(storage_path);
 
-    // Instancia o servidor web Crow
-    crow::SimpleApp app;
+    // Configurando Instância do Crow WebServer
+    crow::App<crow::CORSHandler> app;
 
-    // Instancia o roteador com injeção de dependência
+    // Configurando Rotaseador com injeção de dependência
     ApiRouter router(pool, auth, folder_mgr, &file_mgr, &chunker);
 
     // Acopla as rotas ao servidor

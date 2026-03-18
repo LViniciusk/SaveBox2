@@ -1,4 +1,5 @@
 #include "database/FileManager.hpp"
+#include "database/DatabasePool.hpp"
 #include <pqxx/pqxx>
 #include <random>
 #include <sstream>
@@ -29,7 +30,7 @@ namespace {
 
 FileManager::FileManager(DatabasePool& pool) : pool_(pool) {}
 
-int FileManager::init_upload(uint64_t user_id, uint64_t folder_id,
+int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id,
                               const std::string& enc_name, const std::string& name_hash,
                               uint64_t size_bytes, int total_chunks) {
     auto conn = pool_.acquire_connection();
@@ -128,7 +129,13 @@ std::vector<crow::json::wvalue> FileManager::get_user_files_paginated(uint64_t u
     for (const auto& row : result) {
         crow::json::wvalue item;
         item["id"] = row[0].as<int>();
-        item["folder_id"] = row[1].as<int>();
+        
+        if (row[1].is_null()) {
+            item["folder_id"] = nullptr;
+        } else {
+            item["folder_id"] = row[1].as<int>();
+        }
+
         item["encrypted_name"] = row[2].as<std::string>();
         item["size_bytes"] = row[3].as<int64_t>();
         files.push_back(std::move(item));

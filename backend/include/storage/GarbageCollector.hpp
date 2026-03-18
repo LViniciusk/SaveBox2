@@ -1,10 +1,11 @@
 #pragma once
 
-#include "database/DatabasePool.hpp"
 #include <filesystem>
 #include <string>
 #include <cstdint>
 #include <cstddef>
+
+class DatabasePool;
 
 class GarbageCollector {
 public:

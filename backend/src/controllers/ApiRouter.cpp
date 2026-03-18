@@ -1,4 +1,8 @@
 #include "controllers/ApiRouter.hpp"
+#include "database/FolderManager.hpp"
+#include "database/FileManager.hpp"
+#include "storage/FileChunker.hpp"
+
 #include <optional>
 
 ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr,
@@ -145,7 +149,10 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
             return crow::response(400, R"({"error":"JSON invalido"})");
         }
 
-        uint64_t folder_id      = static_cast<uint64_t>(body["folder_id"].i());
+        std::optional<uint64_t> folder_id = std::nullopt;
+        if (body.has("folder_id") && body["folder_id"].t() != crow::json::type::Null) {
+            folder_id = static_cast<uint64_t>(body["folder_id"].i());
+        }
         std::string enc_name    = body["encrypted_name"].s();
         std::string name_hash   = body["name_hash"].s();
         uint64_t size_bytes     = static_cast<uint64_t>(body["size_bytes"].i());
@@ -500,7 +507,13 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
     }
 }
 
-void ApiRouter::setup_routes(crow::SimpleApp& app) {
+void ApiRouter::setup_routes(crow::App<crow::CORSHandler>& app) {
+    auto& cors = app.get_middleware<crow::CORSHandler>();
+    cors.global()
+        .headers("Origin", "Content-Type", "Accept", "Authorization", "X-Encrypted-Name")
+        .methods("POST"_method, "GET"_method, "PUT"_method, "DELETE"_method, "OPTIONS"_method)
+        .origin("*");
+
     CROW_ROUTE(app, "/health").methods(crow::HTTPMethod::Get)
     ([this]() {
         auto res = crow::response(handle_healthcheck());

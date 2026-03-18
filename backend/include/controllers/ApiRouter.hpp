@@ -3,9 +3,11 @@
 #include "crow_all.h"
 #include "database/DatabasePool.hpp"
 #include "services/AuthService.hpp"
-#include "database/FolderManager.hpp"
-#include "database/FileManager.hpp"
-#include "storage/FileChunker.hpp"
+
+class FileManager;
+class FolderManager;
+class FileChunker;
+
 #include <optional>
 #include <cstdint>
 #include <string>
@@ -33,7 +35,7 @@ public:
     crow::response handle_share_file(const crow::request& req, int file_id);
     crow::response handle_get_shared_file(const crow::request& req, const std::string& uuid);
 
-    void setup_routes(crow::SimpleApp& app);
+    void setup_routes(crow::App<crow::CORSHandler>& app);
 
 private:
     DatabasePool* pool_ = nullptr;

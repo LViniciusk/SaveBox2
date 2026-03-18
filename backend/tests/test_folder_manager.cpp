@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "database/FolderManager.hpp"
+#include "database/DatabasePool.hpp"
 #include "test_helpers.hpp"
 #include <pqxx/pqxx>
 #include <cstdint>

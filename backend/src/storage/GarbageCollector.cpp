@@ -1,4 +1,5 @@
 #include "storage/GarbageCollector.hpp"
+#include "database/DatabasePool.hpp"
 #include <pqxx/pqxx>
 #include <iostream>
 #include <vector>

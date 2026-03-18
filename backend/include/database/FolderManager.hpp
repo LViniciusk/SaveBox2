@@ -1,10 +1,11 @@
 #pragma once
 
-#include "database/DatabasePool.hpp"
 #include <crow_all.h>
 #include <cstdint>
 #include <optional>
 #include <string>
+
+class DatabasePool;
 
 class FolderManager {
 public:

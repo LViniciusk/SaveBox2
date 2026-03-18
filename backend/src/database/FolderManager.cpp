@@ -1,4 +1,5 @@
 #include "database/FolderManager.hpp"
+#include "database/DatabasePool.hpp"
 #include <pqxx/pqxx>
 #include <stdexcept>
 #include <vector>
@@ -86,18 +87,28 @@ crow::json::wvalue FolderManager::get_folder_contents(int folder_id, int user_id
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
-    auto check = txn.exec(
-        "SELECT id FROM folders WHERE id = $1 AND user_id = $2",
-        pqxx::params{folder_id, user_id}
-    );
-    if (check.empty()) {
-        throw std::runtime_error("NOT_FOUND");
+    if (folder_id != 0) {
+        auto check = txn.exec(
+            "SELECT id FROM folders WHERE id = $1 AND user_id = $2",
+            pqxx::params{folder_id, user_id}
+        );
+        if (check.empty()) {
+            throw std::runtime_error("NOT_FOUND");
+        }
     }
 
-    auto sub_rows = txn.exec(
-        "SELECT id, encrypted_name FROM folders WHERE parent_id = $1 AND user_id = $2",
-        pqxx::params{folder_id, user_id}
-    );
+    pqxx::result sub_rows;
+    if (folder_id == 0) {
+        sub_rows = txn.exec(
+            "SELECT id, encrypted_name FROM folders WHERE parent_id IS NULL AND user_id = $1",
+            pqxx::params{user_id}
+        );
+    } else {
+        sub_rows = txn.exec(
+            "SELECT id, encrypted_name FROM folders WHERE parent_id = $1 AND user_id = $2",
+            pqxx::params{folder_id, user_id}
+        );
+    }
 
     std::vector<crow::json::wvalue> subfolders;
     for (const auto& row : sub_rows) {
@@ -107,11 +118,20 @@ crow::json::wvalue FolderManager::get_folder_contents(int folder_id, int user_id
         subfolders.push_back(std::move(item));
     }
 
-    auto file_rows = txn.exec(
-        "SELECT id, encrypted_name, size_bytes FROM files "
-        "WHERE folder_id = $1 AND user_id = $2 AND is_upload_complete = true",
-        pqxx::params{folder_id, user_id}
-    );
+    pqxx::result file_rows;
+    if (folder_id == 0) {
+        file_rows = txn.exec(
+            "SELECT id, encrypted_name, size_bytes FROM files "
+            "WHERE folder_id IS NULL AND user_id = $1 AND is_upload_complete = true",
+            pqxx::params{user_id}
+        );
+    } else {
+        file_rows = txn.exec(
+            "SELECT id, encrypted_name, size_bytes FROM files "
+            "WHERE folder_id = $1 AND user_id = $2 AND is_upload_complete = true",
+            pqxx::params{folder_id, user_id}
+        );
+    }
 
     std::vector<crow::json::wvalue> files;
     for (const auto& row : file_rows) {
