@@ -1,0 +1,54 @@
+# === Compilação e Build ===
+# Ignora a pasta build inteira (onde ficam os .obj, .exe e arquivos do CMake)
+build/
+bin/
+obj/
+out/
+.cache/
+
+# === Executáveis e Binários ===
+# Ignora executáveis gerados
+*.exe
+*.out
+*.app
+# Ignora as DLLs que copiamos para a pasta build (Option Nuclear)
+*.dll
+
+# === Configurações de Ambiente (SEGURANÇA CRÍTICA) ===
+# Nunca suba suas senhas do banco de dados!
+.env
+.env.local
+.env.*.local
+
+# === Banco de Dados e Docker ===
+# Se você criar uma pasta para persistência do Postgres no Windows
+pg_data/
+docker-volumes/
+
+# === VS Code e IDEs ===
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln
+*.vcxproj
+*.filters
+
+# === Logs e Temporários ===
+*.log
+tmp/
+temp/
+*.tmp
+*.swp
+
+# === Sistema Operacional ===
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# === Testes ===
+# Se o Catch2 gerar algum arquivo de reporte de lixo
+_tests/

@@ -1,0 +1,11 @@
+{
+  "name": "saveboxserver",
+  "version": "2.0.0",
+  "dependencies": [
+    "nlohmann-json",
+    "libpqxx",
+    "libzip",
+    "libsodium",
+    "crow"
+  ]
+}
