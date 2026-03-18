@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <utility>
 #include <crow_all.h>
 
 class FileManager {
@@ -24,6 +25,9 @@ public:
     int count_uploaded_chunks(uint64_t file_id);
     void delete_file(uint64_t file_id, uint64_t user_id);
     crow::json::wvalue update_file(uint64_t file_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& folder_id);
+    
+    std::string share_file(uint64_t file_id, uint64_t user_id);
+    std::pair<uint64_t, std::string> get_shared_file_info(const std::string& uuid);
 
 private:
     DatabasePool& pool_;

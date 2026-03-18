@@ -1,5 +1,31 @@
 #include "database/FileManager.hpp"
 #include <pqxx/pqxx>
+#include <random>
+#include <sstream>
+#include <iomanip>
+
+namespace {
+    std::string generate_uuid_v4() {
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        static std::uniform_int_distribution<> dis(0, 15);
+        static std::uniform_int_distribution<> dis2(8, 11);
+
+        std::stringstream ss;
+        ss << std::hex;
+        for (int i = 0; i < 8; i++) ss << dis(gen);
+        ss << "-";
+        for (int i = 0; i < 4; i++) ss << dis(gen);
+        ss << "-4";
+        for (int i = 0; i < 3; i++) ss << dis(gen);
+        ss << "-";
+        ss << dis2(gen);
+        for (int i = 0; i < 3; i++) ss << dis(gen);
+        ss << "-";
+        for (int i = 0; i < 12; i++) ss << dis(gen);
+        return ss.str();
+    }
+}
 
 FileManager::FileManager(DatabasePool& pool) : pool_(pool) {}
 
@@ -249,4 +275,51 @@ crow::json::wvalue FileManager::update_file(uint64_t file_id, uint64_t user_id, 
 
     txn.commit();
     return ret; 
+}
+
+std::string FileManager::share_file(uint64_t file_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto result = txn.exec(
+        "SELECT id FROM files WHERE id = $1 AND user_id = $2",
+        pqxx::params{file_id, user_id}
+    );
+    if (result.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+
+    std::string uuid = generate_uuid_v4();
+
+    txn.exec(
+        "INSERT INTO shared_links (file_id, share_uuid) VALUES ($1, $2)",
+        pqxx::params{file_id, uuid}
+    );
+
+    txn.commit();
+    return uuid;
+}
+
+std::pair<uint64_t, std::string> FileManager::get_shared_file_info(const std::string& uuid) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto res = txn.exec(
+        "SELECT f.id, f.encrypted_name "
+        "FROM shared_links s "
+        "JOIN files f ON s.file_id = f.id "
+        "WHERE s.share_uuid = $1",
+        pqxx::params{uuid}
+    );
+
+    if (res.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+
+    uint64_t file_id = res[0][0].as<uint64_t>();
+    std::string enc_name = res[0][1].as<std::string>();
+
+    txn.commit();
+    
+    return {file_id, enc_name}; 
 }
