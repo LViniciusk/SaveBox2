@@ -55,6 +55,16 @@ bool DatabaseMigration::run(DatabasePool& pool) {
             );
         )");
 
+        // Tabela de Links Compartilhados
+        w.exec(R"(
+            CREATE TABLE IF NOT EXISTS shared_links (
+                id SERIAL PRIMARY KEY,
+                file_id BIGINT REFERENCES files(id) ON DELETE CASCADE,
+                share_uuid VARCHAR(36) UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        )");
+
         // Adiciona colunas novas se a tabela já existia sem elas
         w.exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS name_hash VARCHAR(128);");
         w.exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS total_chunks INTEGER NOT NULL DEFAULT 1;");
