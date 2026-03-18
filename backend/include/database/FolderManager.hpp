@@ -24,6 +24,8 @@ public:
     
     crow::json::wvalue update_folder(uint64_t folder_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& parent_id);
 
+    void restore_folder(uint64_t folder_id, uint64_t user_id);
+
 private:
     DatabasePool& pool_;
 };

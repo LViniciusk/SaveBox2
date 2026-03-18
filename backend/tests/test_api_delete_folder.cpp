@@ -149,17 +149,17 @@ TEST_CASE("API Delete Folder - Exclusao Recursiva de Arvore", "[api][delete][fol
         pqxx::nontransaction txn(*conn);
 
 
-        auto check_fa = txn.exec("SELECT count(*) FROM folders WHERE user_id = " + std::to_string(user_a_id));
-        REQUIRE(check_fa[0][0].as<int>() == 0);
+        auto check_fa = txn.exec("SELECT count(*) FROM folders WHERE user_id = " + std::to_string(user_a_id) + " AND deleted_at IS NOT NULL");
+        REQUIRE(check_fa[0][0].as<int>() == 3);
 
 
-        auto check_fi = txn.exec("SELECT count(*) FROM files WHERE user_id = " + std::to_string(user_a_id));
-        REQUIRE(check_fi[0][0].as<int>() == 0);
+        auto check_fi = txn.exec("SELECT count(*) FROM files WHERE user_id = " + std::to_string(user_a_id) + " AND deleted_at IS NOT NULL");
+        REQUIRE(check_fi[0][0].as<int>() == 3);
 
 
-        REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_a_1_id) + ".dat") == false);
-        REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_a_2_id) + ".dat") == false);
-        REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_a_3_id) + ".dat") == false);
+        REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_a_1_id) + ".dat") == true);
+        REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_a_2_id) + ".dat") == true);
+        REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_a_3_id) + ".dat") == true);
 
 
         auto check_fb = txn.exec("SELECT count(*) FROM folders WHERE user_id = " + std::to_string(user_b_id));

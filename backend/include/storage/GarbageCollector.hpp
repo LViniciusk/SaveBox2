@@ -1,19 +1,15 @@
 #pragma once
 
-#include <filesystem>
-#include <string>
-#include <cstdint>
-#include <cstddef>
-
 class DatabasePool;
+class FileChunker;
 
 class GarbageCollector {
 public:
-    GarbageCollector(DatabasePool& pool, const std::string& temp_vault_path);
+    GarbageCollector(DatabasePool& pool, FileChunker* chunker);
 
-    size_t cleanup_abandoned_uploads(int hours_old);
+    void run_cleanup();
 
 private:
     DatabasePool& pool_;
-    std::filesystem::path temp_vault_path_;
+    FileChunker* chunker_;
 };

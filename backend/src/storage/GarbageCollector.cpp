@@ -1,54 +1,60 @@
 #include "storage/GarbageCollector.hpp"
 #include "database/DatabasePool.hpp"
+#include "storage/FileChunker.hpp"
 #include <pqxx/pqxx>
 #include <iostream>
-#include <vector>
 
-GarbageCollector::GarbageCollector(DatabasePool& pool, const std::string& temp_vault_path)
-    : pool_(pool), temp_vault_path_(temp_vault_path) {}
+GarbageCollector::GarbageCollector(DatabasePool& pool, FileChunker* chunker)
+    : pool_(pool), chunker_(chunker) {}
 
-size_t GarbageCollector::cleanup_abandoned_uploads(int hours_old) {
-    size_t total_freed = 0;
+void GarbageCollector::run_cleanup() {
+    auto conn = pool_.acquire_connection();
+    pqxx::work W(*conn);
 
     try {
-        auto conn = pool_.acquire_connection();
-        pqxx::work W(*conn);
+        std::string query_select = R"(
+            SELECT id, user_id, size_bytes FROM files
+            WHERE (is_upload_complete = FALSE AND created_at < NOW() - INTERVAL '4 hours')
+               OR (deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days')
+        )";
 
-        std::string interval_str = std::to_string(hours_old) + " hours";
+        auto result = W.exec(query_select);
 
-        pqxx::result rows = W.exec(
-            "SELECT id, physical_path, size_bytes FROM files "
-            "WHERE is_upload_complete = FALSE "
-            "AND created_at < NOW() - CAST($1 AS INTERVAL);",
-            pqxx::params{interval_str}
-        );
-
-        for (const auto& row : rows) {
-            int64_t file_id = row["id"].as<int64_t>();
-            std::string physical_path = row["physical_path"].as<std::string>();
-            size_t size_bytes = row["size_bytes"].as<size_t>();
-
+        for (const auto& row : result) {
+            uint64_t file_id = row[0].as<uint64_t>();
+            uint64_t user_id = row[1].as<uint64_t>();
+            uint64_t size_bytes = row[2].as<uint64_t>();
+            
             try {
-                if (std::filesystem::exists(physical_path)) {
-                    if (std::filesystem::remove(physical_path)) {
-                        total_freed += size_bytes;
-                    }
+                if (chunker_) {
+                    chunker_->delete_file(file_id);
                 }
-            } catch (const std::filesystem::filesystem_error& e) {
-                std::cerr << "GC: falha ao deletar arquivo físico '"
-                          << physical_path << "': " << e.what() << std::endl;
+            } catch (const std::exception& e) {
+                std::cerr << "GC: Falha ao deletar arquivo fisico " << file_id << ": " << e.what() << "\n";
             }
-
-            W.exec(
-                "DELETE FROM files WHERE id = $1;",
-                pqxx::params{file_id}
-            );
+            
+            if (size_bytes > 0) {
+                W.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
+                       pqxx::params{size_bytes, user_id});
+            }
         }
 
-        W.commit();
-    } catch (const std::exception& e) {
-        std::cerr << "GC: erro durante limpeza: " << e.what() << std::endl;
-    }
+        std::string query_delete_files = R"(
+            DELETE FROM files
+            WHERE (is_upload_complete = FALSE AND created_at < NOW() - INTERVAL '4 hours')
+               OR (deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days')
+        )";
+        W.exec(query_delete_files);
 
-    return total_freed;
+        std::string query_delete_folders = R"(
+            DELETE FROM folders
+            WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days'
+        )";
+        W.exec(query_delete_folders);
+
+        W.commit();
+
+    } catch (const std::exception& e) {
+        std::cerr << "GC: Erro critico durante limpeza: " << e.what() << "\n";
+    }
 }

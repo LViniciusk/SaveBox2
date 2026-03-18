@@ -146,11 +146,11 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
 
         auto conn = pool.acquire_connection();
         pqxx::nontransaction txn(*conn);
-        auto check = txn.exec("SELECT count(*) FROM files WHERE id = " + std::to_string(file_2_incompleto_id));
+        auto check = txn.exec("SELECT count(*) FROM files WHERE id = " + std::to_string(file_2_incompleto_id) + " AND deleted_at IS NOT NULL");
 
-        REQUIRE(check[0][0].as<int>() == 0);
+        REQUIRE(check[0][0].as<int>() == 1);
         
-        REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_2_incompleto_id) + ".dat") == false);
+        REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_2_incompleto_id) + ".dat") == true);
     }
 
     SECTION("Edge Case: Deletar arquivo orfao (DB existe, HD nao)") {
@@ -164,9 +164,9 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
 
         auto conn = pool.acquire_connection();
         pqxx::nontransaction txn(*conn);
-        auto check = txn.exec("SELECT count(*) FROM files WHERE id = " + std::to_string(file_3_orfao_id));
+        auto check = txn.exec("SELECT count(*) FROM files WHERE id = " + std::to_string(file_3_orfao_id) + " AND deleted_at IS NOT NULL");
 
-        REQUIRE(check[0][0].as<int>() == 0);
+        REQUIRE(check[0][0].as<int>() == 1);
     }
 
     SECTION("Caminho Feliz: Exclusao Perfeita") {
@@ -180,11 +180,11 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
 
         auto conn = pool.acquire_connection();
         pqxx::nontransaction txn(*conn);
-        auto check = txn.exec("SELECT count(*) FROM files WHERE id = " + std::to_string(file_1_ok_id));
+        auto check = txn.exec("SELECT count(*) FROM files WHERE id = " + std::to_string(file_1_ok_id) + " AND deleted_at IS NOT NULL");
 
-        REQUIRE(check[0][0].as<int>() == 0);
+        REQUIRE(check[0][0].as<int>() == 1);
         
-        REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_1_ok_id) + ".dat") == false);
+        REQUIRE(std::filesystem::exists(test_dir + std::to_string(file_1_ok_id) + ".dat") == true);
     }
 
     {

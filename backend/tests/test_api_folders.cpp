@@ -15,13 +15,13 @@ TEST_CASE("API de Pastas - Criação", "[api][folders]") {
 
     ApiRouter router(pool, auth, folder_mgr);
 
+    std::string test_username = "user_folders_" + std::to_string(rand());
     int fake_user_id = 0;
     {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
-        txn.exec("DELETE FROM users WHERE username = 'folder_test_ghost'");
         auto result = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('folder_test_ghost', 'hash_fake') RETURNING id"
+            "INSERT INTO users (username, password_hash) VALUES ('" + test_username + "', 'hash_fake') RETURNING id"
         );
         fake_user_id = result[0][0].as<int>();
         txn.commit();
@@ -32,27 +32,30 @@ TEST_CASE("API de Pastas - Criação", "[api][folders]") {
     SECTION("Criar Pasta Raiz") {
         crow::request req;
         req.add_header("Authorization", "Bearer " + valid_token);
-        req.body = R"({"encrypted_name": "base64_fake_text_1", "name_hash": "hash_fake_1"})";
+        std::string unique_hash = "hash_fake_1_" + std::to_string(rand());
+        req.body = R"({"encrypted_name": "base64_fake_text_1", "name_hash": ")" + unique_hash + R"("})";
 
         crow::response res = router.handle_create_folder(req);
 
         REQUIRE(res.code == 201);
-        REQUIRE(res.body.find("folder_id") != std::string::npos);
+        REQUIRE(res.body.find("id") != std::string::npos);
     }
 
     SECTION("Criar Subpasta") {
         crow::request req;
         req.add_header("Authorization", "Bearer " + valid_token);
-        req.body = R"({"encrypted_name": "base64_fake_text_1", "name_hash": "hash_fake_2"})";
+        std::string unique_hash_pai = "hash_fake_2_" + std::to_string(rand());
+        req.body = R"({"encrypted_name": "base64_fake_text_1", "name_hash": ")" + unique_hash_pai + R"("})";
         crow::response res_pai = router.handle_create_folder(req);
         REQUIRE(res_pai.code == 201);
 
         auto pai_body = crow::json::load(res_pai.body);
-        int parent_id = pai_body["folder_id"].i();
+        int parent_id = pai_body["id"].i();
 
         crow::request req2;
         req2.add_header("Authorization", "Bearer " + valid_token);
-        req2.body = R"({"encrypted_name": "base64_fake_text_2", "name_hash": "hash_fake_3", "parent_id": )"
+        std::string unique_hash_filha = "hash_fake_3_" + std::to_string(rand());
+        req2.body = R"({"encrypted_name": "base64_fake_text_2", "name_hash": ")" + unique_hash_filha + R"(", "parent_id": )"
                   + std::to_string(parent_id) + "}";
 
         crow::response res2 = router.handle_create_folder(req2);
@@ -86,18 +89,7 @@ TEST_CASE("API de Pastas - Criação", "[api][folders]") {
     {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
-        txn.exec("DELETE FROM users WHERE username = 'folder_test_ghost'");
-        txn.commit();
-    }
-
-    {
-        auto conn = pool.acquire_connection();
-        pqxx::work txn(*conn);
-        txn.exec("DELETE FROM users WHERE username = 'folder_test_ghost'");
-        auto result = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('folder_test_ghost', 'hash_fake') RETURNING id"
-        );
-        fake_user_id = result[0][0].as<int>();
+        txn.exec("DELETE FROM users WHERE username = '" + test_username + "'");
         txn.commit();
     }
 }

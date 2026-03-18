@@ -1,33 +1,26 @@
 #include "database/DatabaseMigration.hpp"
-
 #include <pqxx/pqxx>
 #include <iostream>
 
 bool DatabaseMigration::run(DatabasePool& pool) {
     try {
-        // Adquire uma conexão do pool
         auto conn_wrapper = pool.acquire_connection();
-
-        if (!conn_wrapper.is_valid()) {
-            std::cerr << "Erro: Conexão inválida ao tentar rodar migrations." << std::endl;
-            return false;
-        }
-
-        // Inicia uma transação
         pqxx::work w(*conn_wrapper);
 
-        // Tabela de Usuários
+        // TABELA DE USUÁRIOS
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS users (
                 id BIGSERIAL PRIMARY KEY,
                 username VARCHAR(255) UNIQUE NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
                 master_key_salt VARCHAR(255),
+                max_storage_bytes BIGINT DEFAULT 5368709120, -- 5GB Padrão
+                used_storage_bytes BIGINT DEFAULT 0,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         )");
 
-        // Tabela de Pastas
+        // TABELA DE PASTAS
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS folders (
                 id BIGSERIAL PRIMARY KEY,
@@ -35,27 +28,29 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 parent_id BIGINT REFERENCES folders(id) ON DELETE CASCADE,
                 encrypted_name TEXT NOT NULL,
                 name_hash VARCHAR(128) NOT NULL,
+                deleted_at TIMESTAMP NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         )");
 
-        // Tabela de Arquivos
+        // TABELA DE ARQUIVOS
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS files (
                 id BIGSERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 folder_id BIGINT REFERENCES folders(id) ON DELETE CASCADE,
                 encrypted_name TEXT NOT NULL,
-                name_hash VARCHAR(128),
+                name_hash VARCHAR(128) NOT NULL,
                 physical_path TEXT UNIQUE,
                 size_bytes BIGINT NOT NULL DEFAULT 0,
                 total_chunks INTEGER NOT NULL DEFAULT 1,
                 is_upload_complete BOOLEAN NOT NULL DEFAULT FALSE,
+                deleted_at TIMESTAMP NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         )");
 
-        // Tabela de Links Compartilhados
+        // LINKS COMPARTILHADOS
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS shared_links (
                 id SERIAL PRIMARY KEY,
@@ -65,25 +60,21 @@ bool DatabaseMigration::run(DatabasePool& pool) {
             );
         )");
 
-        // Adiciona colunas novas se a tabela já existia sem elas
-        w.exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS name_hash VARCHAR(128);");
-        w.exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS total_chunks INTEGER NOT NULL DEFAULT 1;");
-        w.exec("ALTER TABLE files ALTER COLUMN physical_path DROP NOT NULL;");
+        // PASTAS
+        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_folder_root_active ON folders (user_id, name_hash) WHERE parent_id IS NULL AND deleted_at IS NULL;");
+        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_folder_sub_active ON folders (user_id, parent_id, name_hash) WHERE parent_id IS NOT NULL AND deleted_at IS NULL;");
 
-        // Índices
+        // ARQUIVOS
+        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_file_root_active ON files (user_id, name_hash) WHERE folder_id IS NULL AND deleted_at IS NULL;");
+        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_file_sub_active ON files (user_id, folder_id, name_hash) WHERE folder_id IS NOT NULL AND deleted_at IS NULL;");
+
+        // ÍNDICES DE PERFORMANCE
         w.exec("CREATE INDEX IF NOT EXISTS idx_folders_user_parent ON folders(user_id, parent_id);");
         w.exec("CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_id);");
-        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_root_folder ON folders (user_id, name_hash) WHERE parent_id IS NULL;");
-        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_sub_folder ON folders (user_id, parent_id, name_hash) WHERE parent_id IS NOT NULL;");
-
-        // Confirma a transação
         w.commit();
         return true;
-    } catch (const pqxx::sql_error& e) {
-        std::cerr << "Erro SQL na migração: " << e.what() << "\nQuery: " << e.query() << std::endl;
-        return false;
     } catch (const std::exception& e) {
-        std::cerr << "Erro geral na migração: " << e.what() << std::endl;
+        std::cerr << "[DB] Erro Crítico na Migração: " << e.what() << std::endl;
         return false;
     }
 }

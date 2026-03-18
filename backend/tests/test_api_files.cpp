@@ -25,12 +25,13 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
     int fake_user_id = 0;
     int fake_folder_id = 0;
 
+    std::string test_username = "file_upload_ghost_" + std::to_string(rand());
+
     {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
-        txn.exec("DELETE FROM users WHERE username = 'file_upload_ghost'");
         auto user_res = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('file_upload_ghost', 'hash_fake') RETURNING id"
+            "INSERT INTO users (username, password_hash) VALUES ('" + test_username + "', 'hash_fake') RETURNING id"
         );
         fake_user_id = user_res[0][0].as<int>();
 
@@ -113,10 +114,29 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
 
     }
 
+    SECTION("Duplicidade de nome na mesma pasta retorna 409 Conflict") {
+        crow::request req_init;
+        req_init.add_header("Authorization", "Bearer " + token);
+        req_init.body = R"({"folder_id": null, "encrypted_name": "arquivo_duplicado_enc", "name_hash": "hash_duplicado_123", "size_bytes": 100, "total_chunks": 1})";
+
+        crow::response res1 = router.handle_init_file_upload(req_init);
+        REQUIRE(res1.code == 201);
+
+        crow::response res2 = router.handle_init_file_upload(req_init);
+        REQUIRE(res2.code == 409);
+        REQUIRE(res2.body.find("Um arquivo com este nome ja existe nesta pasta") != std::string::npos);
+        
+        crow::request req_init_diff_folder;
+        req_init_diff_folder.add_header("Authorization", "Bearer " + token);
+        req_init_diff_folder.body = R"({"folder_id": )" + std::to_string(fake_folder_id) + R"(, "encrypted_name": "arquivo_duplicado_enc", "name_hash": "hash_duplicado_123", "size_bytes": 100, "total_chunks": 1})";
+        crow::response res3 = router.handle_init_file_upload(req_init_diff_folder);
+        REQUIRE(res3.code == 201);
+    }
+
     {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
-        txn.exec("DELETE FROM users WHERE username = 'file_upload_ghost'");
+        txn.exec("DELETE FROM users WHERE username = '" + test_username + "'");
         txn.commit();
     }
 }

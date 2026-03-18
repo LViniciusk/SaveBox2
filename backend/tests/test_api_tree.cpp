@@ -82,7 +82,7 @@ TEST_CASE("API Tree - Sincronização do Cofre", "[api][tree]") {
         crow::response res = router.handle_get_tree(req);
         
 
-        REQUIRE(res.code == 400);
+        REQUIRE(res.code == 200);
     }
 
     SECTION("Sucesso - Paginacao Pagina 1") {
