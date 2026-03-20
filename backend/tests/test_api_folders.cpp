@@ -21,7 +21,7 @@ TEST_CASE("API de Pastas - Criação", "[api][folders]") {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
         auto result = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('" + test_username + "', 'hash_fake') RETURNING id"
+            "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('" + test_username + "', '" + test_username + "@test.com', 'hash_fake', true) RETURNING id"
         );
         fake_user_id = result[0][0].as<int>();
         txn.commit();

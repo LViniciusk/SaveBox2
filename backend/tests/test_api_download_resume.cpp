@@ -32,7 +32,7 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username = 'download_resume_user'");
         
-        auto res_u = txn.exec("INSERT INTO users (username, password_hash) VALUES ('download_resume_user', 'hash_resume') RETURNING id");
+        auto res_u = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('download_resume_user', 'download_resume_user@test.com', 'hash_resume', true) RETURNING id");
 
         user_id = res_u[0][0].as<int>();
 

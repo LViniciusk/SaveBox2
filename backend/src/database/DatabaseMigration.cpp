@@ -12,9 +12,13 @@ bool DatabaseMigration::run(DatabasePool& pool) {
             CREATE TABLE IF NOT EXISTS users (
                 id BIGSERIAL PRIMARY KEY,
                 username VARCHAR(255) UNIQUE NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
                 password_hash VARCHAR(255) NOT NULL,
                 master_key_salt VARCHAR(255),
-                max_storage_bytes BIGINT DEFAULT 5368709120, -- 5GB Padrão
+                is_email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                verification_token VARCHAR(128) UNIQUE,
+                token_expires_at TIMESTAMP WITH TIME ZONE,
+                max_storage_bytes BIGINT DEFAULT 5368709120,
                 used_storage_bytes BIGINT DEFAULT 0,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );

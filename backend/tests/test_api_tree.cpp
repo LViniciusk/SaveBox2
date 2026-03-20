@@ -24,10 +24,10 @@ TEST_CASE("API Tree - Sincronização do Cofre", "[api][tree]") {
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username IN ('tree_user_A', 'tree_user_B')");
         
-        auto res_a = txn.exec("INSERT INTO users (username, password_hash) VALUES ('tree_user_A', 'hash_a') RETURNING id");
+        auto res_a = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('tree_user_A', 'tree_user_A@test.com', 'hash_a', true) RETURNING id");
         user_a_id = res_a[0][0].as<int>();
 
-        auto res_b = txn.exec("INSERT INTO users (username, password_hash) VALUES ('tree_user_B', 'hash_b') RETURNING id");
+        auto res_b = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('tree_user_B', 'tree_user_B@test.com', 'hash_b', true) RETURNING id");
         user_b_id = res_b[0][0].as<int>();
         
 

@@ -34,7 +34,12 @@ crow::response ApiRouter::handle_register(const crow::request& req) {
             return crow::response(400, R"({"error":"JSON invalido"})");
         }
 
+        if (!body.has("username") || !body.has("email") || !body.has("password")) {
+            return crow::response(400, R"({"error":"Campos obrigatorios ausentes"})");
+        }
+
         std::string username = body["username"].s();
+        std::string email = body["email"].s();
         std::string password = body["password"].s();
 
         auto conn = pool_->acquire_connection();
@@ -52,8 +57,8 @@ crow::response ApiRouter::handle_register(const crow::request& req) {
         std::string hash = auth_->hash_password(password);
 
         auto result = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id",
-            pqxx::params{username, hash}
+            "INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
+            pqxx::params{username, email, hash}
         );
 
         txn.commit();

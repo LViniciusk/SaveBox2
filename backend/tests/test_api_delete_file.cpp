@@ -36,10 +36,10 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username IN ('delete_user_a', 'delete_user_b')");
         
-        auto res_a = txn.exec("INSERT INTO users (username, password_hash) VALUES ('delete_user_a', 'hash_a') RETURNING id");
+        auto res_a = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('delete_user_a', 'delete_user_a@test.com', 'hash_a', true) RETURNING id");
         user_a_id = res_a[0][0].as<int>();
 
-        auto res_b = txn.exec("INSERT INTO users (username, password_hash) VALUES ('delete_user_b', 'hash_b') RETURNING id");
+        auto res_b = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('delete_user_b', 'delete_user_b@test.com', 'hash_b', true) RETURNING id");
         user_b_id = res_b[0][0].as<int>();
 
         auto f1 = txn.exec("INSERT INTO folders (user_id, encrypted_name, name_hash) VALUES ($1, $2, $3) RETURNING id", pqxx::params{user_a_id, "folder_a", "fhash_a"});

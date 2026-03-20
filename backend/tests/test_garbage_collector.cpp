@@ -24,8 +24,9 @@ TEST_CASE("Garbage Collector - Regras de Negocio", "[gc][cleanup]") {
         pqxx::work W(*conn);
 
         W.exec("DELETE FROM users WHERE username LIKE 'gc_tester%';");
+        std::string gc_username = "gc_tester_" + std::to_string(rand());
         
-        auto res_u = W.exec("INSERT INTO users (username, password_hash) VALUES ('gc_tester_" + std::to_string(rand()) + "', 'hash') RETURNING id;");
+        auto res_u = W.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('" + gc_username + "', '" + gc_username + "@test.com', 'hash', true) RETURNING id;");
 
         user_id = res_u[0][0].as<uint64_t>();
 

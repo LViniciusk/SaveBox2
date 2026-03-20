@@ -28,10 +28,10 @@ TEST_CASE("API Update - Mover e Renomear Itens", "[api][update][files][folders]"
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username IN ('update_user_a', 'update_user_b')");
 
-        auto res_a = txn.exec("INSERT INTO users (username, password_hash) VALUES ('update_user_a', 'hash_a') RETURNING id");
+        auto res_a = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('update_user_a', 'update_user_a@test.com', 'hash_a', true) RETURNING id");
         user_a_id = res_a[0][0].as<int>();
 
-        auto res_b = txn.exec("INSERT INTO users (username, password_hash) VALUES ('update_user_b', 'hash_b') RETURNING id");
+        auto res_b = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('update_user_b', 'update_user_b@test.com', 'hash_b', true) RETURNING id");
         user_b_id = res_b[0][0].as<int>();
 
 

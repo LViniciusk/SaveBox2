@@ -23,7 +23,7 @@ TEST_CASE("Race Condition - Criação de Pastas Simultâneas", "[concurrency][fo
         
         W.exec("DELETE FROM users WHERE username = 'ninja_da_concorrencia';");
         
-        auto res = W.exec("INSERT INTO users (username, password_hash) VALUES ('ninja_da_concorrencia', 'hash_secreto') RETURNING id;");
+        auto res = W.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('ninja_da_concorrencia', 'ninja_da_concorrencia@test.com', 'hash_secreto', true) RETURNING id;");
         fake_user_id = res[0][0].as<uint64_t>();
         
         W.commit();

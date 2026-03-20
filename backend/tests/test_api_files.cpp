@@ -31,7 +31,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
         auto user_res = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('" + test_username + "', 'hash_fake') RETURNING id"
+            "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('" + test_username + "', '" + test_username + "@test.com', 'hash_fake', true) RETURNING id"
         );
         fake_user_id = user_res[0][0].as<int>();
 

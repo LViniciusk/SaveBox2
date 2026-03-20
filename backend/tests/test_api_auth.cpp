@@ -25,7 +25,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
 
     SECTION("Registro de Usuário - handle_register") {
         crow::request req;
-        req.body = R"({"username": "api_test_user", "password": "super_senha"})";
+        req.body = R"({"username": "api_test_user", "email": "api_test_user@test.com", "password": "super_senha"})";
 
         crow::response res = router.handle_register(req);
 
@@ -35,7 +35,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
 
     SECTION("Tratamento de Conflito - Usuário Duplicado") {
         crow::request req;
-        req.body = R"({"username": "api_test_user", "password": "super_senha"})";
+        req.body = R"({"username": "api_test_user", "email": "api_test_user@test.com", "password": "super_senha"})";
 
         router.handle_register(req);
 
@@ -46,7 +46,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
 
     SECTION("Login com Sucesso - handle_login") {
         crow::request req;
-        req.body = R"({"username": "api_test_user", "password": "super_senha"})";
+        req.body = R"({"username": "api_test_user", "email": "api_test_user@test.com", "password": "super_senha"})";
 
         router.handle_register(req);
 
@@ -59,7 +59,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
 
     SECTION("Login com Senha Errada") {
         crow::request req;
-        req.body = R"({"username": "api_test_user", "password": "super_senha"})";
+        req.body = R"({"username": "api_test_user", "email": "api_test_user@test.com", "password": "super_senha"})";
 
         router.handle_register(req);
 
