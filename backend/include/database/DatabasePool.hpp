@@ -3,6 +3,7 @@
 #include <pqxx/pqxx>
 #include <queue>
 #include <mutex>
+#include <atomic>
 #include <condition_variable>
 #include <memory>
 #include <string>
@@ -35,6 +36,7 @@ public:
 
     ConnectionWrapper acquire_connection();
     size_t get_available_count() const;
+    void close_all_connections();
 
 private:
     friend class ConnectionWrapper;
@@ -44,4 +46,5 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::queue<std::unique_ptr<pqxx::connection>> connections_;
+    std::atomic<bool> is_shutting_down_{false};
 };

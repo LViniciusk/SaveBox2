@@ -8,6 +8,7 @@
 #include "middlewares/RateLimitMiddleware.hpp"
 #include "storage/FileChunker.hpp"
 #include "utils.hpp"
+#include <csignal>
 #include <crow_all.h>
 #include <iostream>
 
@@ -32,6 +33,7 @@ int main() {
 
     // Garbage Collector 
     GarbageCollector gc(pool, &chunker);
+    gc.run_cleanup();
     std::atomic<bool> gc_running{true};
     std::mutex gc_mutex;
     std::condition_variable gc_cv;
@@ -72,7 +74,9 @@ int main() {
     app.port(8080).multithreaded().run();
 
     std::cout << "\n[SERVER] Desligamento iniciado. Parando o Garbage Collector...\n";
+    std::cout << "[SERVER] Fechando conexões com o banco de dados...\n";
 
+    pool.close_all_connections();
     gc_running = false; 
     gc_cv.notify_all(); 
     
@@ -81,6 +85,7 @@ int main() {
     }
     
     std::cout << "[SERVER] Garbage Collector parado com sucesso.\n";
+    std::cout << "[SERVER] Banco de dados desconectado.\n";
 
     return 0;
 }

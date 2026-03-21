@@ -13,13 +13,17 @@
 
 
 TEST_CASE("API de Download de Arquivos", "[api][download]") {
+    const std::string test_storage_dir = "./test_api_download_storage/";
+    std::filesystem::remove_all(test_storage_dir);
+    std::filesystem::create_directories(test_storage_dir);
+
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
     MockEmailService mock_email;
     AuthService auth("Mas_quando_a_saudade_apertar_lembrar", "que_a_gente_ja_foi_amor", &mock_email);
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
-    FileChunker file_chunker("./savebox_storage/");
+    FileChunker file_chunker(test_storage_dir);
 
     ApiRouter router(pool, auth, folder_mgr, &file_mgr, &file_chunker);
 
@@ -69,8 +73,7 @@ TEST_CASE("API de Download de Arquivos", "[api][download]") {
     }
 
 
-    std::string storage_path = "./savebox_storage/" + std::to_string(file_complete_id) + ".dat";
-    std::filesystem::create_directories("./savebox_storage/");
+    std::string storage_path = test_storage_dir + std::to_string(file_complete_id) + ".dat";
     {
         std::ofstream ofs(storage_path, std::ios::binary);
         ofs << "CONTEUDO_FAKE_BINARIO";
@@ -139,5 +142,5 @@ TEST_CASE("API de Download de Arquivos", "[api][download]") {
         txn.commit();
     }
 
-    std::filesystem::remove(storage_path);
+    std::filesystem::remove_all(test_storage_dir);
 }

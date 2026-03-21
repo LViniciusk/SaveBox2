@@ -1,4 +1,5 @@
 #include "database/DatabasePool.hpp"
+#include <stdexcept>
 
 
 
@@ -57,17 +58,22 @@ DatabasePool::DatabasePool(size_t pool_size, const std::string& conn_str) {
 }
 
 DatabasePool::~DatabasePool() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    while (!connections_.empty()) {
-        connections_.pop();
-    }
+    close_all_connections();
 }
 
 DatabasePool::ConnectionWrapper DatabasePool::acquire_connection() {
     std::unique_lock<std::mutex> lock(mutex_);
 
+    if (is_shutting_down_) {
+        throw std::runtime_error("SERVER_IS_SHUTTING_DOWN");
+    }
+
     // Bloqueia a thread atual caso não haja conexões disponíveis no pool
-    condition_.wait(lock, [this]() { return !connections_.empty(); });
+    condition_.wait(lock, [this]() { return !connections_.empty() || is_shutting_down_.load(); });
+
+    if (is_shutting_down_) {
+        throw std::runtime_error("SERVER_IS_SHUTTING_DOWN");
+    }
 
     auto conn = std::move(connections_.front());
     connections_.pop();
@@ -83,8 +89,32 @@ size_t DatabasePool::get_available_count() const {
 void DatabasePool::release_connection(std::unique_ptr<pqxx::connection> conn) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
+
+        if (is_shutting_down_) {
+            if (conn && conn->is_open()) {
+                conn->close();
+            }
+            return;
+        }
+
         connections_.push(std::move(conn));
     }
     // Notifica uma das threads que estava esperando por uma conexão
     condition_.notify_one();
+}
+
+void DatabasePool::close_all_connections() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    is_shutting_down_ = true;
+
+    while (!connections_.empty()) {
+        auto conn = std::move(connections_.front());
+        connections_.pop();
+
+        if (conn && conn->is_open()) {
+            conn->close();
+        }
+    }
+
+    condition_.notify_all();
 }

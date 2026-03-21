@@ -3,6 +3,7 @@
 #include "storage/FileChunker.hpp"
 #include <pqxx/pqxx>
 #include <iostream>
+#include <unordered_set>
 #include <vector>
 
 GarbageCollector::GarbageCollector(DatabasePool& pool, FileChunker* chunker)
@@ -16,6 +17,7 @@ struct FileToDelete {
 
 void GarbageCollector::run_cleanup() {
     std::vector<FileToDelete> files_to_delete;
+    std::unordered_set<uint64_t> valid_file_ids;
 
     try {
         auto conn = pool_.acquire_connection();
@@ -35,13 +37,15 @@ void GarbageCollector::run_cleanup() {
                 row[2].as<uint64_t>()
             });
         }
+
+        auto all_files = R.exec("SELECT id FROM files");
+        for (const auto& row : all_files) {
+            valid_file_ids.insert(row[0].as<uint64_t>());
+        }
+
         R.commit();
     } catch (const std::exception& e) {
         std::cerr << "GC: Erro critico na Fase 1 (Leitura): " << e.what() << "\n";
-        return;
-    }
-
-    if (files_to_delete.empty()) {
         return;
     }
 
@@ -82,5 +86,13 @@ void GarbageCollector::run_cleanup() {
 
     } catch (const std::exception& e) {
         std::cerr << "GC: Erro critico na Fase 3 (Exclusao do DB): " << e.what() << "\n";
+    }
+
+    if (chunker_) {
+        try {
+            chunker_->delete_orphaned_files(valid_file_ids);
+        } catch (const std::exception& e) {
+            std::cerr << "GC: Falha ao limpar arquivos orfaos: " << e.what() << "\n";
+        }
     }
 }
