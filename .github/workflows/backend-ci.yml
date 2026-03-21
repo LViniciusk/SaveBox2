@@ -1,0 +1,103 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [ main, master, backend ]
+  pull_request:
+    branches: [ main, master, backend ]
+
+jobs:
+  build-and-test-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 (UCRT64 + toolchain)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-libpqxx
+            mingw-w64-ucrt-x86_64-libsodium
+            mingw-w64-ucrt-x86_64-libzip
+            mingw-w64-ucrt-x86_64-cpr
+
+      - name: Install PostgreSQL
+        shell: pwsh
+        run: |
+          choco install postgresql15 --params '"/Password:postgres"' -y --no-progress
+
+      - name: Start and bootstrap PostgreSQL
+        shell: pwsh
+        env:
+          PGPASSWORD: postgres
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pgBin = "C:\Program Files\PostgreSQL\15\bin"
+          $psql = Join-Path $pgBin "psql.exe"
+          $createdb = Join-Path $pgBin "createdb.exe"
+
+          Start-Service postgresql-x64-15
+
+          & $psql -U postgres -h localhost -p 5432 -d postgres -c "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'savebox_admin') THEN CREATE ROLE savebox_admin LOGIN PASSWORD 'talvezeulembre'; ELSE ALTER ROLE savebox_admin WITH LOGIN PASSWORD 'talvezeulembre'; END IF; END $$;"
+
+          $dbExists = (& $psql -U postgres -h localhost -p 5432 -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='savebox_db';").Trim()
+          if ($dbExists -ne '1') {
+            & $createdb -U postgres -h localhost -p 5432 -O savebox_admin savebox_db
+          }
+
+
+      - name: Create .env for tests
+        shell: pwsh
+        run: |
+          @"
+          DB_USER=savebox_admin
+          DB_PASSWORD=talvezeulembre
+          DB_NAME=savebox_db
+          DB_HOST=localhost
+          DB_PORT=5432
+
+          PASS_PEPPER=ci_pepper
+          SAVEBOX_JWT_SECRET=ci_jwt_secret
+          RESEND_API_KEY=ci_resend_key
+          EMAIL_VALIDATION_API_KEY=ci_email_validation_key
+
+          SAVEBOX_STORAGE_PATH=./savebox_storage/
+          "@ | Set-Content -Path .env -Encoding UTF8
+
+      - name: Configure CMake (MinGW Makefiles)
+        shell: msys2 {0}
+        run: |
+          cd backend
+          cmake -B build -G "MinGW Makefiles" .
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          cd backend/build
+          cmake --build . --config Release
+
+      - name: Verify test discovery
+        shell: msys2 {0}
+        run: |
+          cd backend/build
+          total_tests=$(./savebox_tests.exe --list-test-names-only | sed '/^$/d' | wc -l)
+          echo "Total de testes encontrados: ${total_tests}"
+          if [ "${total_tests}" -eq 0 ]; then
+            echo "Nenhum teste foi descoberto pelo Catch2."
+            exit 1
+          fi
+
+      - name: Run all tests
+        shell: msys2 {0}
+        run: |
+          cd backend/build
+          ./savebox_tests.exe --order rand --rng-seed time
