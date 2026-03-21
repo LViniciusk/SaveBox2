@@ -649,6 +649,55 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
         .methods("POST"_method, "GET"_method, "PUT"_method, "DELETE"_method, "OPTIONS"_method)
         .origin("*");
 
+    CROW_ROUTE(app, "/api/docs")
+    ([]() {
+        std::string html = R"(
+        <!DOCTYPE html>
+        <html lang="pt-br">
+        <head>
+            <meta charset="UTF-8">
+            <title>SaveBox API Docs</title>
+            <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.css" >
+        </head>
+        <body>
+            <div id="swagger-ui"></div>
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.js"></script>
+            <script>
+            window.onload = function() {
+                window.ui = SwaggerUIBundle({
+                    url: "/api/docs/swagger.yaml",
+                    dom_id: '#swagger-ui',
+                    deepLinking: true,
+                    presets: [ SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset ],
+                    layout: "BaseLayout"
+                });
+            }
+            </script>
+        </body>
+        </html>
+        )";
+        
+        auto res = crow::response(html);
+        res.set_header("Content-Type", "text/html");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/docs/swagger.yaml")
+    ([]() {
+        std::ifstream ifs("../../docs/swagger.yaml"); 
+        
+        if (!ifs.is_open()) {
+            return crow::response(404, "Arquivo swagger.yaml nao encontrado no servidor.");
+        }
+        
+        std::stringstream buffer;
+        buffer << ifs.rdbuf();
+        
+        auto res = crow::response(buffer.str());
+        res.set_header("Content-Type", "text/yaml");
+        return res;
+    });
+
     CROW_ROUTE(app, "/health").methods(crow::HTTPMethod::Get)
     ([this]() {
         auto res = crow::response(handle_healthcheck());
