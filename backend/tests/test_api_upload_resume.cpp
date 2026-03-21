@@ -119,7 +119,8 @@ TEST_CASE("API Upload Resume - Listagem de Chunks Enviados", "[api][upload][resu
         REQUIRE(res.code == 200);
         auto body = crow::json::load(res.body);
         REQUIRE(body.has("uploaded_chunks"));
-        auto chunks_list = body["uploaded_chunks"].lo();
+        auto uploaded_chunks = body["uploaded_chunks"];
+        auto chunks_list = uploaded_chunks.lo();
         REQUIRE(chunks_list.size() == 0); 
     }
 
@@ -133,7 +134,8 @@ TEST_CASE("API Upload Resume - Listagem de Chunks Enviados", "[api][upload][resu
         REQUIRE(res.code == 200);
         auto body = crow::json::load(res.body);
         REQUIRE(body.has("uploaded_chunks"));
-        auto chunks_list = body["uploaded_chunks"].lo();
+        auto uploaded_chunks = body["uploaded_chunks"];
+        auto chunks_list = uploaded_chunks.lo();
         
         REQUIRE(chunks_list.size() == 3);
 
