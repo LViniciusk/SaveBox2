@@ -4,6 +4,7 @@
 #include "services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
+#include "storage/GarbageCollector.hpp"
 #include "middlewares/RateLimitMiddleware.hpp"
 #include "storage/FileChunker.hpp"
 #include "utils.hpp"
@@ -29,6 +30,29 @@ int main() {
     FileManager file_mgr(pool);
     FileChunker chunker(storage_path);
 
+    // Garbage Collector 
+    GarbageCollector gc(pool, &chunker);
+    std::atomic<bool> gc_running{true};
+    std::mutex gc_mutex;
+    std::condition_variable gc_cv;
+
+    std::thread gc_thread([&]() {
+        while (gc_running) {
+            std::unique_lock<std::mutex> lock(gc_mutex);
+            
+            
+            if (gc_cv.wait_for(lock, std::chrono::hours(24), [&]{ return !gc_running; })) {
+                break;
+            }
+            
+            try {
+                gc.run_cleanup();
+            } catch (const std::exception& e) {
+                std::cerr << "[GC ERROR] Falha no ciclo de limpeza: " << e.what() << "\n";
+            }
+        }
+    });
+
     // Configurando Instância do Crow WebServer
     crow::App<crow::CORSHandler, RateLimitMiddleware> app;
     app.get_middleware<RateLimitMiddleware>().init(pool);
@@ -46,6 +70,17 @@ int main() {
 
     // Roda o servidor na porta 8080 usando múltiplas threads
     app.port(8080).multithreaded().run();
+
+    std::cout << "\n[SERVER] Desligamento iniciado. Parando o Garbage Collector...\n";
+
+    gc_running = false; 
+    gc_cv.notify_all(); 
+    
+    if (gc_thread.joinable()) {
+        gc_thread.join();
+    }
+    
+    std::cout << "[SERVER] Garbage Collector parado com sucesso.\n";
 
     return 0;
 }

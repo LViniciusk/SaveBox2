@@ -3,39 +3,65 @@
 #include "storage/FileChunker.hpp"
 #include <pqxx/pqxx>
 #include <iostream>
+#include <vector>
 
 GarbageCollector::GarbageCollector(DatabasePool& pool, FileChunker* chunker)
     : pool_(pool), chunker_(chunker) {}
 
+struct FileToDelete {
+    uint64_t file_id;
+    uint64_t user_id;
+    uint64_t size_bytes;
+};
+
 void GarbageCollector::run_cleanup() {
-    auto conn = pool_.acquire_connection();
-    pqxx::work W(*conn);
+    std::vector<FileToDelete> files_to_delete;
 
     try {
+        auto conn = pool_.acquire_connection();
+        pqxx::read_transaction R(*conn);
+
         std::string query_select = R"(
             SELECT id, user_id, size_bytes FROM files
             WHERE (is_upload_complete = FALSE AND created_at < NOW() - INTERVAL '4 hours')
                OR (deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days')
         )";
 
-        auto result = W.exec(query_select);
-
+        auto result = R.exec(query_select);
         for (const auto& row : result) {
-            uint64_t file_id = row[0].as<uint64_t>();
-            uint64_t user_id = row[1].as<uint64_t>();
-            uint64_t size_bytes = row[2].as<uint64_t>();
-            
-            try {
-                if (chunker_) {
-                    chunker_->delete_file(file_id);
-                }
-            } catch (const std::exception& e) {
-                std::cerr << "GC: Falha ao deletar arquivo fisico " << file_id << ": " << e.what() << "\n";
+            files_to_delete.push_back({
+                row[0].as<uint64_t>(),
+                row[1].as<uint64_t>(),
+                row[2].as<uint64_t>()
+            });
+        }
+        R.commit();
+    } catch (const std::exception& e) {
+        std::cerr << "GC: Erro critico na Fase 1 (Leitura): " << e.what() << "\n";
+        return;
+    }
+
+    if (files_to_delete.empty()) {
+        return;
+    }
+
+    for (const auto& file : files_to_delete) {
+        try {
+            if (chunker_) {
+                chunker_->delete_file(file.file_id);
             }
-            
-            if (size_bytes > 0) {
+        } catch (const std::exception& e) {
+            std::cerr << "GC: Falha ao deletar arquivo fisico " << file.file_id << ": " << e.what() << "\n";
+        }
+    }
+    try {
+        auto conn = pool_.acquire_connection();
+        pqxx::work W(*conn);
+
+        for (const auto& file : files_to_delete) {
+            if (file.size_bytes > 0) {
                 W.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
-                       pqxx::params{size_bytes, user_id});
+                       pqxx::params{file.size_bytes, file.user_id});
             }
         }
 
@@ -53,8 +79,10 @@ void GarbageCollector::run_cleanup() {
         W.exec(query_delete_folders);
 
         W.commit();
+        
+        std::cout << "[GC] Ciclo de limpeza concluido. Arquivos removidos: " << files_to_delete.size() << "\n";
 
     } catch (const std::exception& e) {
-        std::cerr << "GC: Erro critico durante limpeza: " << e.what() << "\n";
+        std::cerr << "GC: Erro critico na Fase 3 (Exclusao do DB): " << e.what() << "\n";
     }
 }
