@@ -638,7 +638,7 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
 
 
 
-void ApiRouter::setup_routes(crow::App<crow::CORSHandler>& app) {
+void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app) {
     auto& cors = app.get_middleware<crow::CORSHandler>();
     cors.global()
         .headers("Origin", "Content-Type", "Accept", "Authorization", "X-Encrypted-Name")

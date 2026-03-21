@@ -64,6 +64,15 @@ bool DatabaseMigration::run(DatabasePool& pool) {
             );
         )");
 
+        // IPS BANIDOS
+        w.exec(R"(
+            CREATE TABLE IF NOT EXISTS banned_ips (
+                ip VARCHAR(45) PRIMARY KEY,
+                banned_until TIMESTAMP NOT NULL,
+                reason VARCHAR(255)
+            );
+        )");
+
         // PASTAS
         w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_folder_root_active ON folders (user_id, name_hash) WHERE parent_id IS NULL AND deleted_at IS NULL;");
         w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_folder_sub_active ON folders (user_id, parent_id, name_hash) WHERE parent_id IS NOT NULL AND deleted_at IS NULL;");
