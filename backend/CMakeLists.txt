@@ -19,6 +19,7 @@ pkg_check_modules(ZIP REQUIRED libzip)
 # O nosso framework de testes (Catch2) e o nosso cliente HTTP (CPR)
 find_package(Catch2 3 CONFIG REQUIRED)
 find_package(cpr REQUIRED)
+include(FetchContent)
 
 
 # ----------------------------------------------------------------------
@@ -32,9 +33,37 @@ file(GLOB_RECURSE TEST_FILES "tests/*.cpp")
 
 
 # ----------------------------------------------------------------------
+# FASE 2.1: BOOTSTRAP DE HEADERS PARA AMBIENTES LIMPOS (CI)
+# ----------------------------------------------------------------------
+set(CROW_HEADER_PATH "${CMAKE_CURRENT_SOURCE_DIR}/include/crow_all.h")
+if(NOT EXISTS "${CROW_HEADER_PATH}")
+    message(STATUS "Baixando crow_all.h...")
+    file(DOWNLOAD "https://github.com/CrowCpp/Crow/releases/download/v1.2.0/crow_all.h"
+                  "${CROW_HEADER_PATH}")
+endif()
+
+# Compatibilidade com ASIO recente do MSYS2/UCRT (io_service foi substituido por io_context)
+file(READ "${CROW_HEADER_PATH}" CROW_HEADER_CONTENT)
+string(REPLACE "asio::io_service" "asio::io_context" CROW_HEADER_CONTENT "${CROW_HEADER_CONTENT}")
+string(REPLACE "asio::ip::address::from_string" "asio::ip::make_address" CROW_HEADER_CONTENT "${CROW_HEADER_CONTENT}")
+string(REPLACE "io_service->post(handler);" "asio::post(*io_service, handler);" CROW_HEADER_CONTENT "${CROW_HEADER_CONTENT}")
+string(REPLACE "io_service->dispatch(handler);" "asio::dispatch(*io_service, handler);" CROW_HEADER_CONTENT "${CROW_HEADER_CONTENT}")
+string(REPLACE "is.post(" "asio::post(is," CROW_HEADER_CONTENT "${CROW_HEADER_CONTENT}")
+file(WRITE "${CROW_HEADER_PATH}" "${CROW_HEADER_CONTENT}")
+
+FetchContent_Declare(jwt_cpp
+    GIT_REPOSITORY https://github.com/Thalhammer/jwt-cpp.git
+    GIT_TAG v0.7.0
+)
+FetchContent_MakeAvailable(jwt_cpp)
+
+
+# ----------------------------------------------------------------------
 # FASE 3: CONSTRUINDO O SERVIDOR (Produção)
 # ----------------------------------------------------------------------
 add_executable(savebox_server src/main.cpp ${CORE_SOURCES})
+
+target_compile_options(savebox_server PRIVATE -UASIO_NO_DEPRECATED -UBOOST_ASIO_NO_DEPRECATED)
 
 target_include_directories(savebox_server PRIVATE include ${PQXX_INCLUDE_DIRS} ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
 target_link_directories(savebox_server PRIVATE ${PQXX_LIBRARY_DIRS} ${SODIUM_LIBRARY_DIRS} ${ZIP_LIBRARY_DIRS})
@@ -44,6 +73,7 @@ target_link_libraries(savebox_server PRIVATE
     ${PQXX_LIBRARIES}
     ${SODIUM_LIBRARIES}
     ${ZIP_LIBRARIES}
+    jwt-cpp::jwt-cpp
     OpenSSL::SSL
     OpenSSL::Crypto
     ws2_32
@@ -58,6 +88,8 @@ target_link_libraries(savebox_server PRIVATE
 # ----------------------------------------------------------------------
 add_executable(savebox_tests ${TEST_FILES} ${CORE_SOURCES})
 
+target_compile_options(savebox_tests PRIVATE -UASIO_NO_DEPRECATED -UBOOST_ASIO_NO_DEPRECATED)
+
 target_include_directories(savebox_tests PRIVATE include tests ${PQXX_INCLUDE_DIRS} ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
 target_link_directories(savebox_tests PRIVATE ${PQXX_LIBRARY_DIRS} ${SODIUM_LIBRARY_DIRS} ${ZIP_LIBRARY_DIRS})
 
@@ -67,6 +99,7 @@ target_link_libraries(savebox_tests PRIVATE
     ${PQXX_LIBRARIES}
     ${SODIUM_LIBRARIES}
     ${ZIP_LIBRARIES}
+    jwt-cpp::jwt-cpp
     OpenSSL::SSL
     OpenSSL::Crypto
     ws2_32
