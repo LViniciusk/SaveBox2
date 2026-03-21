@@ -86,3 +86,30 @@ void FileChunker::delete_file(uint64_t file_id) const {
         std::filesystem::remove(file_path, ec);
     }
 }
+
+void FileChunker::delete_orphaned_files(const std::unordered_set<uint64_t>& valid_file_ids) const {
+    std::error_code ec;
+    if (!std::filesystem::exists(temp_file_path_, ec)) {
+        return;
+    }
+
+    for (const auto& entry : std::filesystem::directory_iterator(temp_file_path_, ec)) {
+        if (ec || !entry.is_regular_file()) {
+            continue;
+        }
+
+        const auto path = entry.path();
+        if (path.extension() != ".dat") {
+            continue;
+        }
+
+        try {
+            const auto stem = path.stem().string();
+            const uint64_t file_id = std::stoull(stem);
+            if (valid_file_ids.find(file_id) == valid_file_ids.end()) {
+                std::filesystem::remove(path, ec);
+            }
+        } catch (...) {
+        }
+    }
+}

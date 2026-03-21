@@ -14,7 +14,8 @@
 TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("Em_cada_esquina_que_passei_te", "deixei_rimas_que_nunca_cantei_pra_ti");
+    MockEmailService mock_email;
+    AuthService auth("Em_cada_esquina_que_passei_te", "deixei_rimas_que_nunca_cantei_pra_ti", &mock_email);
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
     
@@ -34,7 +35,7 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username = 'quota_user'");
         
-        auto res_u = txn.exec("INSERT INTO users (username, password_hash) VALUES ('quota_user', 'hash') RETURNING id");
+        auto res_u = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('quota_user', 'quota_user@test.com', 'hash', true) RETURNING id");
         user_id = res_u[0][0].as<int>();
 
         auto res_f = txn.exec("INSERT INTO folders (user_id, encrypted_name, name_hash) VALUES (" + std::to_string(user_id) + ", 'root_enc', 'rhash') RETURNING id");

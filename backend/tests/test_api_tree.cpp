@@ -10,7 +10,8 @@
 TEST_CASE("API Tree - Sincronização do Cofre", "[api][tree]") {
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("Confeso_que_hoje_eu_te_amo_muito_mais_que_ontem", "carai_a_dois_meses_atras_eu_nem_usava_emoji");
+    MockEmailService mock_email;
+    AuthService auth("Confeso_que_hoje_eu_te_amo_muito_mais_que_ontem", "carai_a_dois_meses_atras_eu_nem_usava_emoji", &mock_email);
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
     
@@ -24,10 +25,10 @@ TEST_CASE("API Tree - Sincronização do Cofre", "[api][tree]") {
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username IN ('tree_user_A', 'tree_user_B')");
         
-        auto res_a = txn.exec("INSERT INTO users (username, password_hash) VALUES ('tree_user_A', 'hash_a') RETURNING id");
+        auto res_a = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('tree_user_A', 'tree_user_A@test.com', 'hash_a', true) RETURNING id");
         user_a_id = res_a[0][0].as<int>();
 
-        auto res_b = txn.exec("INSERT INTO users (username, password_hash) VALUES ('tree_user_B', 'hash_b') RETURNING id");
+        auto res_b = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('tree_user_B', 'tree_user_B@test.com', 'hash_b', true) RETURNING id");
         user_b_id = res_b[0][0].as<int>();
         
 

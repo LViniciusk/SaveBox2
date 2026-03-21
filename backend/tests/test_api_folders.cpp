@@ -10,7 +10,8 @@
 TEST_CASE("API de Pastas - Criação", "[api][folders]") {
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("I_dont_here_to_talk", "Tive_receio_de_ser_eu");
+    MockEmailService mock_email;
+    AuthService auth("I_dont_here_to_talk", "Tive_receio_de_ser_eu", &mock_email);
     FolderManager folder_mgr(pool);
 
     ApiRouter router(pool, auth, folder_mgr);
@@ -21,7 +22,7 @@ TEST_CASE("API de Pastas - Criação", "[api][folders]") {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
         auto result = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('" + test_username + "', 'hash_fake') RETURNING id"
+            "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('" + test_username + "', '" + test_username + "@test.com', 'hash_fake', true) RETURNING id"
         );
         fake_user_id = result[0][0].as<int>();
         txn.commit();

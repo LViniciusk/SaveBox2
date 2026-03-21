@@ -17,7 +17,8 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
 
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("O_tiro_te_acertou_e_você_nem_deu_conta", "A_espada_atravessou_e_você_sentiu_nada");
+    MockEmailService mock_email;
+    AuthService auth("O_tiro_te_acertou_e_você_nem_deu_conta", "A_espada_atravessou_e_você_sentiu_nada", &mock_email);
     FileManager file_mgr(pool);
     FolderManager folder_mgr(pool);
     FileChunker chunker(test_dir);
@@ -34,10 +35,10 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
 
         txn.exec("DELETE FROM users WHERE username IN ('share_user_a', 'share_user_b')");
 
-        auto res_a = txn.exec("INSERT INTO users (username, password_hash) VALUES ('share_user_a', 'hash_a') RETURNING id");
+        auto res_a = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('share_user_a', 'share_user_a@test.com', 'hash_a', true) RETURNING id");
         user_a_id = res_a[0][0].as<int>();
 
-        auto res_b = txn.exec("INSERT INTO users (username, password_hash) VALUES ('share_user_b', 'hash_b') RETURNING id");
+        auto res_b = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('share_user_b', 'share_user_b@test.com', 'hash_b', true) RETURNING id");
         user_b_id = res_b[0][0].as<int>();
 
         auto res_file = txn.exec(

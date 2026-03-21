@@ -11,7 +11,8 @@
 TEST_CASE("API Upload Resume - Listagem de Chunks Enviados", "[api][upload][resume]") {
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("Eu_sou_eterno_aceita", "a_jovem_promessa");
+    MockEmailService mock_email;
+    AuthService auth("Eu_sou_eterno_aceita", "a_jovem_promessa", &mock_email);
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
     FileChunker chunker("test_chunks_dir");
@@ -33,10 +34,10 @@ TEST_CASE("API Upload Resume - Listagem de Chunks Enviados", "[api][upload][resu
 
         txn.exec("DELETE FROM users WHERE username IN ('resume_user_A', 'resume_user_B')");
         
-        auto res_a = txn.exec("INSERT INTO users (username, password_hash) VALUES ('resume_user_A', 'hash_a') RETURNING id");
+        auto res_a = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('resume_user_A', 'resume_user_A@test.com', 'hash_a', true) RETURNING id");
         user_a_id = res_a[0][0].as<int>();
 
-        auto res_b = txn.exec("INSERT INTO users (username, password_hash) VALUES ('resume_user_B', 'hash_b') RETURNING id");
+        auto res_b = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('resume_user_B', 'resume_user_B@test.com', 'hash_b', true) RETURNING id");
         user_b_id = res_b[0][0].as<int>();
         
 
@@ -118,7 +119,8 @@ TEST_CASE("API Upload Resume - Listagem de Chunks Enviados", "[api][upload][resu
         REQUIRE(res.code == 200);
         auto body = crow::json::load(res.body);
         REQUIRE(body.has("uploaded_chunks"));
-        auto chunks_list = body["uploaded_chunks"].lo();
+        auto uploaded_chunks = body["uploaded_chunks"];
+        auto chunks_list = uploaded_chunks.lo();
         REQUIRE(chunks_list.size() == 0); 
     }
 
@@ -132,7 +134,8 @@ TEST_CASE("API Upload Resume - Listagem de Chunks Enviados", "[api][upload][resu
         REQUIRE(res.code == 200);
         auto body = crow::json::load(res.body);
         REQUIRE(body.has("uploaded_chunks"));
-        auto chunks_list = body["uploaded_chunks"].lo();
+        auto uploaded_chunks = body["uploaded_chunks"];
+        auto chunks_list = uploaded_chunks.lo();
         
         REQUIRE(chunks_list.size() == 3);
 

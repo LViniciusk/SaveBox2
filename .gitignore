@@ -1,5 +1,6 @@
 # === Compilação e Build ===
 # Ignora a pasta build inteira (onde ficam os .obj, .exe e arquivos do CMake)
+backend/include/crow_all.h
 build/
 bin/
 obj/

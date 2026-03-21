@@ -24,7 +24,7 @@ O SaveBox 2.0 foi construído com a filosofia de Zero-Knowledge, atuando como um
 
 ## Documentação da API (Endpoints)
 
-Todas as requisições (exceto `/health`, `/register`, `/login` e `/share`) exigem o Header HTTP:
+Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/share`) exigem o Header HTTP:
 `Authorization: Bearer <seu_token_jwt>`
 
 ### Autenticação e Usuário
@@ -32,6 +32,7 @@ Todas as requisições (exceto `/health`, `/register`, `/login` e `/share`) exig
 | :--- | :--- | :--- |
 | `GET` | `/health` | Healthcheck do servidor. |
 | `POST` | `/register` | Registra um novo usuário (JSON: `username`, `password`). |
+| `GET` | `/verify?token=<uuid>` | Valida o token recebido por e-mail e ativa a conta. |
 | `POST` | `/login` | Autentica e retorna o JWT Bearer Token. |
 | `GET` | `/users/me/quota` | Consulta limite e uso de armazenamento. |
 

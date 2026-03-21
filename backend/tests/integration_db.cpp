@@ -15,11 +15,11 @@ TEST_CASE("Integração Bruta - Regras de Negócio do PostgreSQL", "[db][integra
 
         W.exec("DELETE FROM users WHERE username = 'clone_user';");
 
-        W.exec("INSERT INTO users (username, password_hash) VALUES ('clone_user', 'hash123');");
+        W.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('clone_user', 'clone_user@test.com', 'hash123', true);");
 
 
         REQUIRE_THROWS_AS(
-            W.exec("INSERT INTO users (username, password_hash) VALUES ('clone_user', 'hash_diferente');"),
+            W.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('clone_user', 'clone_user@test.com', 'hash_diferente', true);"),
             pqxx::integrity_constraint_violation
         );
 

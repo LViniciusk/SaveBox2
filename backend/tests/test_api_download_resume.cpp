@@ -17,7 +17,8 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
 
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("Minha_flor_serviu_pra_que_você_achasse_alguem", "um_outro_alguem_que_me_tomou_o_seu_amor");
+    MockEmailService mock_email;
+    AuthService auth("Minha_flor_serviu_pra_que_você_achasse_alguem", "um_outro_alguem_que_me_tomou_o_seu_amor", &mock_email);
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
     FileChunker chunker(test_dir);
@@ -32,7 +33,7 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username = 'download_resume_user'");
         
-        auto res_u = txn.exec("INSERT INTO users (username, password_hash) VALUES ('download_resume_user', 'hash_resume') RETURNING id");
+        auto res_u = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('download_resume_user', 'download_resume_user@test.com', 'hash_resume', true) RETURNING id");
 
         user_id = res_u[0][0].as<int>();
 

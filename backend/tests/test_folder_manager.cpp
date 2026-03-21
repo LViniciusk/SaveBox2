@@ -21,7 +21,7 @@ TEST_CASE("Gestão de Pastas - Hierarquia e Cascata", "[folders][hierarchy][casc
         pqxx::work W(*conn);
         W.exec("DELETE FROM users WHERE username = 'fantasma_das_pastas';");
         
-        auto res = W.exec("INSERT INTO users (username, password_hash) VALUES ('fantasma_das_pastas', 'hash_secreto') RETURNING id;");
+        auto res = W.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('fantasma_das_pastas', 'fantasma_das_pastas@test.com', 'hash_secreto', true) RETURNING id;");
         fake_user_id = res[0][0].as<uint64_t>();
         W.commit();
     }

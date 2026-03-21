@@ -7,18 +7,24 @@
 #include "storage/FileChunker.hpp"
 #include "test_helpers.hpp"
 #include <crow_all.h>
+#include <filesystem>
 #include <string>
 
 
 
 
 TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
+    const std::string test_storage_dir = "./test_api_files_storage/";
+    std::filesystem::remove_all(test_storage_dir);
+    std::filesystem::create_directories(test_storage_dir);
+
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("A_noite_é_mais_escura_perto_do_amanhecer", "eu_trouxe_uma_primavera_pra_você");
+    MockEmailService mock_email;
+    AuthService auth("A_noite_é_mais_escura_perto_do_amanhecer", "eu_trouxe_uma_primavera_pra_você", &mock_email);
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
-    FileChunker file_chunker("./savebox_storage/");
+    FileChunker file_chunker(test_storage_dir);
 
     ApiRouter router(pool, auth, folder_mgr, &file_mgr, &file_chunker);
 
@@ -31,7 +37,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
         auto user_res = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('" + test_username + "', 'hash_fake') RETURNING id"
+            "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('" + test_username + "', '" + test_username + "@test.com', 'hash_fake', true) RETURNING id"
         );
         fake_user_id = user_res[0][0].as<int>();
 
@@ -139,4 +145,6 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         txn.exec("DELETE FROM users WHERE username = '" + test_username + "'");
         txn.commit();
     }
+
+    std::filesystem::remove_all(test_storage_dir);
 }

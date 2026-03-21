@@ -5,6 +5,8 @@
 #include <map>
 #include <cstdlib>
 
+#include "services/EmailService.hpp"
+
 inline std::string get_secure_conn_string() {
     std::map<std::string, std::string> env_vars;
 
@@ -39,3 +41,29 @@ inline std::string get_secure_conn_string() {
 
     return "postgresql://" + user + ":" + pass + "@" + host + ":" + port + "/" + db;
 }
+
+class MockEmailService : public EmailService {
+public:
+    MockEmailService() : EmailService("A_depressão_me_fez_ver", "todas_as_faces_de_helen") {}
+
+    bool allow_domain = true;
+    bool send_ok = true;
+
+protected:
+    cpr::Response make_post_request(const std::string&, const cpr::Header&, const cpr::Body&) const override {
+        cpr::Response res;
+        res.error = cpr::Error{};
+        res.error.code = cpr::ErrorCode::OK;
+        res.status_code = send_ok ? 200 : 500;
+        return res;
+    }
+
+    cpr::Response make_get_request(const std::string&) const override {
+        cpr::Response res;
+        res.error = cpr::Error{};
+        res.error.code = cpr::ErrorCode::OK;
+        res.status_code = 200;
+        res.text = allow_domain ? R"({"is_disposable_email": false})" : R"({"is_disposable_email": true})";
+        return res;
+    }
+};

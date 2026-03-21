@@ -8,7 +8,9 @@
 ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr,
                      FileManager* file_mgr, FileChunker* chunker)
     : pool_(&pool), auth_(&auth), folder_mgr_(&folder_mgr),
-      file_mgr_(file_mgr), chunker_(chunker) {}
+            file_mgr_(file_mgr), chunker_(chunker) {
+        auth_->set_database_pool(pool);
+}
 
 std::string ApiRouter::handle_healthcheck() const {
     return R"({"status":"online"})";
@@ -34,33 +36,35 @@ crow::response ApiRouter::handle_register(const crow::request& req) {
             return crow::response(400, R"({"error":"JSON invalido"})");
         }
 
-        std::string username = body["username"].s();
-        std::string password = body["password"].s();
-
-        auto conn = pool_->acquire_connection();
-        pqxx::work txn(*conn);
-
-        auto check = txn.exec(
-            "SELECT count(*) FROM users WHERE username = $1",
-            pqxx::params{username}
-        );
-
-        if (check[0][0].as<int>() > 0) {
-            return crow::response(409, R"({"error":"Usuario ja existe"})");
+        if (!body.has("username") || !body.has("email") || !body.has("password")) {
+            return crow::response(400, R"({"error":"Campos obrigatorios ausentes"})");
         }
 
-        std::string hash = auth_->hash_password(password);
+        std::string client_ip = req.remote_ip_address;
+        std::string username = body["username"].s();
+        std::string email = body["email"].s();
+        std::string password = body["password"].s();
 
-        auto result = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id",
-            pqxx::params{username, hash}
-        );
+        auth_->register_user(username, email, password, client_ip);
+        return crow::response(201, R"({"message":"Usuario criado. Verifique seu e-mail"})");
 
-        txn.commit();
-
-        int user_id = result[0][0].as<int>();
-        return crow::response(201,
-            R"({"message":"Usuario criado", "token":")" + auth_->generate_token(user_id) + R"("})");
+    } catch (const pqxx::unique_violation&) {
+        return crow::response(409, R"({"error":"Usuario ja existe"})");
+    } catch (const std::runtime_error& e) {
+        std::string msg = e.what();
+        if (msg == "USER_ALREADY_EXISTS") {
+            return crow::response(409, R"({"error":"Usuario ja existe"})");
+        }
+        if (msg == "INVALID_EMAIL_FORMAT") {
+            return crow::response(400, R"({"error":"Formato de e-mail invalido"})");
+        }
+        if (msg == "DISPOSABLE_EMAIL_LOCAL" || msg == "DISPOSABLE_EMAIL_API") {
+            return crow::response(400, R"({"error":"E-mail descartavel nao permitido"})");
+        }
+        if (msg == "TOO_MANY_ACCOUNTS_FROM_IP") {
+            return crow::response(429, R"({"error":"Muitas contas criadas por esta rede recentemente. Tente novamente amanha."})");
+        }
+        return crow::response(500, R"({"error":"Erro interno"})");
 
     } catch (const std::exception& e) {
         return crow::response(500, R"({"error":"Erro interno"})");
@@ -76,32 +80,42 @@ crow::response ApiRouter::handle_login(const crow::request& req) {
 
         std::string username = body["username"].s();
         std::string password = body["password"].s();
-
-        auto conn = pool_->acquire_connection();
-        pqxx::work txn(*conn);
-
-        auto result = txn.exec(
-            "SELECT id, password_hash FROM users WHERE username = $1",
-            pqxx::params{username}
-        );
-
-        txn.commit();
-
-        if (result.empty()) {
-            return crow::response(401, R"({"error":"Credenciais invalidas"})");
-        }
-
-        int user_id = result[0][0].as<int>();
-        std::string hash_do_banco = result[0][1].as<std::string>();
-
-        if (!auth_->verify_password(password, hash_do_banco)) {
-            return crow::response(401, R"({"error":"Credenciais invalidas"})");
-        }
+        int user_id = auth_->authenticate_user(username, password);
 
         return crow::response(200,
             R"({"message":"Login efetuado", "token":")" + auth_->generate_token(user_id) + R"("})");
 
+    } catch (const std::runtime_error& e) {
+        std::string msg = e.what();
+        if (msg == "INVALID_CREDENTIALS") {
+            return crow::response(401, R"({"error":"Credenciais invalidas"})");
+        }
+        if (msg == "EMAIL_NOT_VERIFIED") {
+            return crow::response(403, R"({"error":"Conta nao verificada. Verifique seu e-mail"})");
+        }
+        return crow::response(500, R"({"error":"Erro interno"})");
+
     } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_verify_email(const crow::request& req) {
+    try {
+        char* token_raw = req.url_params.get("token");
+        if (token_raw == nullptr || std::string(token_raw).empty()) {
+            return crow::response(400, R"({"error":"Token ausente"})");
+        }
+
+        auth_->verify_email(token_raw);
+        return crow::response(200, R"({"message":"Conta ativada"})");
+    } catch (const std::runtime_error& e) {
+        std::string msg = e.what();
+        if (msg == "INVALID_OR_EXPIRED_TOKEN") {
+            return crow::response(400, R"({"error":"Token invalido ou expirado"})");
+        }
+        return crow::response(500, R"({"error":"Erro interno"})");
+    } catch (const std::exception&) {
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -628,7 +642,7 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
 
 
 
-void ApiRouter::setup_routes(crow::App<crow::CORSHandler>& app) {
+void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app) {
     auto& cors = app.get_middleware<crow::CORSHandler>();
     cors.global()
         .headers("Origin", "Content-Type", "Accept", "Authorization", "X-Encrypted-Name")
@@ -659,6 +673,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler>& app) {
     CROW_ROUTE(app, "/login").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
         auto res = handle_login(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/verify").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) {
+        auto res = handle_verify_email(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });

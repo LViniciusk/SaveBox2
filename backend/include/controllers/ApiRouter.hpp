@@ -1,6 +1,7 @@
 #pragma once
 
 #include "crow_all.h"
+#include "middlewares/RateLimitMiddleware.hpp"
 #include "database/DatabasePool.hpp"
 #include "services/AuthService.hpp"
 
@@ -22,6 +23,7 @@ public:
     crow::response handle_get_quota(const crow::request& req);
     crow::response handle_register(const crow::request& req);
     crow::response handle_login(const crow::request& req);
+    crow::response handle_verify_email(const crow::request& req);
     crow::response handle_create_folder(const crow::request& req);
     crow::response handle_init_file_upload(const crow::request& req);
     crow::response handle_upload_chunk(const crow::request& req, int file_id);
@@ -42,7 +44,7 @@ public:
     crow::response handle_share_file(const crow::request& req, int file_id);
     crow::response handle_get_shared_file(const crow::request& req, const std::string& uuid);
 
-    void setup_routes(crow::App<crow::CORSHandler>& app);
+    void setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app);
 
 private:
     DatabasePool* pool_ = nullptr;

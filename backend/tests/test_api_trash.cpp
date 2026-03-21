@@ -13,7 +13,8 @@
 TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("Tô_aqui_pra_te_mandar_a_primeira_mensagem_de_hoje", "coincidencia_foi_pra_ti_a_ultima_de_ontem");
+    MockEmailService mock_email;
+    AuthService auth("Tô_aqui_pra_te_mandar_a_primeira_mensagem_de_hoje", "coincidencia_foi_pra_ti_a_ultima_de_ontem", &mock_email);
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
 
@@ -28,12 +29,12 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
         pqxx::work txn(*conn);
         
         auto res1 = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('" + test_username_1 + "', 'hash_1') RETURNING id"
+            "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('" + test_username_1 + "', '" + test_username_1 + "@test.com', 'hash_1', true) RETURNING id"
         );
         fake_user_id = res1[0][0].as<int>();
 
         auto res2 = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('" + test_username_2 + "', 'hash_2') RETURNING id"
+            "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('" + test_username_2 + "', '" + test_username_2 + "@test.com', 'hash_2', true) RETURNING id"
         );
         other_user_id = res2[0][0].as<int>();
         

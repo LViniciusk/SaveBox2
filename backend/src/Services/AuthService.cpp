@@ -1,12 +1,27 @@
 #include "services/AuthService.hpp"
+#include "database/DatabasePool.hpp"
+#include "services/EmailService.hpp"
+#include "utils.hpp"
+
 #include <jwt-cpp/jwt.h>
 #include <sodium.h>
+#include <pqxx/pqxx>
 #include <stdexcept>
 #include <cstring>
 #include <vector>
 #include <chrono>
 
-AuthService::AuthService(const std::string& pepper, const std::string& jwt_secret)
+namespace {
+
+void set_uuid_v4_bits(unsigned char* bytes) {
+    bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0F) | 0x40);
+    bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3F) | 0x80);
+}
+
+}  
+
+AuthService::AuthService(const std::string& pepper, const std::string& jwt_secret,
+                         const std::string& resend_api_key, const std::string& validation_api_key)
     : pepper_(pepper), jwt_secret_(jwt_secret) {
     if (sodium_init() == -1) {
         throw std::runtime_error("Falha critica: libsodium nao pode ser inicializada.");
@@ -16,6 +31,47 @@ AuthService::AuthService(const std::string& pepper, const std::string& jwt_secre
     }
     if (jwt_secret_.empty()) {
         throw std::invalid_argument("O segredo JWT nao pode ser vazio.");
+    }
+    if (resend_api_key.empty()) {
+        throw std::invalid_argument("O Resend API Key nao pode ser vazio.");
+    }
+    if (validation_api_key.empty()) {
+        throw std::invalid_argument("O Email Validation API Key nao pode ser vazio.");
+    }
+
+    owned_email_service_ = std::make_unique<EmailService>(resend_api_key, validation_api_key);
+    email_service_ = owned_email_service_.get();
+}
+
+AuthService::AuthService(const std::string& pepper, const std::string& jwt_secret, EmailService* email_service)
+    : pepper_(pepper), jwt_secret_(jwt_secret), email_service_(email_service) {
+    if (sodium_init() == -1) {
+        throw std::runtime_error("Falha critica: libsodium nao pode ser inicializada.");
+    }
+    if (pepper_.empty()) {
+        throw std::invalid_argument("O Pepper do servidor nao pode ser vazio.");
+    }
+    if (jwt_secret_.empty()) {
+        throw std::invalid_argument("O segredo JWT nao pode ser vazio.");
+    }
+
+    if (email_service_ == nullptr) {
+        owned_email_service_ = std::make_unique<EmailService>(
+            Utils::get().get_var("RESEND_API_KEY", ""),
+            Utils::get().get_var("EMAIL_VALIDATION_API_KEY", "")
+        );
+        email_service_ = owned_email_service_.get();
+    }
+}
+
+void AuthService::set_database_pool(DatabasePool& pool) {
+    pool_ = &pool;
+}
+
+void AuthService::set_email_service(EmailService* email_service) {
+    email_service_ = email_service;
+    if (email_service_ != nullptr) {
+        owned_email_service_.reset();
     }
 }
 
@@ -68,6 +124,151 @@ bool AuthService::verify_password(const std::string& plain_password, const std::
     sodium_memzero(peppered_password.data(), peppered_password.size());
 
     return is_valid;
+}
+
+std::string AuthService::generate_uuid_v4() const {
+    unsigned char bytes[16];
+    randombytes_buf(bytes, sizeof(bytes));
+    set_uuid_v4_bits(bytes);
+
+    char uuid_str[37];
+    std::snprintf(
+        uuid_str, sizeof(uuid_str),
+        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5],
+        bytes[6], bytes[7],
+        bytes[8], bytes[9],
+        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    );
+
+    return std::string(uuid_str);
+}
+
+int AuthService::register_user(const std::string& username, const std::string& email, const std::string& password, const std::string& ip_address) {
+    if (pool_ == nullptr) {
+        throw std::runtime_error("AUTH_DB_NOT_CONFIGURED");
+    }
+
+    if (!EmailUtils::is_valid_format(email)) {
+        throw std::runtime_error("INVALID_EMAIL_FORMAT");
+    }
+
+    if (EmailUtils::is_disposable(email)) {
+        throw std::runtime_error("DISPOSABLE_EMAIL_LOCAL");
+    }
+
+    if (email_service_ != nullptr && !email_service_->is_domain_valid_via_api(email)) {
+        throw std::runtime_error("DISPOSABLE_EMAIL_API");
+    }
+
+    auto conn = pool_->acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto ip_count = txn.exec(
+        "SELECT count(*) FROM users WHERE registration_ip = $1 AND created_at > NOW() - INTERVAL '24 hours'",
+        pqxx::params{ip_address}
+    );
+
+    if (ip_count[0][0].as<int>() >= 3) {
+        throw std::runtime_error("TOO_MANY_ACCOUNTS_FROM_IP");
+    }
+
+    auto check = txn.exec(
+        "SELECT count(*) FROM users WHERE username = $1 OR email = $2",
+        pqxx::params{username, email}
+    );
+
+    if (check[0][0].as<int>() > 0) {
+        throw std::runtime_error("USER_ALREADY_EXISTS");
+    }
+
+    const std::string hash = hash_password(password);
+    const std::string verification_token = generate_uuid_v4();
+
+    auto result = txn.exec(
+        "INSERT INTO users (username, email, password_hash, verification_token, token_expires_at, registration_ip) "
+        "VALUES ($1, $2, $3, $4, NOW() + INTERVAL '24 hours', $5) RETURNING id",
+        pqxx::params{username, email, hash, verification_token, ip_address}
+    );
+
+    txn.commit();
+
+    if (email_service_ != nullptr) {
+        email_service_->send_verification_email(email, verification_token);
+    }
+
+    return result[0][0].as<int>();
+}
+
+int AuthService::authenticate_user(const std::string& username, const std::string& password) {
+    if (pool_ == nullptr) {
+        throw std::runtime_error("AUTH_DB_NOT_CONFIGURED");
+    }
+
+    auto conn = pool_->acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto result = txn.exec(
+        "SELECT id, password_hash, is_email_verified FROM users WHERE username = $1",
+        pqxx::params{username}
+    );
+    txn.commit();
+
+    if (result.empty()) {
+        throw std::runtime_error("INVALID_CREDENTIALS");
+    }
+
+    const int user_id = result[0][0].as<int>();
+    const std::string hash_do_banco = result[0][1].as<std::string>();
+    const bool is_email_verified = result[0][2].as<bool>();
+
+    if (!verify_password(password, hash_do_banco)) {
+        throw std::runtime_error("INVALID_CREDENTIALS");
+    }
+
+    if (!is_email_verified) {
+        throw std::runtime_error("EMAIL_NOT_VERIFIED");
+    }
+
+    return user_id;
+}
+
+bool AuthService::verify_email(const std::string& token) {
+    if (pool_ == nullptr) {
+        throw std::runtime_error("AUTH_DB_NOT_CONFIGURED");
+    }
+
+    auto conn = pool_->acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto result = txn.exec(
+        "SELECT id, token_expires_at FROM users WHERE verification_token = $1",
+        pqxx::params{token}
+    );
+
+    if (result.empty()) {
+        throw std::runtime_error("INVALID_OR_EXPIRED_TOKEN");
+    }
+
+    const int user_id = result[0][0].as<int>();
+
+    auto expiry_check = txn.exec(
+        "SELECT CASE WHEN token_expires_at < NOW() THEN true ELSE false END FROM users WHERE id = $1",
+        pqxx::params{user_id}
+    );
+
+    if (!expiry_check.empty() && expiry_check[0][0].as<bool>()) {
+        throw std::runtime_error("INVALID_OR_EXPIRED_TOKEN");
+    }
+
+    txn.exec(
+        "UPDATE users SET is_email_verified = TRUE, verification_token = NULL, token_expires_at = NULL WHERE id = $1",
+        pqxx::params{user_id}
+    );
+
+    txn.commit();
+    return true;
 }
 
 std::string AuthService::generate_token(uint64_t user_id) const {

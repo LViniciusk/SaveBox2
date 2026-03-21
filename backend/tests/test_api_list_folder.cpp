@@ -13,7 +13,8 @@
 TEST_CASE("API de Listagem de Diretórios", "[api][list_folder]") {
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
-    AuthService auth("Presentes_são_apenas_presentes", "quando_estão_presentes_sem_a_sua_presença");
+    MockEmailService mock_email;
+    AuthService auth("Presentes_são_apenas_presentes", "quando_estão_presentes_sem_a_sua_presença", &mock_email);
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
     FileChunker file_chunker("./savebox_storage/");
@@ -35,12 +36,12 @@ TEST_CASE("API de Listagem de Diretórios", "[api][list_folder]") {
         txn.exec("DELETE FROM users WHERE username IN ('list_user_A', 'list_user_B')");
 
         auto res_a = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('list_user_A', 'hash_fake_a') RETURNING id"
+            "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('list_user_A', 'list_user_A@test.com', 'hash_fake_a', true) RETURNING id"
         );
         user_a_id = res_a[0][0].as<int>();
 
         auto res_b = txn.exec(
-            "INSERT INTO users (username, password_hash) VALUES ('list_user_B', 'hash_fake_b') RETURNING id"
+            "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('list_user_B', 'list_user_B@test.com', 'hash_fake_b', true) RETURNING id"
         );
         user_b_id = res_b[0][0].as<int>();
 

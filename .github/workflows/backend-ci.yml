@@ -1,0 +1,100 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  Savebox_Backend_Tests:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          cache: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-catch
+            mingw-w64-ucrt-x86_64-libpqxx
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-libsodium
+            mingw-w64-ucrt-x86_64-libzip
+            mingw-w64-ucrt-x86_64-cpr
+            mingw-w64-ucrt-x86_64-asio
+            mingw-w64-ucrt-x86_64-ccache
+            mingw-w64-ucrt-x86_64-postgresql
+
+      - name: Setup e Start PostgreSQL
+        shell: msys2 {0}
+        run: |
+          echo "Inicializando o cluster do banco na memória..."
+          initdb -D /tmp/pgdata -U postgres --auth=trust
+          
+          echo "Ligando o servidor PostgreSQL..."
+          pg_ctl -D /tmp/pgdata -l /tmp/pgdata/logfile start
+          
+          echo "Aguardando 2 segundos para o banco respirar..."
+          sleep 2
+          
+          echo "Criando usuário e banco de dados..."
+          psql -U postgres -c "CREATE ROLE test_role LOGIN PASSWORD 'test_pass';"
+          createdb -U postgres -O test_role test_db
+
+      - name: Create .env
+        shell: bash
+        run: |
+          cat << 'EOF' > .env
+          DB_USER=test_role
+          DB_PASSWORD=test_pass
+          DB_NAME=test_db
+          DB_HOST=localhost
+          DB_PORT=5432
+
+          PASS_PEPPER=lalala
+          SAVEBOX_JWT_SECRET=minha_cabeca_ta
+          RESEND_API_KEY=piscano
+          EMAIL_VALIDATION_API_KEY=lalalaaa
+
+          SAVEBOX_STORAGE_PATH=./savebox_storage/
+          EOF
+
+      - name: Configure C++ Cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-windows-${{ github.sha }}
+          restore-keys: |
+            ccache-windows-
+
+      - name: Configure CMake
+        shell: msys2 {0}
+        run: |
+          export CCACHE_DIR=$GITHUB_WORKSPACE/.ccache
+          cd backend
+          cmake -B build -G "MinGW Makefiles" -DCMAKE_CXX_COMPILER_LAUNCHER=ccache .
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          export CCACHE_DIR=$GITHUB_WORKSPACE/.ccache
+          cd backend/build
+          cmake --build . --parallel
+
+      - name: Run all tests
+        shell: msys2 {0}
+        run: |
+          cd backend/build
+          mkdir -p savebox_storage
+          ./savebox_tests.exe --order rand --rng-seed time
