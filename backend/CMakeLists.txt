@@ -12,6 +12,11 @@ if(NOT WIN32)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static" FORCE)
 endif()
 
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+endif()
+
 # ----------------------------------------------------------------------
 # FASE 1: DEPENDÊNCIAS DO SISTEMA
 # ----------------------------------------------------------------------
@@ -155,3 +160,4 @@ if(BUILD_TESTS)
         target_link_libraries(savebox_tests PRIVATE ws2_32 mswsock crypt32 bcrypt)
     endif()
 endif()
+

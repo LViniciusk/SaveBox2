@@ -1,33 +1,8 @@
 #include "database/FileManager.hpp"
 #include "database/DatabasePool.hpp"
 #include "storage/FileChunker.hpp"
+#include "utils/utils.hpp"
 #include <pqxx/pqxx>
-#include <random>
-#include <sstream>
-#include <iomanip>
-
-namespace {
-    std::string generate_uuid_v4() {
-        static std::random_device rd;
-        static std::mt19937 gen(rd());
-        static std::uniform_int_distribution<> dis(0, 15);
-        static std::uniform_int_distribution<> dis2(8, 11);
-
-        std::stringstream ss;
-        ss << std::hex;
-        for (int i = 0; i < 8; i++) ss << dis(gen);
-        ss << "-";
-        for (int i = 0; i < 4; i++) ss << dis(gen);
-        ss << "-4";
-        for (int i = 0; i < 3; i++) ss << dis(gen);
-        ss << "-";
-        ss << dis2(gen);
-        for (int i = 0; i < 3; i++) ss << dis(gen);
-        ss << "-";
-        for (int i = 0; i < 12; i++) ss << dis(gen);
-        return ss.str();
-    }
-}
 
 FileManager::FileManager(DatabasePool& pool) : pool_(pool) {}
 
@@ -271,38 +246,50 @@ crow::json::wvalue FileManager::update_file(uint64_t file_id, uint64_t user_id, 
         throw std::runtime_error("BAD_REQUEST");
     }
 
-
-    if (has_name || has_folder) {
-        if (has_folder) {
-            if (folder_id.value() == 0) {
-                if (has_name) {
-                    txn.exec("UPDATE files SET encrypted_name = $1, name_hash = $2, folder_id = NULL WHERE id = $3 AND user_id = $4",
-                             pqxx::params{enc_name.value(), name_hash.value(), file_id, user_id});
-                } else {
-                    txn.exec("UPDATE files SET folder_id = NULL WHERE id = $1 AND user_id = $2",
-                             pqxx::params{file_id, user_id});
-                }
+    pqxx::result res;
+    if (has_folder) {
+        if (folder_id.value() == 0) {
+            if (has_name) {
+                res = txn.exec(
+                    "UPDATE files SET encrypted_name = $1, name_hash = $2, folder_id = NULL "
+                    "WHERE id = $3 AND user_id = $4 "
+                    "RETURNING encrypted_name, name_hash, folder_id",
+                    pqxx::params{enc_name.value(), name_hash.value(), file_id, user_id}
+                );
             } else {
-                if (has_name) {
-                    txn.exec("UPDATE files SET encrypted_name = $1, name_hash = $2, folder_id = $3 WHERE id = $4 AND user_id = $5",
-                             pqxx::params{enc_name.value(), name_hash.value(), folder_id.value(), file_id, user_id});
-                } else {
-                    txn.exec("UPDATE files SET folder_id = $1 WHERE id = $2 AND user_id = $3",
-                             pqxx::params{folder_id.value(), file_id, user_id});
-                }
+                res = txn.exec(
+                    "UPDATE files SET folder_id = NULL WHERE id = $1 AND user_id = $2 "
+                    "RETURNING encrypted_name, name_hash, folder_id",
+                    pqxx::params{file_id, user_id}
+                );
             }
         } else {
             if (has_name) {
-                txn.exec("UPDATE files SET encrypted_name = $1, name_hash = $2 WHERE id = $3 AND user_id = $4",
-                         pqxx::params{enc_name.value(), name_hash.value(), file_id, user_id});
+                res = txn.exec(
+                    "UPDATE files SET encrypted_name = $1, name_hash = $2, folder_id = $3 "
+                    "WHERE id = $4 AND user_id = $5 "
+                    "RETURNING encrypted_name, name_hash, folder_id",
+                    pqxx::params{enc_name.value(), name_hash.value(), folder_id.value(), file_id, user_id}
+                );
+            } else {
+                res = txn.exec(
+                    "UPDATE files SET folder_id = $1 WHERE id = $2 AND user_id = $3 "
+                    "RETURNING encrypted_name, name_hash, folder_id",
+                    pqxx::params{folder_id.value(), file_id, user_id}
+                );
             }
         }
+    } else {
+        res = txn.exec(
+            "UPDATE files SET encrypted_name = $1, name_hash = $2 WHERE id = $3 AND user_id = $4 "
+            "RETURNING encrypted_name, name_hash, folder_id",
+            pqxx::params{enc_name.value(), name_hash.value(), file_id, user_id}
+        );
     }
 
-    auto res = txn.exec(
-        "SELECT encrypted_name, name_hash, folder_id FROM files WHERE id = $1", 
-        pqxx::params{file_id}
-    );
+    if (res.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
     
     crow::json::wvalue ret;
     ret["encrypted_name"] = res[0][0].as<std::string>();
@@ -330,7 +317,7 @@ std::string FileManager::share_file(uint64_t file_id, uint64_t user_id) {
         throw std::runtime_error("NOT_FOUND");
     }
 
-    std::string uuid = generate_uuid_v4();
+    std::string uuid = UuidUtils::generate_uuid_v4();
 
     txn.exec(
         "INSERT INTO shared_links (file_id, share_uuid) VALUES ($1, $2)",

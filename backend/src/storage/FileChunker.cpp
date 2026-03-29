@@ -15,6 +15,8 @@ bool FileChunker::validate_chunk_size(size_t chunk_size) const {
 
 
 bool FileChunker::write_chunk(uint64_t file_id, int chunk_index, const std::string& binary_data) {
+    std::lock_guard<std::mutex> lock(m_locks[file_id % NUM_STRIPES]);
+
     const uint64_t MAX_ALLOWED_CHUNK = 5 * 1024 * 1024;
 
     if (binary_data.size() > MAX_ALLOWED_CHUNK) {

@@ -245,17 +245,29 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
     }
     uint64_t user_id = *user_id_opt;
 
+    auto set_streaming_headers = [](crow::response& res, size_t content_length, size_t total_size) {
+        res.set_header("Content-Type", "application/octet-stream");
+        res.set_header("Accept-Ranges", "bytes");
+        res.set_header("Content-Length", std::to_string(content_length));
+        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+    };
+
     try {
         file_mgr_->can_user_download(static_cast<uint64_t>(file_id), user_id);
         
         size_t total_size = chunker_->get_file_size(file_id);
         std::string range_header = req.get_header_value("Range");
 
+        constexpr size_t MAX_FULL_DOWNLOAD_SIZE = 50 * 1024 * 1024; // 50MB
+
         if (range_header.empty()) {
+            if (total_size > MAX_FULL_DOWNLOAD_SIZE) {
+                return crow::response(400, R"({"error":"Arquivo muito grande para download sincrono. Use Range requests."})");
+            }
             std::string content = chunker_->read_entire_file(static_cast<uint64_t>(file_id));
             crow::response res(200, content);
-            res.set_header("Content-Type", "application/octet-stream");
-            res.set_header("Accept-Ranges", "bytes");
+            set_streaming_headers(res, content.size(), total_size);
             return res;
         }
 
@@ -274,19 +286,38 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
         std::string end_str = range_val.substr(dash_pos + 1);
 
         size_t start = 0;
-        if (!start_str.empty()) {
+        size_t end = total_size - 1;
+
+        // "bytes=500-999" -> start=500, end=999
+        // "bytes=500-"    -> start=500, end=total_size-1
+        // "bytes=-500"    -> ultimos 500 bytes
+        if (start_str.empty() && !end_str.empty()) {
+
+            size_t suffix_length = std::stoull(end_str);
+
+            if (suffix_length == 0) {
+                crow::response res(416);
+                res.set_header("Content-Range", "bytes */" + std::to_string(total_size));
+                return res;
+            }
+            if (suffix_length >= total_size) {
+                start = 0;
+                end = total_size - 1;
+            } else {
+                start = total_size - suffix_length;
+                end = total_size - 1;
+            }
+        } else if (!start_str.empty()) {
             start = std::stoull(start_str);
+            if (!end_str.empty()) {
+                end = std::stoull(end_str);
+            }
         }
 
         if (start >= total_size) {
             crow::response res(416);
             res.set_header("Content-Range", "bytes */" + std::to_string(total_size));
             return res;
-        }
-
-        size_t end = total_size - 1;
-        if (!end_str.empty()) {
-            end = std::stoull(end_str);
         }
 
         if (end >= total_size) {
@@ -304,8 +335,7 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
 
         crow::response res(206, data);
         res.set_header("Content-Range", "bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" + std::to_string(total_size));
-        res.set_header("Content-Type", "application/octet-stream");
-        res.set_header("Accept-Ranges", "bytes");
+        set_streaming_headers(res, data.size(), total_size);
 
         return res;
 

@@ -47,11 +47,12 @@ bool DatabasePool::ConnectionWrapper::is_valid() const {
 
 
 
-DatabasePool::DatabasePool(size_t pool_size, const std::string& conn_str) {
+DatabasePool::DatabasePool(size_t pool_size, const std::string& conn_str)
+    : connection_string_(conn_str) {
     for (size_t i = 0; i < pool_size; ++i) {
         std::unique_ptr<pqxx::connection> conn;
-        if (!conn_str.empty()) {
-            conn = std::make_unique<pqxx::connection>(conn_str);
+        if (!connection_string_.empty()) {
+            conn = std::make_unique<pqxx::connection>(connection_string_);
         }
         connections_.push(std::move(conn));
     }
@@ -77,6 +78,26 @@ DatabasePool::ConnectionWrapper DatabasePool::acquire_connection() {
 
     auto conn = std::move(connections_.front());
     connections_.pop();
+
+    if (conn && !conn->is_open()) {
+        if (connection_string_.empty()) {
+            throw std::runtime_error("DATABASE_OFFLINE");
+        }
+
+        try {
+            conn = std::make_unique<pqxx::connection>(connection_string_);
+        } catch (...) {
+            throw std::runtime_error("DATABASE_OFFLINE");
+        }
+    }
+
+    if (!conn && !connection_string_.empty()) {
+        try {
+            conn = std::make_unique<pqxx::connection>(connection_string_);
+        } catch (...) {
+            throw std::runtime_error("DATABASE_OFFLINE");
+        }
+    }
 
     return ConnectionWrapper(this, std::move(conn));
 }

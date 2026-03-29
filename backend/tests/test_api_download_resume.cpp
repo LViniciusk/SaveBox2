@@ -120,6 +120,83 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
         REQUIRE(res.code == 416);
     }
 
+    SECTION("Download Parcial - Sufixo Suffix-Byte-Range-Spec (Range: bytes=-3)") {
+        crow::request req;
+        req.url = "/files/" + std::to_string(file_id) + "/download";
+        req.add_header("Authorization", "Bearer " + token);
+        req.add_header("Range", "bytes=-3");
+
+        crow::response res = router.handle_download_file(req, file_id);
+
+        REQUIRE(res.code == 206);
+        REQUIRE(res.body == "789");
+        REQUIRE(res.get_header_value("Content-Range") == "bytes 7-9/10");
+    }
+
+    SECTION("Injeção de Headers de CORS para o Service Worker") {
+        crow::request req;
+        req.url = "/files/" + std::to_string(file_id) + "/download";
+        req.add_header("Authorization", "Bearer " + token);
+
+        crow::response res = router.handle_download_file(req, file_id);
+
+        REQUIRE(res.get_header_value("Access-Control-Allow-Origin") == "*");
+
+        std::string expose_headers = res.get_header_value("Access-Control-Expose-Headers");
+        REQUIRE(expose_headers.find("Content-Range") != std::string::npos);
+        REQUIRE(expose_headers.find("Content-Length") != std::string::npos);
+        REQUIRE(expose_headers.find("Accept-Ranges") != std::string::npos);
+    }
+
+    SECTION("Proteção Anti-OOM (Arquivos > 50MB sem Range)") {
+        int file_big_id = 0;
+
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+
+            auto folder_res = txn.exec(
+                "SELECT id FROM folders WHERE user_id = $1 ORDER BY id LIMIT 1",
+                pqxx::params{user_id}
+            );
+            REQUIRE(!folder_res.empty());
+            int folder_id = folder_res[0][0].as<int>();
+
+            auto big_file_res = txn.exec(
+                "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+                pqxx::params{user_id, folder_id, "file_big_resume", "fhash_big_resume", 51 * 1024 * 1024 + 1, 1, true}
+            );
+
+            file_big_id = big_file_res[0][0].as<int>();
+            txn.commit();
+        }
+
+        std::string big_file_path = test_dir + std::to_string(file_big_id) + ".dat";
+        {
+            std::ofstream out_big(big_file_path, std::ios::binary);
+            REQUIRE(out_big.is_open());
+            out_big.seekp(51 * 1024 * 1024);
+            out_big.write("X", 1);
+            out_big.close();
+        }
+
+        crow::request req_no_range;
+        req_no_range.url = "/files/" + std::to_string(file_big_id) + "/download";
+        req_no_range.add_header("Authorization", "Bearer " + token);
+
+        crow::response res_no_range = router.handle_download_file(req_no_range, file_big_id);
+        REQUIRE(res_no_range.code == 400);
+
+        crow::request req_with_range;
+        req_with_range.url = "/files/" + std::to_string(file_big_id) + "/download";
+        req_with_range.add_header("Authorization", "Bearer " + token);
+        req_with_range.add_header("Range", "bytes=0-100");
+
+        crow::response res_with_range = router.handle_download_file(req_with_range, file_big_id);
+        REQUIRE(res_with_range.code == 206);
+    }
+
     {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);

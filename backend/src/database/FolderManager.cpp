@@ -227,34 +227,58 @@ crow::json::wvalue FolderManager::update_folder(uint64_t folder_id, uint64_t use
     bool has_name = enc_name.has_value() && name_hash.has_value();
     bool has_parent = parent_id.has_value();
 
+    pqxx::result res;
     if (has_name || has_parent) {
         if (has_parent) {
             if (parent_id.value() == 0) {
                 if (has_name) {
-                    txn.exec("UPDATE folders SET encrypted_name = $1, name_hash = $2, parent_id = NULL WHERE id = $3 AND user_id = $4",
-                             pqxx::params{enc_name.value(), name_hash.value(), folder_id, user_id});
+                    res = txn.exec(
+                        "UPDATE folders SET encrypted_name = $1, name_hash = $2, parent_id = NULL "
+                        "WHERE id = $3 AND user_id = $4 "
+                        "RETURNING encrypted_name, name_hash, parent_id",
+                        pqxx::params{enc_name.value(), name_hash.value(), folder_id, user_id}
+                    );
                 } else {
-                    txn.exec("UPDATE folders SET parent_id = NULL WHERE id = $1 AND user_id = $2",
-                             pqxx::params{folder_id, user_id});
+                    res = txn.exec(
+                        "UPDATE folders SET parent_id = NULL WHERE id = $1 AND user_id = $2 "
+                        "RETURNING encrypted_name, name_hash, parent_id",
+                        pqxx::params{folder_id, user_id}
+                    );
                 }
             } else {
                 if (has_name) {
-                    txn.exec("UPDATE folders SET encrypted_name = $1, name_hash = $2, parent_id = $3 WHERE id = $4 AND user_id = $5",
-                             pqxx::params{enc_name.value(), name_hash.value(), parent_id.value(), folder_id, user_id});
+                    res = txn.exec(
+                        "UPDATE folders SET encrypted_name = $1, name_hash = $2, parent_id = $3 "
+                        "WHERE id = $4 AND user_id = $5 "
+                        "RETURNING encrypted_name, name_hash, parent_id",
+                        pqxx::params{enc_name.value(), name_hash.value(), parent_id.value(), folder_id, user_id}
+                    );
                 } else {
-                    txn.exec("UPDATE folders SET parent_id = $1 WHERE id = $2 AND user_id = $3",
-                             pqxx::params{parent_id.value(), folder_id, user_id});
+                    res = txn.exec(
+                        "UPDATE folders SET parent_id = $1 WHERE id = $2 AND user_id = $3 "
+                        "RETURNING encrypted_name, name_hash, parent_id",
+                        pqxx::params{parent_id.value(), folder_id, user_id}
+                    );
                 }
             }
         } else {
             if (has_name) {
-                txn.exec("UPDATE folders SET encrypted_name = $1, name_hash = $2 WHERE id = $3 AND user_id = $4",
-                         pqxx::params{enc_name.value(), name_hash.value(), folder_id, user_id});
+                res = txn.exec(
+                    "UPDATE folders SET encrypted_name = $1, name_hash = $2 WHERE id = $3 AND user_id = $4 "
+                    "RETURNING encrypted_name, name_hash, parent_id",
+                    pqxx::params{enc_name.value(), name_hash.value(), folder_id, user_id}
+                );
             }
         }
     }
 
-    auto res = txn.exec("SELECT encrypted_name, name_hash, parent_id FROM folders WHERE id = $1", pqxx::params{folder_id});
+    if (res.empty()) {
+        res = txn.exec(
+            "SELECT encrypted_name, name_hash, parent_id FROM folders WHERE id = $1",
+            pqxx::params{folder_id}
+        );
+    }
+
     crow::json::wvalue ret;
     ret["encrypted_name"] = res[0][0].as<std::string>();    
     ret["name_hash"] = res[0][1].as<std::string>();
