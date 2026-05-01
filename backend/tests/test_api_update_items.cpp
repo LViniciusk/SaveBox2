@@ -186,6 +186,21 @@ TEST_CASE("API Update - Mover e Renomear Itens", "[api][update][files][folders]"
         REQUIRE(res.code == 403);
     }
 
+    SECTION("Arquivos: Segurança - DoS via JSON corrompido") {
+        crow::request req;
+        req.url = "/files/" + std::to_string(file_a_1_id);
+        req.method = crow::HTTPMethod::Put;
+        req.add_header("Authorization", "Bearer " + token_a);
+        
+        crow::json::wvalue body;
+        body["encrypted_name"] = 123;
+        body["folder_id"] = "texto";
+        req.body = body.dump();
+
+        crow::response res = router.handle_update_file(req, file_a_1_id);
+        REQUIRE(res.code == 400);
+    }
+
     SECTION("Pastas: Loop Infinito (Mover para dentro de si mesma)") {
         crow::request req;
         req.url = "/folders/" + std::to_string(folder_a_sub_id);

@@ -39,7 +39,7 @@ services:
       EMAIL_VALIDATION_API_KEY: ${EMAIL_VALIDATION_API_KEY}
       SAVEBOX_STORAGE_PATH: /app/savebox_storage/
     volumes:
-      - ./savebox_storage:/app/savebox_storage 
+      - ./savebox_storage:/app/savebox_storage
     networks:
       - savebox_network
 

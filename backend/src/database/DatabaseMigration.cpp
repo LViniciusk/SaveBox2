@@ -54,13 +54,24 @@ bool DatabaseMigration::run(DatabasePool& pool) {
             );
         )");
 
-        // LINKS COMPARTILHADOS
+        // TABELA DE LINKS COMPARTILHADOS
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS shared_links (
                 id SERIAL PRIMARY KEY,
                 file_id BIGINT REFERENCES files(id) ON DELETE CASCADE,
                 share_uuid VARCHAR(36) UNIQUE NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        )");
+
+        // TABELA DE CHUNKS ENVIADOS
+        w.exec(R"(
+            CREATE TABLE IF NOT EXISTS file_chunks (
+                id SERIAL PRIMARY KEY,
+                file_id BIGINT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                chunk_index INTEGER NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(file_id, chunk_index)
             );
         )");
 

@@ -12,6 +12,16 @@ int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
+    if (folder_id.has_value()) {
+        auto folder_check = txn.exec(
+            "SELECT id FROM folders WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+            pqxx::params{folder_id.value(), user_id}
+        );
+        if (folder_check.empty()) {
+            throw std::runtime_error("FORBIDDEN");
+        }
+    }
+
     // Verificação de duplicidade
     std::string dup_query;
     if (folder_id.has_value()) {
@@ -63,25 +73,41 @@ int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id
     return file_id;
 }
 
-void FileManager::mark_upload_complete(uint64_t file_id) {
+void FileManager::mark_upload_complete(uint64_t file_id, uint64_t user_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
     txn.exec(
-        "UPDATE files SET is_upload_complete = true WHERE id = $1",
-        pqxx::params{file_id}
+        "UPDATE files SET is_upload_complete = true WHERE id = $1 AND user_id = $2",
+        pqxx::params{file_id, user_id}
     );
     txn.commit();
 }
 
-int FileManager::get_total_chunks(uint64_t file_id) {
+bool FileManager::is_upload_complete(uint64_t file_id, uint64_t user_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
     auto result = txn.exec(
-        "SELECT total_chunks FROM files WHERE id = $1",
-        pqxx::params{file_id}
+        "SELECT is_upload_complete FROM files WHERE id = $1 AND user_id = $2",
+        pqxx::params{file_id, user_id}
     );
     txn.commit();
-    if (result.empty()) return 0;
+    
+    if (result.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+    
+    return result[0][0].as<bool>();
+}
+
+int FileManager::get_total_chunks(uint64_t file_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto result = txn.exec(
+        "SELECT total_chunks FROM files WHERE id = $1 AND user_id = $2",
+        pqxx::params{file_id, user_id}
+    );
+    txn.commit();
+    if (result.empty()) throw std::runtime_error("NOT_FOUND");
     return result[0][0].as<int>();
 }
 

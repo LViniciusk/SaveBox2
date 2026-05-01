@@ -91,6 +91,20 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         REQUIRE(res.code == 401);
     }
 
+    SECTION("Segurança: Tratamento de Tipagem JSON (Register/Login)") {
+        crow::request req_bad_reg;
+        req_bad_reg.body = R"({"username": 123, "email": "api_test_user@test.com", "password": true})";
+        crow::response res_bad_reg = router.handle_register(req_bad_reg);
+        REQUIRE(res_bad_reg.code == 400);
+        REQUIRE(res_bad_reg.body.find("Tipos de dados invalidos no JSON") != std::string::npos);
+
+        crow::request req_bad_log;
+        req_bad_log.body = R"({"username": 123, "password": true})";
+        crow::response res_bad_log = router.handle_login(req_bad_log);
+        REQUIRE(res_bad_log.code == 400);
+        REQUIRE(res_bad_log.body.find("Tipos de dados invalidos no JSON") != std::string::npos);
+    }
+
     {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);

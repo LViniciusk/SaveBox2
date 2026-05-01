@@ -141,23 +141,35 @@ if(BUILD_TESTS)
 
     target_compile_options(savebox_tests PRIVATE -UASIO_NO_DEPRECATED -UBOOST_ASIO_NO_DEPRECATED)
 
-    target_include_directories(savebox_tests PRIVATE include tests ${PQXX_INCLUDE_DIRS} ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
-    target_link_directories(savebox_tests PRIVATE ${PQXX_LIBRARY_DIRS} ${SODIUM_LIBRARY_DIRS} ${ZIP_LIBRARY_DIRS})
-
-    target_link_libraries(savebox_tests PRIVATE
-        Threads::Threads
-        Catch2::Catch2
-        ${PQXX_LIBRARIES}
-        ${SODIUM_LIBRARIES}
-        ${ZIP_LIBRARIES}
-        jwt-cpp::jwt-cpp
-        OpenSSL::SSL
-        OpenSSL::Crypto
-        cpr::cpr
-    )
-
     if(WIN32)
-        target_link_libraries(savebox_tests PRIVATE ws2_32 mswsock crypt32 bcrypt)
+        target_include_directories(savebox_tests PRIVATE include tests ${PQXX_INCLUDE_DIRS} ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
+        target_link_directories(savebox_tests PRIVATE ${PQXX_LIBRARY_DIRS} ${SODIUM_LIBRARY_DIRS} ${ZIP_LIBRARY_DIRS})
+        target_link_libraries(savebox_tests PRIVATE
+            Threads::Threads
+            Catch2::Catch2
+            ${PQXX_LIBRARIES}
+            ${SODIUM_LIBRARIES}
+            ${ZIP_LIBRARIES}
+            jwt-cpp::jwt-cpp
+            OpenSSL::SSL
+            OpenSSL::Crypto
+            cpr::cpr
+            ws2_32 mswsock crypt32 bcrypt
+        )
+    else()
+        target_include_directories(savebox_tests PRIVATE include tests ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
+        target_link_directories(savebox_tests PRIVATE ${SODIUM_LIBRARY_DIRS} ${ZIP_LIBRARY_DIRS})
+        target_link_libraries(savebox_tests PRIVATE
+            Threads::Threads
+            Catch2::Catch2
+            pqxx
+            ${SODIUM_LIBRARIES}
+            ${ZIP_LIBRARIES}
+            jwt-cpp::jwt-cpp
+            OpenSSL::SSL
+            OpenSSL::Crypto
+            cpr::cpr
+        )
     endif()
 endif()
 

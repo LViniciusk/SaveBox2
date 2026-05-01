@@ -19,9 +19,10 @@ public:
 
     crow::json::wvalue get_user_quota(uint64_t user_id);
 
-    void mark_upload_complete(uint64_t file_id);
+    void mark_upload_complete(uint64_t file_id, uint64_t user_id);
+    bool is_upload_complete(uint64_t file_id, uint64_t user_id);
 
-    int get_total_chunks(uint64_t file_id);
+    int get_total_chunks(uint64_t file_id, uint64_t user_id);
     bool can_user_download(uint64_t file_id, uint64_t user_id);
     std::vector<crow::json::wvalue> get_user_files_paginated(uint64_t user_id, int limit, int offset);
     std::vector<int> get_uploaded_chunks(uint64_t file_id, uint64_t user_id);

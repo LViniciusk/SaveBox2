@@ -14,6 +14,16 @@ uint64_t FolderManager::create_folder(uint64_t user_id,
     auto conn = pool_.acquire_connection();
     pqxx::work W(*conn);
 
+    if (parent_id.has_value()) {
+        auto parent_check = W.exec(
+            "SELECT id FROM folders WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+            pqxx::params{parent_id.value(), user_id}
+        );
+        if (parent_check.empty()) {
+            throw std::runtime_error("FORBIDDEN");
+        }
+    }
+
     // Verificação de duplicidade
     std::string dup_query;
     pqxx::result dup_res;

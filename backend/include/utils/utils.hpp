@@ -1,39 +1,41 @@
 #pragma once
 
-#include <random>
 #include <string>
+#include <stdexcept>
+#include <openssl/rand.h>
 
 namespace UuidUtils {
 
     static inline std::string generate_uuid_v4() {
         static constexpr char kHex[] = "0123456789abcdef";
 
-        thread_local std::mt19937 gen([]() {
-            std::random_device rd;
-            std::seed_seq seed{rd(), rd(), rd(), rd(), rd(), rd(), rd(), rd()};
-            return std::mt19937(seed);
-        }());
+        unsigned char bytes[16];
+        if (RAND_bytes(bytes, sizeof(bytes)) != 1) {
+            throw std::runtime_error("CSPRNG_FAILURE");
+        }
 
-        std::uniform_int_distribution<int> hex_dist(0, 15);
-        std::uniform_int_distribution<int> variant_dist(8, 11);
+        bytes[6] = (bytes[6] & 0x0F) | 0x40;
+        bytes[8] = (bytes[8] & 0x3F) | 0x80;
 
         std::string uuid;
         uuid.reserve(36);
 
-        for (int i = 0; i < 8; ++i) uuid.push_back(kHex[hex_dist(gen)]);
+        auto append_hex = [&](int idx) {
+            uuid.push_back(kHex[(bytes[idx] >> 4) & 0x0F]);
+            uuid.push_back(kHex[bytes[idx] & 0x0F]);
+        };
+
+        for (int i = 0; i < 4; ++i) append_hex(i);
         uuid.push_back('-');
-        for (int i = 0; i < 4; ++i) uuid.push_back(kHex[hex_dist(gen)]);
+        for (int i = 4; i < 6; ++i) append_hex(i);
         uuid.push_back('-');
-        uuid.push_back('4');
-        for (int i = 0; i < 3; ++i) uuid.push_back(kHex[hex_dist(gen)]);
+        for (int i = 6; i < 8; ++i) append_hex(i);
         uuid.push_back('-');
-        uuid.push_back(kHex[variant_dist(gen)]);
-        for (int i = 0; i < 3; ++i) uuid.push_back(kHex[hex_dist(gen)]);
+        for (int i = 8; i < 10; ++i) append_hex(i);
         uuid.push_back('-');
-        for (int i = 0; i < 12; ++i) uuid.push_back(kHex[hex_dist(gen)]);
+        for (int i = 10; i < 16; ++i) append_hex(i);
 
         return uuid;
     }
 
 }
- 
