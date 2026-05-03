@@ -8,6 +8,7 @@
 #include <regex>
 #include <unordered_set>
 #include <iostream>
+#include <stdexcept>
 
 class Utils {
 private:
@@ -55,6 +56,22 @@ public:
         return default_val;
     }
 
+    std::string get_required_var(const std::string& key) {
+        auto it = env_vars.find(key);
+        if (it != env_vars.end() && !it->second.empty()) {
+            return it->second;
+        }
+
+        if (const char* sys_val = std::getenv(key.c_str())) {
+            std::string value(sys_val);
+            if (!value.empty()) {
+                return value;
+            }
+        }
+
+        throw std::runtime_error("Missing critical env var: " + key);
+    }
+
     bool is_domain_blocked(const std::string& domain) const {
         return blocked_domains.find(domain) != blocked_domains.end();
     }
@@ -67,38 +84,38 @@ namespace DotEnv{
 
     inline std::string get_secure_conn_string() {
         auto& cfg = Utils::get();
-        std::string user = cfg.get_var("DB_USER", "As_vezes_no_silencio_da_noite");
-        std::string pass = cfg.get_var("DB_PASSWORD", "Eu_fico_imaginando_nois_dois");
-        std::string db   = cfg.get_var("DB_NAME", "Eu_fico_ali_sonhando_acordado");
-        std::string host = cfg.get_var("DB_HOST", "Juntando");
-        std::string port = cfg.get_var("DB_PORT", "O_antes_o_agora_e_o_depois");
+        std::string user = cfg.get_required_var("DB_USER");
+        std::string pass = cfg.get_required_var("DB_PASSWORD");
+        std::string db   = cfg.get_required_var("DB_NAME");
+        std::string host = cfg.get_required_var("DB_HOST");
+        std::string port = cfg.get_required_var("DB_PORT");
 
         return "postgresql://" + user + ":" + pass + "@" + host + ":" + port + "/" + db;
     }
 
     inline std::string get_pepper() {
         auto& cfg = Utils::get();
-        return cfg.get_var("SAVEBOX_PEPPER", "Garotos_do_Relogio");
+        return cfg.get_required_var("SAVEBOX_PEPPER");
     }
 
     inline std::string get_jwt_secret() {
         auto& cfg = Utils::get();
-        return cfg.get_var("SAVEBOX_JWT_SECRET", "Com_ou_sem_susanoo");
+        return cfg.get_required_var("SAVEBOX_JWT_SECRET");
     }
 
     inline std::string get_storage_path() {
         auto& cfg = Utils::get();
-        return cfg.get_var("SAVEBOX_STORAGE_PATH", "Módulo_lunar");
+        return cfg.get_required_var("SAVEBOX_STORAGE_PATH");
     }
 
     inline std::string get_resend_api_key() {
         auto& cfg = Utils::get();
-        return cfg.get_var("RESEND_API_KEY", "Musicas_para_balançar_o_pescocito");
+        return cfg.get_required_var("RESEND_API_KEY");
     }
 
     inline std::string get_email_validation_api_key() {
         auto& cfg = Utils::get();
-        return cfg.get_var("EMAIL_VALIDATION_API_KEY", "Abissal");
+        return cfg.get_required_var("EMAIL_VALIDATION_API_KEY");
     }
 }
 

@@ -154,13 +154,13 @@ crow::json::wvalue FolderManager::get_folder_contents(int folder_id, int user_id
     pqxx::result file_rows;
     if (folder_id == 0) {
         file_rows = txn.exec(
-            "SELECT id, encrypted_name, size_bytes FROM files "
+            "SELECT id, encrypted_name, size_bytes, encrypted_fdk FROM files "
             "WHERE folder_id IS NULL AND user_id = $1 AND is_upload_complete = true AND deleted_at IS NULL",
             pqxx::params{user_id}
         );
     } else {
         file_rows = txn.exec(
-            "SELECT id, encrypted_name, size_bytes FROM files "
+            "SELECT id, encrypted_name, size_bytes, encrypted_fdk FROM files "
             "WHERE folder_id = $1 AND user_id = $2 AND is_upload_complete = true AND deleted_at IS NULL",
             pqxx::params{folder_id, user_id}
         );
@@ -172,6 +172,7 @@ crow::json::wvalue FolderManager::get_folder_contents(int folder_id, int user_id
         item["id"] = row[0].as<int>();
         item["encrypted_name"] = row[1].as<std::string>();
         item["size_bytes"] = row[2].as<int64_t>();
+        item["encrypted_fdk"] = row[3].as<std::string>();
         files.push_back(std::move(item));
     }
 

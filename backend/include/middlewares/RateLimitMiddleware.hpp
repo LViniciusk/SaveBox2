@@ -47,7 +47,12 @@ struct RateLimitMiddleware {
         const auto now_steady = std::chrono::steady_clock::now();
         const auto now_system = std::chrono::system_clock::now();
         const std::string ip = req.remote_ip_address.empty() ? "unknown" : req.remote_ip_address;
-        const bool is_auth_route = (req.url == "/login" || req.url == "/register");
+        std::string path = req.url;
+        const auto qpos = path.find('?');
+        if (qpos != std::string::npos) {
+            path = path.substr(0, qpos);
+        }
+        const bool is_auth_route = (path == "/login" || path == "/register");
 
         {
             std::shared_lock<std::shared_timed_mutex> read_lock(mutex_);
@@ -76,6 +81,10 @@ struct RateLimitMiddleware {
                     return;
                 }
                 banned_ips_cache.erase(banned_it);
+            }
+
+            if (clients_.size() > 10000) {
+                clients_.clear();
             }
 
             auto& client = clients_[ip];

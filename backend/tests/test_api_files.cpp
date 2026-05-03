@@ -63,7 +63,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         crow::request req_init;
         req_init.add_header("Authorization", "Bearer " + token);
         req_init.body = R"({"folder_id": )" + std::to_string(fake_folder_id)
-                      + R"(, "encrypted_name": "base64_file_name", "name_hash": "file_hash_123", "size_bytes": 1024, "total_chunks": 1})";
+                      + R"(, "encrypted_name": "base64_file_name", "name_hash": "file_hash_123", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 1024, "total_chunks": 1})";
 
         crow::response res_init = router.handle_init_file_upload(req_init);
 
@@ -87,7 +87,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         crow::request req_init_broken;
         req_init_broken.add_header("Authorization", "Bearer " + token);
         req_init_broken.body = R"({"folder_id": )" + std::to_string(fake_folder_id)
-                             + R"(, "encrypted_name": "base64_broken_file", "name_hash": "file_hash_broken", "size_bytes": 10485760, "total_chunks": 2})";
+                             + R"(, "encrypted_name": "base64_broken_file", "name_hash": "file_hash_broken", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 10485760, "total_chunks": 2})";
 
         crow::response res_init_broken = router.handle_init_file_upload(req_init_broken);
         REQUIRE(res_init_broken.code == 201);
@@ -122,7 +122,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
     SECTION("Duplicidade de nome na mesma pasta retorna 409 Conflict") {
         crow::request req_init;
         req_init.add_header("Authorization", "Bearer " + token);
-        req_init.body = R"({"folder_id": null, "encrypted_name": "arquivo_duplicado_enc", "name_hash": "hash_duplicado_123", "size_bytes": 100, "total_chunks": 1})";
+        req_init.body = R"({"folder_id": null, "encrypted_name": "arquivo_duplicado_enc", "name_hash": "hash_duplicado_123", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 100, "total_chunks": 1})";
 
         crow::response res1 = router.handle_init_file_upload(req_init);
         REQUIRE(res1.code == 201);
@@ -133,7 +133,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         
         crow::request req_init_diff_folder;
         req_init_diff_folder.add_header("Authorization", "Bearer " + token);
-        req_init_diff_folder.body = R"({"folder_id": )" + std::to_string(fake_folder_id) + R"(, "encrypted_name": "arquivo_duplicado_enc", "name_hash": "hash_duplicado_123", "size_bytes": 100, "total_chunks": 1})";
+        req_init_diff_folder.body = R"({"folder_id": )" + std::to_string(fake_folder_id) + R"(, "encrypted_name": "arquivo_duplicado_enc", "name_hash": "hash_duplicado_123", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 100, "total_chunks": 1})";
         crow::response res3 = router.handle_init_file_upload(req_init_diff_folder);
         REQUIRE(res3.code == 201);
     }
@@ -142,7 +142,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         crow::request req_init;
         req_init.add_header("Authorization", "Bearer " + token);
         req_init.body = R"({"folder_id": )" + std::to_string(fake_folder_id)
-                      + R"(, "encrypted_name": "sparse_attack_file", "name_hash": "sparse_hash_999", "size_bytes": 1024, "total_chunks": 1})";
+                      + R"(, "encrypted_name": "sparse_attack_file", "name_hash": "sparse_hash_999", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 1024, "total_chunks": 1})";
 
         crow::response res_init = router.handle_init_file_upload(req_init);
         REQUIRE(res_init.code == 201);
@@ -167,7 +167,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         crow::request req_init;
         req_init.add_header("Authorization", "Bearer " + token);
         req_init.body = R"({"folder_id": )" + std::to_string(fake_folder_id)
-                      + R"(, "encrypted_name": "immutable_attack_file", "name_hash": "immutable_hash_999", "size_bytes": 1024, "total_chunks": 1})";
+                      + R"(, "encrypted_name": "immutable_attack_file", "name_hash": "immutable_hash_999", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 1024, "total_chunks": 1})";
 
         crow::response res_init = router.handle_init_file_upload(req_init);
         REQUIRE(res_init.code == 201);
@@ -198,7 +198,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         crow::request req_init;
         req_init.add_header("Authorization", "Bearer " + token);
         req_init.body = R"({"folder_id": )" + std::to_string(fake_folder_id)
-                      + R"(, "encrypted_name": "idor_file", "name_hash": "idor_hash_999", "size_bytes": 1024, "total_chunks": 1})";
+                      + R"(, "encrypted_name": "idor_file", "name_hash": "idor_hash_999", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 1024, "total_chunks": 1})";
 
         crow::response res_init = router.handle_init_file_upload(req_init);
         REQUIRE(res_init.code == 201);
@@ -227,7 +227,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         crow::request req_init;
         req_init.add_header("Authorization", "Bearer " + token);
         req_init.body = R"({"folder_id": )" + std::to_string(folder_b_id)
-                      + R"(, "encrypted_name": "idor_file_a", "name_hash": "idor_hash_a", "size_bytes": 1024, "total_chunks": 1})";
+                      + R"(, "encrypted_name": "idor_file_a", "name_hash": "idor_hash_a", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 1024, "total_chunks": 1})";
         
         crow::response res_init = router.handle_init_file_upload(req_init);
         REQUIRE((res_init.code == 403 || res_init.code == 404));
@@ -235,7 +235,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
     SECTION("Segurança: Bloquear valores negativos para size e chunks (Underflow)") {
         crow::request req_init;
         req_init.add_header("Authorization", "Bearer " + token);
-        req_init.body = R"({"folder_id": null, "encrypted_name": "underflow_file", "name_hash": "under_hash", "size_bytes": -1024, "total_chunks": -5})";
+        req_init.body = R"({"folder_id": null, "encrypted_name": "underflow_file", "name_hash": "under_hash", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": -1024, "total_chunks": -5})";
 
         crow::response res_init = router.handle_init_file_upload(req_init);
         REQUIRE(res_init.code == 400);

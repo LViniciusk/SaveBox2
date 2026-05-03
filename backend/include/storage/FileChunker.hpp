@@ -12,7 +12,7 @@
 
 class FileChunker {
 public:
-    static constexpr size_t MAX_CHUNK_SIZE = 50 * 1024 * 1024; // 50 MB
+    static constexpr size_t MAX_CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
     static constexpr size_t NUM_STRIPES = 256;
 
     explicit FileChunker(const std::string& temp_file_path);

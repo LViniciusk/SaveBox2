@@ -45,6 +45,7 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 folder_id BIGINT REFERENCES folders(id) ON DELETE CASCADE,
                 encrypted_name TEXT NOT NULL,
                 name_hash VARCHAR(128) NOT NULL,
+                encrypted_fdk TEXT NOT NULL,
                 physical_path TEXT UNIQUE,
                 size_bytes BIGINT NOT NULL DEFAULT 0,
                 total_chunks INTEGER NOT NULL DEFAULT 1,

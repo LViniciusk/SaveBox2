@@ -43,8 +43,8 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
         int folder_id = f1[0][0].as<int>();
 
 
-        auto file_res = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", 
-            pqxx::params{user_id, folder_id, "file_resume", "fhash_resume", 10, 1, true});
+        auto file_res = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", 
+            pqxx::params{user_id, folder_id, "file_resume", "fhash_resume", "mock_fdk", 10, 1, true});
 
         file_id = file_res[0][0].as<int>();
         
@@ -140,7 +140,7 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
 
         crow::response res = router.handle_download_file(req, file_id);
 
-        REQUIRE(res.get_header_value("Access-Control-Allow-Origin") == "*");
+        REQUIRE(res.get_header_value("Access-Control-Allow-Origin") == "http://localhost:3000");
 
         std::string expose_headers = res.get_header_value("Access-Control-Expose-Headers");
         REQUIRE(expose_headers.find("Content-Range") != std::string::npos);
@@ -148,7 +148,7 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
         REQUIRE(expose_headers.find("Accept-Ranges") != std::string::npos);
     }
 
-    SECTION("Proteção Anti-OOM (Arquivos > 50MB sem Range)") {
+    SECTION("Proteção Anti-OOM (Arquivos > 5MB sem Range)") {
         int file_big_id = 0;
 
         {
@@ -163,9 +163,9 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
             int folder_id = folder_res[0][0].as<int>();
 
             auto big_file_res = txn.exec(
-                "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-                pqxx::params{user_id, folder_id, "file_big_resume", "fhash_big_resume", 51 * 1024 * 1024 + 1, 1, true}
+                "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
+                pqxx::params{user_id, folder_id, "file_big_resume", "fhash_big_resume", "mock_fdk", 6 * 1024 * 1024 + 1, 1, true}
             );
 
             file_big_id = big_file_res[0][0].as<int>();
@@ -176,7 +176,7 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
         {
             std::ofstream out_big(big_file_path, std::ios::binary);
             REQUIRE(out_big.is_open());
-            out_big.seekp(51 * 1024 * 1024);
+            out_big.seekp(6 * 1024 * 1024);
             out_big.write("X", 1);
             out_big.close();
         }

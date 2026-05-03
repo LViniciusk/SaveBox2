@@ -8,6 +8,7 @@ FileManager::FileManager(DatabasePool& pool) : pool_(pool) {}
 
 int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id,
                               const std::string& enc_name, const std::string& name_hash,
+                              const std::string& encrypted_fdk,
                               uint64_t size_bytes, int total_chunks) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
@@ -56,9 +57,9 @@ int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id
              pqxx::params{size_bytes, user_id});
 
     auto result = txn.exec(
-        "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks) "
-        "VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
-        pqxx::params{user_id, folder_id, enc_name, name_hash, size_bytes, total_chunks}
+        "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+        pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, total_chunks}
     );
 
     int file_id = result[0][0].as<int>();
@@ -154,7 +155,7 @@ std::vector<crow::json::wvalue> FileManager::get_user_files_paginated(uint64_t u
     pqxx::work txn(*conn);
 
     auto result = txn.exec(
-        "SELECT id, folder_id, encrypted_name, size_bytes FROM files "
+        "SELECT id, folder_id, encrypted_name, size_bytes, encrypted_fdk FROM files "
         "WHERE user_id = $1 AND is_upload_complete = true AND deleted_at IS NULL "
         "ORDER BY id ASC LIMIT $2 OFFSET $3",
         pqxx::params{user_id, limit, offset}
@@ -173,6 +174,7 @@ std::vector<crow::json::wvalue> FileManager::get_user_files_paginated(uint64_t u
 
         item["encrypted_name"] = row[2].as<std::string>();
         item["size_bytes"] = row[3].as<int64_t>();
+        item["encrypted_fdk"] = row[4].as<std::string>();
         files.push_back(std::move(item));
     }
 
@@ -362,7 +364,7 @@ std::pair<uint64_t, std::string> FileManager::get_shared_file_info(const std::st
         "SELECT f.id, f.encrypted_name "
         "FROM shared_links s "
         "JOIN files f ON s.file_id = f.id "
-        "WHERE s.share_uuid = $1",
+        "WHERE s.share_uuid = $1 AND f.deleted_at IS NULL AND f.is_upload_complete = TRUE",
         pqxx::params{uuid}
     );
 

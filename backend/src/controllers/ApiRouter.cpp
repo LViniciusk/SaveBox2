@@ -2,6 +2,7 @@
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "storage/FileChunker.hpp"
+#include "utils.hpp"
 
 #include <optional>
 #include <fstream>
@@ -203,13 +204,14 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
 
         auto body = crow::json::load(req.body);
         if (!body || !body.has("folder_id") || !body.has("encrypted_name") ||
-            !body.has("name_hash") || !body.has("size_bytes") || !body.has("total_chunks")) {
+            !body.has("name_hash") || !body.has("encrypted_fdk") || !body.has("size_bytes") || !body.has("total_chunks")) {
             return crow::response(400, R"({"error":"JSON invalido"})");
         }
 
         std::optional<uint64_t> folder_id = std::nullopt;
         std::string enc_name;
         std::string name_hash;
+        std::string encrypted_fdk;
         int64_t raw_size_bytes;
         int64_t raw_total_chunks;
 
@@ -219,6 +221,7 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
             }
             enc_name    = body["encrypted_name"].s();
             name_hash   = body["name_hash"].s();
+            encrypted_fdk = body["encrypted_fdk"].s();
             raw_size_bytes = body["size_bytes"].i();
             raw_total_chunks = body["total_chunks"].i();
         } catch (const std::runtime_error&) {
@@ -239,7 +242,7 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
             return crow::response(400, R"({"error":"Quantidade de chunks incompativel com o tamanho do arquivo"})");
         }
 
-        int file_id = file_mgr_->init_upload(user_id, folder_id, enc_name, name_hash, size_bytes, total_chunks);
+        int file_id = file_mgr_->init_upload(user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, total_chunks);
 
         return crow::response(201, R"({"file_id":)" + std::to_string(file_id) + "}");
 
@@ -313,11 +316,12 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
     }
     uint64_t user_id = *user_id_opt;
 
-    auto set_streaming_headers = [](crow::response& res, size_t content_length, size_t total_size) {
+    const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "http://localhost:3000");
+    auto set_streaming_headers = [cors_origin](crow::response& res, size_t content_length, size_t total_size) {
         res.set_header("Content-Type", "application/octet-stream");
         res.set_header("Accept-Ranges", "bytes");
         res.set_header("Content-Length", std::to_string(content_length));
-        res.set_header("Access-Control-Allow-Origin", "*");
+        res.set_header("Access-Control-Allow-Origin", cors_origin);
         res.set_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
     };
 
@@ -327,7 +331,7 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
         size_t total_size = chunker_->get_file_size(file_id);
         std::string range_header = req.get_header_value("Range");
 
-        constexpr size_t MAX_FULL_DOWNLOAD_SIZE = 50 * 1024 * 1024; // 50MB
+        constexpr size_t MAX_FULL_DOWNLOAD_SIZE = 5 * 1024 * 1024; // 5MB
 
         if (range_header.empty()) {
             if (total_size > MAX_FULL_DOWNLOAD_SIZE) {
@@ -465,6 +469,13 @@ crow::response ApiRouter::handle_get_tree(const crow::request& req) {
         }
         if (offset_str != nullptr && std::string(offset_str) != "") {
             offset = std::stoi(offset_str);
+        }
+
+        if (limit > 100) {
+            limit = 100;
+        }
+        if (limit < 1) {
+            limit = 50;
         }
 
         auto folders = folder_mgr_->get_all_folders(user_id);
@@ -736,16 +747,103 @@ crow::response ApiRouter::handle_share_file(const crow::request& req, int file_i
 }
 
 crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const std::string& uuid) {
+    const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "http://localhost:3000");
+    auto set_share_headers = [cors_origin](crow::response& res, const std::string& encrypted_name, size_t content_length, size_t total_size) {
+        res.set_header("Content-Type", "application/octet-stream");
+        res.set_header("Accept-Ranges", "bytes");
+        res.set_header("Content-Length", std::to_string(content_length));
+        res.set_header("X-Encrypted-Name", encrypted_name);
+        res.set_header("Access-Control-Allow-Origin", cors_origin);
+        res.set_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, X-Encrypted-Name");
+    };
+
     try {
         auto [file_id, encrypted_name] = file_mgr_->get_shared_file_info(uuid);
-        
-        std::string content = chunker_->read_entire_file(file_id);
-        
-        crow::response res(200, content);
-        res.set_header("Content-Type", "application/octet-stream");
-        res.add_header("X-Encrypted-Name", encrypted_name);
-        
+
+        size_t total_size = chunker_->get_file_size(file_id);
+        std::string range_header = req.get_header_value("Range");
+
+        constexpr size_t MAX_FULL_DOWNLOAD_SIZE = 5 * 1024 * 1024; // 5MB
+
+        if (range_header.empty()) {
+            if (total_size > MAX_FULL_DOWNLOAD_SIZE) {
+                return crow::response(400, R"({"error":"Arquivo muito grande para download sincrono. Use Range requests."})");
+            }
+            std::string content = chunker_->read_entire_file(static_cast<uint64_t>(file_id));
+            crow::response res(200, content);
+            set_share_headers(res, encrypted_name, content.size(), total_size);
+            return res;
+        }
+
+        std::string prefix = "bytes=";
+        if (range_header.find(prefix) != 0) {
+            return crow::response(416);
+        }
+
+        std::string range_val = range_header.substr(prefix.length());
+        size_t dash_pos = range_val.find('-');
+        if (dash_pos == std::string::npos) {
+            return crow::response(416);
+        }
+
+        std::string start_str = range_val.substr(0, dash_pos);
+        std::string end_str = range_val.substr(dash_pos + 1);
+
+        size_t start = 0;
+        size_t end = total_size - 1;
+
+        try {
+            if (start_str.empty() && !end_str.empty()) {
+                size_t suffix_length = std::stoull(end_str);
+                if (suffix_length == 0) {
+                    crow::response res(416);
+                    res.set_header("Content-Range", "bytes */" + std::to_string(total_size));
+                    return res;
+                }
+                if (suffix_length >= total_size) {
+                    start = 0;
+                    end = total_size - 1;
+                } else {
+                    start = total_size - suffix_length;
+                    end = total_size - 1;
+                }
+            } else if (!start_str.empty()) {
+                start = std::stoull(start_str);
+                if (!end_str.empty()) {
+                    end = std::stoull(end_str);
+                }
+            }
+        } catch (const std::exception&) {
+            crow::response res(416);
+            res.set_header("Content-Range", "bytes */" + std::to_string(total_size));
+            return res;
+        }
+
+        if (start >= total_size) {
+            crow::response res(416);
+            res.set_header("Content-Range", "bytes */" + std::to_string(total_size));
+            return res;
+        }
+
+        if (end >= total_size) {
+            end = total_size - 1;
+        }
+
+        if (start > end) {
+            crow::response res(416);
+            res.set_header("Content-Range", "bytes */" + std::to_string(total_size));
+            return res;
+        }
+
+        size_t length = end - start + 1;
+        std::string data = chunker_->read_file_portion(file_id, start, length);
+
+        crow::response res(206, data);
+        res.set_header("Content-Range", "bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" + std::to_string(total_size));
+        set_share_headers(res, encrypted_name, data.size(), total_size);
+
         return res;
+
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Link invalido ou expirado"})");
@@ -757,11 +855,12 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
 
 
 void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app) {
+    const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "http://localhost:3000");
     auto& cors = app.get_middleware<crow::CORSHandler>();
     cors.global()
         .headers("Origin", "Content-Type", "Accept", "Authorization", "X-Encrypted-Name", "Range", "X-Chunk-Index")
         .methods("POST"_method, "GET"_method, "PUT"_method, "DELETE"_method, "OPTIONS"_method)
-        .origin("*");
+        .origin(cors_origin);
 
     CROW_ROUTE(app, "/api/docs")
     ([]() {
