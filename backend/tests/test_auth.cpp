@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "test_helpers.hpp"
 #include <string>
 

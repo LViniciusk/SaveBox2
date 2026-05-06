@@ -5,7 +5,7 @@
 #include <map>
 #include <cstdlib>
 
-#include "services/EmailService.hpp"
+#include "Services/EmailService.hpp"
 
 inline std::string get_secure_conn_string() {
     std::map<std::string, std::string> env_vars;

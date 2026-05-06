@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "services/StorageService.hpp"
+#include "Services/StorageService.hpp"
 #include <filesystem>
 #include <vector>
 
@@ -33,6 +33,16 @@ TEST_CASE("Storage Service - Escrita e Leitura Final no SSD", "[storage][io]") {
         
         REQUIRE(deleted == true);
         REQUIRE(std::filesystem::exists(base_path + relative_path) == false);
+    }
+
+    SECTION("Bloqueia path traversal fora do vault") {
+        std::string escape_path = "../../../../etc/passwd";
+
+        bool saved = storage.save_file(escape_path, fake_data);
+        REQUIRE(saved == false);
+
+        auto read_data = storage.read_file(escape_path);
+        REQUIRE(read_data.has_value() == false);
     }
 
     std::filesystem::remove_all(base_path);

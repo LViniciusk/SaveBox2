@@ -1,5 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
-#include "services/EmailService.hpp"
+#include "Services/EmailService.hpp"
 
 #include <cpr/cpr.h>
 #include <string>

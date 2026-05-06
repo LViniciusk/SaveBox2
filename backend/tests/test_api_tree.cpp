@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "test_helpers.hpp"
@@ -46,19 +46,19 @@ TEST_CASE("API Tree - Sincronização do Cofre", "[api][tree]") {
         int f1_b_id = f1_b[0][0].as<int>();
 
 
-        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7)", pqxx::params{user_a_id, f1_a_id, "file1_a", "fhash1", 100, 1, true});
-        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7)", pqxx::params{user_a_id, f2_a_id, "file2_a", "fhash2", 200, 1, true});
-        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7)", pqxx::params{user_a_id, f3_a_id, "file3_a", "fhash3", 300, 1, true});
+        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", pqxx::params{user_a_id, f1_a_id, "file1_a", "fhash1", "mock_fdk", 100, 1, true});
+        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", pqxx::params{user_a_id, f2_a_id, "file2_a", "fhash2", "mock_fdk", 200, 1, true});
+        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", pqxx::params{user_a_id, f3_a_id, "file3_a", "fhash3", "mock_fdk", 300, 1, true});
 
 
-        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7)", pqxx::params{
-            user_a_id, f1_a_id, "ghost_a", "fhash_ghost", 400, 1, false});
+        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", pqxx::params{
+            user_a_id, f1_a_id, "ghost_a", "fhash_ghost", "mock_fdk", 400, 1, false});
 
 
-        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7)", pqxx::params{
-            user_b_id, f1_b_id, "file1_b", "fhash_b1", 100, 1, true});
-        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7)", pqxx::params{
-            user_b_id, f1_b_id, "file2_b", "fhash_b2", 200, 1, true});
+        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", pqxx::params{
+            user_b_id, f1_b_id, "file1_b", "fhash_b1", "mock_fdk", 100, 1, true});
+        txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)", pqxx::params{
+            user_b_id, f1_b_id, "file2_b", "fhash_b2", "mock_fdk", 200, 1, true});
 
         txn.commit();
     }
@@ -121,6 +121,38 @@ TEST_CASE("API Tree - Sincronização do Cofre", "[api][tree]") {
         REQUIRE(body["folders"].size() == 3);
         
         REQUIRE(body["files"].size() == 1);
+    }
+
+    SECTION("Clamp de paginacao em limite elevado") {
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+
+            for (int i = 0; i < 120; ++i) {
+                std::string enc_name = "file_extra_" + std::to_string(i);
+                std::string name_hash = "hash_extra_" + std::to_string(i);
+
+                txn.exec(
+                    "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+                    "VALUES ($1, NULL, $2, $3, $4, $5, $6, $7)",
+                    pqxx::params{user_a_id, enc_name, name_hash, "mock_fdk", 10, 1, true}
+                );
+            }
+
+            txn.commit();
+        }
+
+        crow::request req;
+        req.url = "/tree?file_limit=9999999&file_offset=0";
+        req.url_params = crow::query_string(req.url.substr(req.url.find('?')));
+        req.add_header("Authorization", "Bearer " + token_a);
+
+        crow::response res = router.handle_get_tree(req);
+        REQUIRE(res.code == 200);
+
+        auto body = crow::json::load(res.body);
+        REQUIRE(body.has("files"));
+        REQUIRE(body["files"].size() <= 100);
     }
 
     {

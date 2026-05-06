@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "test_helpers.hpp"
@@ -46,7 +46,7 @@ TEST_CASE("API Update - Mover e Renomear Itens", "[api][update][files][folders]"
         folder_a_sub_id = r_s_a[0][0].as<int>();
 
 
-        auto r_fi_a = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", pqxx::params{user_a_id, folder_a_root_id, "file_a_1", "hash_fa1", 100, 1, true});
+        auto r_fi_a = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_root_id, "file_a_1", "hash_fa1", "mock_fdk", 100, 1, true});
 
         file_a_1_id = r_fi_a[0][0].as<int>();
 
@@ -56,7 +56,7 @@ TEST_CASE("API Update - Mover e Renomear Itens", "[api][update][files][folders]"
         folder_b_root_id = r_f_b[0][0].as<int>();
 
 
-        auto r_fi_b = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", pqxx::params{user_b_id, folder_b_root_id, "file_b_1", "hash_fb1", 200, 1, true});
+        auto r_fi_b = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_b_id, folder_b_root_id, "file_b_1", "hash_fb1", "mock_fdk", 200, 1, true});
 
         file_b_1_id = r_fi_b[0][0].as<int>();
 
@@ -184,6 +184,21 @@ TEST_CASE("API Update - Mover e Renomear Itens", "[api][update][files][folders]"
 
         crow::response res = router.handle_update_folder(req, folder_a_sub_id);
         REQUIRE(res.code == 403);
+    }
+
+    SECTION("Arquivos: Segurança - DoS via JSON corrompido") {
+        crow::request req;
+        req.url = "/files/" + std::to_string(file_a_1_id);
+        req.method = crow::HTTPMethod::Put;
+        req.add_header("Authorization", "Bearer " + token_a);
+        
+        crow::json::wvalue body;
+        body["encrypted_name"] = 123;
+        body["folder_id"] = "texto";
+        req.body = body.dump();
+
+        crow::response res = router.handle_update_file(req, file_a_1_id);
+        REQUIRE(res.code == 400);
     }
 
     SECTION("Pastas: Loop Infinito (Mover para dentro de si mesma)") {

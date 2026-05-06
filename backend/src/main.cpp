@@ -1,7 +1,7 @@
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabaseMigration.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "storage/GarbageCollector.hpp"

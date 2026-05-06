@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "storage/FileChunker.hpp"
@@ -56,7 +56,7 @@ TEST_CASE("API Delete Folder - Exclusao Recursiva de Arvore", "[api][delete][fol
 
         folder_a_root_id = r_fa_root[0][0].as<int>();
 
-        auto r_fi_a1 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'file_a_1', 'ha1', 10, 1, true) RETURNING id", pqxx::params{user_a_id, folder_a_root_id});
+        auto r_fi_a1 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'file_a_1', 'ha1', 'mock_fdk', 10, 1, true) RETURNING id", pqxx::params{user_a_id, folder_a_root_id});
 
         file_a_1_id = r_fi_a1[0][0].as<int>();
 
@@ -64,7 +64,7 @@ TEST_CASE("API Delete Folder - Exclusao Recursiva de Arvore", "[api][delete][fol
 
         folder_a_sub1_id = r_fa_sub1[0][0].as<int>();
 
-        auto r_fi_a2 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'file_a_2', 'ha2', 10, 1, true) RETURNING id", pqxx::params{user_a_id, folder_a_sub1_id});
+        auto r_fi_a2 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'file_a_2', 'ha2', 'mock_fdk', 10, 1, true) RETURNING id", pqxx::params{user_a_id, folder_a_sub1_id});
 
         file_a_2_id = r_fi_a2[0][0].as<int>();
 
@@ -72,7 +72,7 @@ TEST_CASE("API Delete Folder - Exclusao Recursiva de Arvore", "[api][delete][fol
 
         folder_a_sub2_id = r_fa_sub2[0][0].as<int>();
 
-        auto r_fi_a3 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'file_a_3', 'ha3', 10, 1, true) RETURNING id", pqxx::params{user_a_id, folder_a_sub2_id});
+        auto r_fi_a3 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'file_a_3', 'ha3', 'mock_fdk', 10, 1, true) RETURNING id", pqxx::params{user_a_id, folder_a_sub2_id});
 
         file_a_3_id = r_fi_a3[0][0].as<int>();
 
@@ -80,7 +80,7 @@ TEST_CASE("API Delete Folder - Exclusao Recursiva de Arvore", "[api][delete][fol
 
         folder_b_root_id = r_fb_root[0][0].as<int>();
 
-        auto r_fi_b1 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'file_b_1', 'hb1', 10, 1, true) RETURNING id", pqxx::params{user_b_id, folder_b_root_id});
+        auto r_fi_b1 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'file_b_1', 'hb1', 'mock_fdk', 10, 1, true) RETURNING id", pqxx::params{user_b_id, folder_b_root_id});
 
         file_b_1_id = r_fi_b1[0][0].as<int>();
 

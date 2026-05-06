@@ -3,7 +3,7 @@
 #include "crow_all.h"
 #include "middlewares/RateLimitMiddleware.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 
 class FileManager;
 class FolderManager;

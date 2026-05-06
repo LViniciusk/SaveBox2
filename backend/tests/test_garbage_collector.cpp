@@ -44,7 +44,7 @@ TEST_CASE("Garbage Collector - Regras de Negocio", "[gc][cleanup]") {
 
         std::string del_val = is_in_trash ? "NOW()" : "NULL";
 
-        std::string query = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, physical_path, size_bytes, is_upload_complete, deleted_at) VALUES (" + std::to_string(user_id) + ", " + std::to_string(f_id) + ", 'name', 'hash_" + std::to_string(rand()) + "', 'dummy_path_" + std::to_string(rand()) + "', 1024, " + (is_complete ? "TRUE" : "FALSE") + ", " + del_val + ") RETURNING id;";
+        std::string query = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, physical_path, size_bytes, is_upload_complete, deleted_at) VALUES (" + std::to_string(user_id) + ", " + std::to_string(f_id) + ", 'name', 'hash_" + std::to_string(rand()) + "', 'mock_fdk', 'dummy_path_" + std::to_string(rand()) + "', 1024, " + (is_complete ? "TRUE" : "FALSE") + ", " + del_val + ") RETURNING id;";
 
         auto res = W.exec(query);
 

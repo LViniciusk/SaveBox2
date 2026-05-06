@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "test_helpers.hpp"
@@ -173,7 +173,7 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     SECTION("7. Edge Case - Restored Item Collision") {
         crow::request req_create_a;
         req_create_a.add_header("Authorization", "Bearer " + valid_token);
-        req_create_a.body = R"({"folder_id": null, "encrypted_name": "enc_file_a", "name_hash": "hash_a", "size_bytes": 100, "total_chunks": 1})";
+        req_create_a.body = R"({"folder_id": null, "encrypted_name": "enc_file_a", "name_hash": "hash_a", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 100, "total_chunks": 1})";
         crow::response res_create_a = router.handle_init_file_upload(req_create_a);
         REQUIRE(res_create_a.code == 201);
         int file_a_id = crow::json::load(res_create_a.body)["file_id"].i();

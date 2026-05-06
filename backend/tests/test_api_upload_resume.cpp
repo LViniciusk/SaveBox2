@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "storage/FileChunker.hpp"
@@ -46,17 +46,17 @@ TEST_CASE("API Upload Resume - Listagem de Chunks Enviados", "[api][upload][resu
         int folder_a_id = res_folder[0][0].as<int>();
 
 
-        auto res_file1 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_comp", "fc", 1000, 5, true});
+        auto res_file1 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_comp", "fc", "mock_fdk", 1000, 5, true});
 
         file_complete_id = res_file1[0][0].as<int>();
 
 
-        auto res_file2 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_empty", "fe", 1000, 5, false});
+        auto res_file2 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_empty", "fe", "mock_fdk", 1000, 5, false});
 
         file_empty_id = res_file2[0][0].as<int>();
 
 
-        auto res_file3 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_part", "fp", 1000, 5, false});
+        auto res_file3 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_part", "fp", "mock_fdk", 1000, 5, false});
 
         file_partial_id = res_file3[0][0].as<int>();
 

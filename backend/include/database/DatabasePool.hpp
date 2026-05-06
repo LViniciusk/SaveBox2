@@ -46,5 +46,6 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::queue<std::unique_ptr<pqxx::connection>> connections_;
+    std::string connection_string_;
     std::atomic<bool> is_shutting_down_{false};
 };

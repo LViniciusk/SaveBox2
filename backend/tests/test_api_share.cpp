@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FileManager.hpp"
 #include "database/FolderManager.hpp"
 #include "storage/FileChunker.hpp"
@@ -42,8 +42,8 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         user_b_id = res_b[0][0].as<int>();
 
         auto res_file = txn.exec(
-            "INSERT INTO files (user_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
-            "VALUES ($1, 'file_share', 'hash_share', 15, 1, true) RETURNING id",
+            "INSERT INTO files (user_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+            "VALUES ($1, 'file_share', 'hash_share', 'mock_fdk', 15, 1, true) RETURNING id",
             pqxx::params{user_a_id}
         );
         file_a_1_id = res_file[0][0].as<int>();
@@ -114,6 +114,36 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         REQUIRE(res.get_header_value("Content-Type") == "application/octet-stream");
     }
 
+    SECTION("Link compartilhado invalida apos soft delete") {
+        crow::request req_share;
+        req_share.url = "/files/" + std::to_string(file_a_1_id) + "/share";
+        req_share.method = crow::HTTPMethod::Post;
+        req_share.add_header("Authorization", "Bearer " + token_a);
+
+        crow::response res_share = router.handle_share_file(req_share, file_a_1_id);
+        REQUIRE(res_share.code == 200);
+
+        auto body = crow::json::load(res_share.body);
+        REQUIRE(body);
+        REQUIRE(body.has("share_uuid"));
+        std::string generated_uuid = body["share_uuid"].s();
+
+        crow::request req_delete;
+        req_delete.url = "/files/" + std::to_string(file_a_1_id);
+        req_delete.method = crow::HTTPMethod::Delete;
+        req_delete.add_header("Authorization", "Bearer " + token_a);
+
+        crow::response res_delete = router.handle_delete_file(req_delete, file_a_1_id);
+        REQUIRE(res_delete.code == 200);
+
+        crow::request req_get;
+        req_get.url = "/share/" + generated_uuid;
+        req_get.method = crow::HTTPMethod::Get;
+
+        crow::response res_get = router.handle_get_shared_file(req_get, generated_uuid);
+        REQUIRE(res_get.code == 404);
+    }
+
     SECTION("Acessar Link Público: UUID Invalido") {
         crow::request req;
         req.url = "/share/uuid-que-nao-existe-jamais";
@@ -121,6 +151,82 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
 
         crow::response res = router.handle_get_shared_file(req, "uuid-que-nao-existe-jamais");
         REQUIRE(res.code == 404);
+    }
+
+    SECTION("Download Parcial via Link Público (Range: bytes=0-4)") {
+        std::string partial_uuid = "test-uuid-partial-range";
+
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            txn.exec("INSERT INTO shared_links (file_id, share_uuid) VALUES ($1, $2)",
+                     pqxx::params{file_a_1_id, partial_uuid});
+            txn.commit();
+        }
+
+        crow::request req;
+        req.url = "/share/" + partial_uuid;
+        req.method = crow::HTTPMethod::Get;
+        req.add_header("Range", "bytes=0-4");
+
+        crow::response res = router.handle_get_shared_file(req, partial_uuid);
+        REQUIRE(res.code == 206);
+        REQUIRE(res.body.size() == 5);
+        REQUIRE(res.body == "Conte");
+        REQUIRE(res.get_header_value("Content-Range").find("bytes 0-4/") != std::string::npos);
+        REQUIRE(res.get_header_value("Accept-Ranges") == "bytes");
+        REQUIRE(res.get_header_value("Access-Control-Allow-Origin") == "http://localhost:3000");
+
+        std::string expose = res.get_header_value("Access-Control-Expose-Headers");
+        REQUIRE(expose.find("Content-Range") != std::string::npos);
+        REQUIRE(expose.find("X-Encrypted-Name") != std::string::npos);
+    }
+
+    SECTION("Proteção Anti-OOM via Link Público (Arquivo > 5MB sem Range)") {
+        int file_big_id = 0;
+        std::string oom_uuid = "test-uuid-oom-guard";
+
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+
+            auto big_file_res = txn.exec(
+                "INSERT INTO files (user_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+                pqxx::params{user_a_id, "file_share_big", "hash_share_big", "mock_fdk", 6 * 1024 * 1024 + 1, 1, true}
+            );
+            file_big_id = big_file_res[0][0].as<int>();
+
+            txn.exec("INSERT INTO shared_links (file_id, share_uuid) VALUES ($1, $2)",
+                     pqxx::params{file_big_id, oom_uuid});
+            txn.commit();
+        }
+
+        std::string big_file_path = test_dir + std::to_string(file_big_id) + ".dat";
+        {
+            std::ofstream out_big(big_file_path, std::ios::binary);
+            REQUIRE(out_big.is_open());
+            out_big.seekp(6 * 1024 * 1024);
+            out_big.write("X", 1);
+            out_big.close();
+        }
+
+        // Sem Range → deve bloquear com 400
+        crow::request req_no_range;
+        req_no_range.url = "/share/" + oom_uuid;
+        req_no_range.method = crow::HTTPMethod::Get;
+
+        crow::response res_no_range = router.handle_get_shared_file(req_no_range, oom_uuid);
+        REQUIRE(res_no_range.code == 400);
+
+        // Com Range → deve funcionar normalmente com 206
+        crow::request req_with_range;
+        req_with_range.url = "/share/" + oom_uuid;
+        req_with_range.method = crow::HTTPMethod::Get;
+        req_with_range.add_header("Range", "bytes=0-100");
+
+        crow::response res_with_range = router.handle_get_shared_file(req_with_range, oom_uuid);
+        REQUIRE(res_with_range.code == 206);
     }
 
     {

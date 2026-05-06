@@ -1,4 +1,32 @@
-#include "services/StorageService.hpp"
+#include "Services/StorageService.hpp"
+
+namespace {
+
+    std::optional<std::filesystem::path> resolve_safe_path(
+        const std::filesystem::path& base, const std::string& relative_path) {
+        std::error_code ec;
+        std::filesystem::path base_abs = std::filesystem::absolute(base, ec);
+        if (ec) {
+            return std::nullopt;
+        }
+
+        base_abs = base_abs.lexically_normal();
+        std::filesystem::path candidate = (base_abs / relative_path).lexically_normal();
+
+        const std::filesystem::path rel = candidate.lexically_relative(base_abs);
+        if (rel.empty()) {
+            return std::nullopt;
+        }
+
+        auto rel_it = rel.begin();
+        if (rel_it != rel.end() && *rel_it == "..") {
+            return std::nullopt;
+        }
+
+        return candidate;
+    }
+
+}
 
 StorageService::StorageService(const std::string& base_vault_path)
     : base_vault_path_(base_vault_path) {}
@@ -6,7 +34,12 @@ StorageService::StorageService(const std::string& base_vault_path)
 bool StorageService::save_file(const std::string& relative_path,
                                const std::vector<uint8_t>& data) {
     try {
-        std::filesystem::path full_path = base_vault_path_ / relative_path;
+        auto full_path_opt = resolve_safe_path(base_vault_path_, relative_path);
+        if (!full_path_opt.has_value()) {
+            return false;
+        }
+
+        std::filesystem::path full_path = *full_path_opt;
 
         std::filesystem::create_directories(full_path.parent_path());
 
@@ -26,7 +59,12 @@ bool StorageService::save_file(const std::string& relative_path,
 
 std::optional<std::vector<uint8_t>> StorageService::read_file(const std::string& relative_path) {
     try {
-        std::filesystem::path full_path = base_vault_path_ / relative_path;
+        auto full_path_opt = resolve_safe_path(base_vault_path_, relative_path);
+        if (!full_path_opt.has_value()) {
+            return std::nullopt;
+        }
+
+        std::filesystem::path full_path = *full_path_opt;
 
         if (!std::filesystem::exists(full_path)) {
             return std::nullopt;
@@ -52,7 +90,12 @@ std::optional<std::vector<uint8_t>> StorageService::read_file(const std::string&
 
 bool StorageService::delete_file(const std::string& relative_path) {
     try {
-        std::filesystem::path full_path = base_vault_path_ / relative_path;
+        auto full_path_opt = resolve_safe_path(base_vault_path_, relative_path);
+        if (!full_path_opt.has_value()) {
+            return false;
+        }
+
+        std::filesystem::path full_path = *full_path_opt;
         return std::filesystem::remove(full_path);
     } catch (const std::exception&) {
         return false;

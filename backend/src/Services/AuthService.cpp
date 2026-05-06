@@ -1,7 +1,8 @@
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/EmailService.hpp"
+#include "Services/EmailService.hpp"
 #include "utils.hpp"
+#include "utils/utils.hpp"
 
 #include <jwt-cpp/jwt.h>
 #include <sodium.h>
@@ -10,15 +11,6 @@
 #include <cstring>
 #include <vector>
 #include <chrono>
-
-namespace {
-
-void set_uuid_v4_bits(unsigned char* bytes) {
-    bytes[6] = static_cast<unsigned char>((bytes[6] & 0x0F) | 0x40);
-    bytes[8] = static_cast<unsigned char>((bytes[8] & 0x3F) | 0x80);
-}
-
-}  
 
 AuthService::AuthService(const std::string& pepper, const std::string& jwt_secret,
                          const std::string& resend_api_key, const std::string& validation_api_key)
@@ -127,22 +119,7 @@ bool AuthService::verify_password(const std::string& plain_password, const std::
 }
 
 std::string AuthService::generate_uuid_v4() const {
-    unsigned char bytes[16];
-    randombytes_buf(bytes, sizeof(bytes));
-    set_uuid_v4_bits(bytes);
-
-    char uuid_str[37];
-    std::snprintf(
-        uuid_str, sizeof(uuid_str),
-        "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5],
-        bytes[6], bytes[7],
-        bytes[8], bytes[9],
-        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
-    );
-
-    return std::string(uuid_str);
+    return UuidUtils::generate_uuid_v4();
 }
 
 int AuthService::register_user(const std::string& username, const std::string& email, const std::string& password, const std::string& ip_address) {

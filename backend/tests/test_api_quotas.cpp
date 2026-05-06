@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "storage/FileChunker.hpp"
@@ -99,6 +99,7 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
             init_body["folder_id"] = folder_id;
             init_body["encrypted_name"] = "test.txt";
             init_body["name_hash"] = "thash_" + std::to_string(rand());
+            init_body["encrypted_fdk"] = "mock_fdk";
             init_body["size_bytes"] = 1048576; 
             init_body["total_chunks"] = 1;
             
@@ -122,8 +123,9 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
             init_body["folder_id"] = folder_id;
             init_body["encrypted_name"] = "test2.txt";
             init_body["name_hash"] = "thash2_" + std::to_string(rand());
+            init_body["encrypted_fdk"] = "mock_fdk";
             init_body["size_bytes"] = 9 * 1024 * 1024; 
-            init_body["total_chunks"] = 1;
+            init_body["total_chunks"] = 2;
             
             req.body = init_body.dump();
             
@@ -145,6 +147,7 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
             init_body["folder_id"] = folder_id;
             init_body["encrypted_name"] = "test3.txt";
             init_body["name_hash"] = "thash3_" + std::to_string(rand());
+            init_body["encrypted_fdk"] = "mock_fdk";
             init_body["size_bytes"] = 1; 
             init_body["total_chunks"] = 1;
             
@@ -168,6 +171,7 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
             init_body["folder_id"] = folder_id;
             init_body["encrypted_name"] = "test4.txt";
             init_body["name_hash"] = "thash4_" + std::to_string(rand());
+            init_body["encrypted_fdk"] = "mock_fdk";
             init_body["size_bytes"] = 10000000000000ULL; 
             init_body["total_chunks"] = 1;
             
@@ -187,7 +191,7 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
         {
             auto conn = pool.acquire_connection();
             pqxx::work txn(*conn);
-            std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, physical_path, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'f', 'h', 'p', $3, 1, TRUE) RETURNING id";
+            std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, physical_path, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'f', 'h', 'mock_fdk', 'p', $3, 1, TRUE) RETURNING id";
             auto res = txn.exec(q, pqxx::params{user_id, folder_id, 500 * 1024 * 1024});
             file_id = res[0][0].as<int>();
             txn.commit();
@@ -224,7 +228,7 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
         {
             auto conn = pool.acquire_connection();
             pqxx::work txn(*conn);
-            std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, physical_path, size_bytes, total_chunks, is_upload_complete, deleted_at) VALUES ($1, $2, 'f', 'h', 'p_test1', $3, 1, TRUE, NOW()) RETURNING id";
+            std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, physical_path, size_bytes, total_chunks, is_upload_complete, deleted_at) VALUES ($1, $2, 'f', 'h', 'mock_fdk', 'p_test1', $3, 1, TRUE, NOW()) RETURNING id";
             auto res = txn.exec(q, pqxx::params{user_id, folder_id, 500 * 1024 * 1024});
             file_id = res[0][0].as<int>();
             txn.commit();
@@ -250,7 +254,7 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
                 auto res_f = txn.exec("INSERT INTO folders (user_id, encrypted_name, name_hash) VALUES (" + std::to_string(user_id) + ", 'f_enc2', 'hash_f2') RETURNING id");
                 sub_folder = res_f[0][0].as<int>();
 
-                std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, physical_path, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'f2', 'h2', 'p_test2', $3, 1, TRUE) RETURNING id";
+                std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, physical_path, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'f2', 'h2', 'mock_fdk', 'p_test2', $3, 1, TRUE) RETURNING id";
                 auto res_f2 = txn.exec(q, pqxx::params{user_id, sub_folder, 100 * 1024 * 1024});
                 file2 = res_f2[0][0].as<int>();
                 txn.commit();
@@ -277,7 +281,7 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
         {
             auto conn = pool.acquire_connection();
             pqxx::work txn(*conn);
-            std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, physical_path, size_bytes, total_chunks, is_upload_complete, deleted_at) VALUES ($1, $2, 'f', 'h', 'p_testgc', $3, 1, TRUE, NOW() - INTERVAL '31 days') RETURNING id";
+            std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, physical_path, size_bytes, total_chunks, is_upload_complete, deleted_at) VALUES ($1, $2, 'f', 'h', 'mock_fdk', 'p_testgc', $3, 1, TRUE, NOW() - INTERVAL '31 days') RETURNING id";
             auto res = txn.exec(q, pqxx::params{user_id, folder_id, 200000ULL});
             file_id = res[0][0].as<int>();
             txn.commit();

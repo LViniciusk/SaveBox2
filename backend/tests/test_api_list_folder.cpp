@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "storage/FileChunker.hpp"
@@ -67,15 +67,15 @@ TEST_CASE("API de Listagem de Diretórios", "[api][list_folder]") {
         folder_3_id = f3[0][0].as<int>();
 
         auto file1 = txn.exec(
-            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
-            "VALUES ($1, $2, 'enc_file_ok', 'hash_file_ok', 1024, 1, true) RETURNING id",
+            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+            "VALUES ($1, $2, 'enc_file_ok', 'hash_file_ok', 'mock_fdk', 1024, 1, true) RETURNING id",
             pqxx::params{user_a_id, folder_1_id}
         );
         file_complete_id = file1[0][0].as<int>();
 
         auto file2 = txn.exec(
-            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
-            "VALUES ($1, $2, 'enc_file_ghost', 'hash_file_ghost', 2048, 3, false) RETURNING id",
+            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+            "VALUES ($1, $2, 'enc_file_ghost', 'hash_file_ghost', 'mock_fdk', 2048, 3, false) RETURNING id",
             pqxx::params{user_a_id, folder_1_id}
         );
         file_ghost_id = file2[0][0].as<int>();

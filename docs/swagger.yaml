@@ -1,0 +1,830 @@
+openapi: 3.0.3
+info:
+  title: SaveBox API
+  description: API do SaveBox
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:8080
+    description: Servidor local
+
+tags:
+  - name: Sistema
+  - name: Documentação
+  - name: Autenticação
+  - name: Quota
+  - name: Pastas
+  - name: Arquivos
+  - name: Árvore
+  - name: Compartilhamento
+  - name: Lixeira
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: online
+
+    RegisterRequest:
+      type: object
+      required: [username, email, password]
+      properties:
+        username:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        token:
+          type: string
+
+    CreateFolderRequest:
+      type: object
+      required: [encrypted_name, name_hash]
+      properties:
+        parent_id:
+          type: integer
+          nullable: true
+          format: int64
+        encrypted_name:
+          type: string
+        name_hash:
+          type: string
+
+    CreateFolderResponse:
+      type: object
+      properties:
+        message:
+          type: string
+        id:
+          type: integer
+          format: int64
+
+    InitUploadRequest:
+      type: object
+      required: [folder_id, encrypted_name, name_hash, size_bytes, total_chunks]
+      properties:
+        folder_id:
+          type: integer
+          format: int64
+          nullable: true
+        encrypted_name:
+          type: string
+        name_hash:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        total_chunks:
+          type: integer
+
+    InitUploadResponse:
+      type: object
+      properties:
+        file_id:
+          type: integer
+
+    ChunkUploadStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [uploading, completed]
+
+    UploadedChunksResponse:
+      type: object
+      properties:
+        uploaded_chunks:
+          type: array
+          items:
+            type: integer
+
+    GenericMessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+
+    ShareResponse:
+      type: object
+      properties:
+        share_uuid:
+          type: string
+
+paths:
+  /api/docs:
+    get:
+      tags: [Documentação]
+      summary: Interface Swagger UI
+      description: Retorna o HTML com a interface Swagger UI.
+      responses:
+        '200':
+          description: HTML da documentação
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /api/docs/swagger.yaml:
+    get:
+      tags: [Documentação]
+      summary: Especificação OpenAPI em YAML
+      description: Retorna o arquivo swagger.yaml servido pela API.
+      responses:
+        '200':
+          description: Especificação YAML
+          content:
+            text/yaml:
+              schema:
+                type: string
+        '404':
+          description: Arquivo não encontrado
+
+  /health:
+    get:
+      tags: [Sistema]
+      summary: Health check da API
+      responses:
+        '200':
+          description: API online
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /register:
+    post:
+      tags: [Autenticação]
+      summary: Cadastro de usuário
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Usuário criado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '400':
+          description: Dados inválidos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Usuário já existe
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Limite de criação de contas por IP
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erro interno
+
+  /login:
+    post:
+      tags: [Autenticação]
+      summary: Login e emissão de JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login efetuado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: JSON inválido
+        '401':
+          description: Credenciais inválidas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Conta não verificada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erro interno
+
+  /verify:
+    get:
+      tags: [Autenticação]
+      summary: Verifica e ativa conta por token
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Conta ativada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '400':
+          description: Token ausente, inválido ou expirado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erro interno
+
+  /users/me/quota:
+    get:
+      tags: [Quota]
+      summary: Obtém quota do usuário autenticado
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Quota retornada com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /folders:
+    post:
+      tags: [Pastas]
+      summary: Cria uma pasta
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateFolderRequest'
+      responses:
+        '201':
+          description: Pasta criada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateFolderResponse'
+        '400':
+          description: JSON inválido
+        '401':
+          description: Token ausente ou inválido
+        '409':
+          description: Pasta já existe no mesmo diretório
+        '500':
+          description: Erro interno
+
+  /folders/{folderId}/contents:
+    get:
+      tags: [Pastas]
+      summary: Lista conteúdo de uma pasta
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Conteúdo da pasta
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Pasta não encontrada
+        '500':
+          description: Erro interno
+
+  /folders/{folderId}:
+    delete:
+      tags: [Pastas]
+      summary: Move pasta para a lixeira
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Pasta movida para lixeira
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
+        '403':
+          description: Proibido
+        '404':
+          description: Pasta não encontrada
+        '500':
+          description: Erro interno
+    put:
+      tags: [Pastas]
+      summary: Atualiza nome e/ou pai da pasta
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                encrypted_name:
+                  type: string
+                name_hash:
+                  type: string
+                parent_id:
+                  type: integer
+                  nullable: true
+      responses:
+        '200':
+          description: Pasta atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Requisição inválida
+        '401':
+          description: Token ausente ou inválido
+        '403':
+          description: Proibido
+        '404':
+          description: Não encontrada
+        '500':
+          description: Erro interno
+
+  /folders/{folderId}/restore:
+    post:
+      tags: [Lixeira]
+      summary: Restaura pasta da lixeira
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Pasta restaurada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Pasta não encontrada na lixeira
+        '409':
+          description: Conflito no destino
+        '500':
+          description: Erro interno
+
+  /files:
+    post:
+      tags: [Arquivos]
+      summary: Inicializa upload de arquivo em chunks
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InitUploadRequest'
+      responses:
+        '201':
+          description: Upload inicializado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InitUploadResponse'
+        '400':
+          description: JSON inválido
+        '401':
+          description: Token ausente ou inválido
+        '402':
+          description: Quota excedida
+        '409':
+          description: Arquivo já existe na pasta
+        '500':
+          description: Erro interno
+
+  /files/{fileId}/chunks:
+    post:
+      tags: [Arquivos]
+      summary: Envia um chunk de arquivo
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: X-Chunk-Index
+          in: header
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Chunk processado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChunkUploadStatus'
+        '400':
+          description: Cabeçalho X-Chunk-Index ausente
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /files/{fileId}/uploaded-chunks:
+    get:
+      tags: [Arquivos]
+      summary: Lista chunks já enviados de um upload
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Chunks enviados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadedChunksResponse'
+        '400':
+          description: Upload já finalizado
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Arquivo não encontrado
+        '500':
+          description: Erro interno
+
+  /files/{fileId}/download:
+    get:
+      tags: [Arquivos]
+      summary: Download de arquivo (com suporte a Range)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: Range
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Exemplo bytes=0-1023
+      responses:
+        '200':
+          description: Conteúdo completo
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '206':
+          description: Conteúdo parcial
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Upload incompleto
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Arquivo não encontrado
+        '416':
+          description: Range inválido
+        '500':
+          description: Erro interno
+
+  /files/{fileId}:
+    delete:
+      tags: [Arquivos]
+      summary: Move arquivo para a lixeira
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Arquivo movido para lixeira
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Arquivo não encontrado
+        '500':
+          description: Erro interno
+    put:
+      tags: [Arquivos]
+      summary: Atualiza nome e/ou pasta de um arquivo
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                encrypted_name:
+                  type: string
+                name_hash:
+                  type: string
+                folder_id:
+                  type: integer
+                  nullable: true
+      responses:
+        '200':
+          description: Arquivo atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Requisição inválida
+        '401':
+          description: Token ausente ou inválido
+        '403':
+          description: Proibido
+        '404':
+          description: Não encontrado
+        '409':
+          description: Arquivo com nome duplicado na pasta
+        '500':
+          description: Erro interno
+
+  /files/{fileId}/share:
+    post:
+      tags: [Compartilhamento]
+      summary: Gera link compartilhável para arquivo
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: UUID de compartilhamento gerado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShareResponse'
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Não encontrado ou acesso negado
+        '500':
+          description: Erro interno
+
+  /share/{uuid}:
+    get:
+      tags: [Compartilhamento]
+      summary: Baixa arquivo por link público
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Arquivo retornado
+          headers:
+            X-Encrypted-Name:
+              description: Nome criptografado do arquivo
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Link inválido ou expirado
+        '500':
+          description: Erro interno
+
+  /tree:
+    get:
+      tags: [Árvore]
+      summary: Retorna árvore de pastas e arquivos paginados
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: file_limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+        - name: file_offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Estrutura retornada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folders:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+        '400':
+          description: Parâmetros de paginação inválidos
+        '401':
+          description: Token ausente ou inválido
+
+  /trash:
+    get:
+      tags: [Lixeira]
+      summary: Lista itens na lixeira do usuário
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Conteúdo da lixeira
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /trash/empty:
+    delete:
+      tags: [Lixeira]
+      summary: Esvazia a lixeira
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lixeira esvaziada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /files/{fileId}/restore:
+    post:
+      tags: [Lixeira]
+      summary: Restaura arquivo da lixeira
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Arquivo restaurado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Arquivo não encontrado na lixeira
+        '409':
+          description: Conflito no destino
+        '500':
+          description: Erro interno

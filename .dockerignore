@@ -1,0 +1,6 @@
+.git
+.github
+.ccache
+backend/build
+backend/.vscode
+savebox_storage

@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "storage/FileChunker.hpp"
@@ -51,33 +51,33 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
 
 
         auto res_f1 = txn.exec(
-            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", 
-            pqxx::params{user_a_id, folder_a_id, "file_1_ok", "hash1", 100, 1, true});
+            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", 
+            pqxx::params{user_a_id, folder_a_id, "file_1_ok", "hash1", "mock_fdk", 100, 1, true});
 
         file_1_ok_id = res_f1[0][0].as<int>();
 
 
         auto res_f2 = txn.exec(
-            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", 
-            pqxx::params{user_a_id, folder_a_id, "file_2_inc", "hash2", 200, 2, false});
+            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", 
+            pqxx::params{user_a_id, folder_a_id, "file_2_inc", "hash2", "mock_fdk", 200, 2, false});
 
         file_2_incompleto_id = res_f2[0][0].as<int>();
 
 
         auto res_f3 = txn.exec(
-            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", 
-            pqxx::params{user_a_id, folder_a_id, "file_3_orfao", "hash3", 300, 1, true});
+            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", 
+            pqxx::params{user_a_id, folder_a_id, "file_3_orfao", "hash3", "mock_fdk", 300, 1, true});
 
         file_3_orfao_id = res_f3[0][0].as<int>();
 
 
         auto res_f4 = txn.exec(
-            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id", 
-            pqxx::params{user_b_id, folder_b_id, "file_4_alheio", "hash4", 400, 1, true});
+            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", 
+            pqxx::params{user_b_id, folder_b_id, "file_4_alheio", "hash4", "mock_fdk", 400, 1, true});
 
         file_4_alheio_id = res_f4[0][0].as<int>();
 

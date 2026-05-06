@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include "controllers/ApiRouter.hpp"
 #include "database/DatabasePool.hpp"
-#include "services/AuthService.hpp"
+#include "Services/AuthService.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "storage/FileChunker.hpp"
@@ -56,15 +56,15 @@ TEST_CASE("API de Download de Arquivos", "[api][download]") {
         fake_folder_id = folder_res[0][0].as<int>();
 
         auto file1_res = txn.exec(
-            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
-            "VALUES ($1, $2, 'enc_file_complete', 'hash_file_complete', 1024, 1, true) RETURNING id",
+            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+            "VALUES ($1, $2, 'enc_file_complete', 'hash_file_complete', 'mock_fdk', 1024, 1, true) RETURNING id",
             pqxx::params{user_a_id, fake_folder_id}
         );
         file_complete_id = file1_res[0][0].as<int>();
 
         auto file2_res = txn.exec(
-            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, size_bytes, total_chunks, is_upload_complete) "
-            "VALUES ($1, $2, 'enc_file_incomplete', 'hash_file_incomplete', 2048, 2, false) RETURNING id",
+            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+            "VALUES ($1, $2, 'enc_file_incomplete', 'hash_file_incomplete', 'mock_fdk', 2048, 2, false) RETURNING id",
             pqxx::params{user_a_id, fake_folder_id}
         );
         file_incomplete_id = file2_res[0][0].as<int>();

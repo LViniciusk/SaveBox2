@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <memory>
 
-#include "services/EmailService.hpp"
+#include "Services/EmailService.hpp"
 
 class DatabasePool;
 
