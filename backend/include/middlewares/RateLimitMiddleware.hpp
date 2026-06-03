@@ -118,7 +118,7 @@ struct RateLimitMiddleware {
                 should_persist_ban = true;
             }
 
-            const int max_requests = is_auth_route ? 5 : 100;
+            const int max_requests = is_auth_route ? 5 : 5000;
 
             if (client.count > max_requests) {
                 if (should_persist_ban) {

@@ -517,6 +517,23 @@ crow::response ApiRouter::handle_get_uploaded_chunks(const crow::request& req, i
     }
 }
 
+crow::response ApiRouter::handle_get_pending_uploads(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    }
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        auto pending = file_mgr_->get_pending_uploads(user_id);
+        crow::json::wvalue res;
+        res["pending_uploads"] = std::move(pending);
+        return crow::response(200, res);
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 crow::response ApiRouter::handle_delete_file(const crow::request& req, int file_id) {
     auto user_id_opt = authenticate_request(req);
     if (!user_id_opt) {
@@ -861,11 +878,11 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
 
 
 void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app) {
-    const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "http://localhost:3000");
+    const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "*");
     auto& cors = app.get_middleware<crow::CORSHandler>();
     cors.global()
-        .headers("Origin", "Content-Type", "Accept", "Authorization", "X-Encrypted-Name", "Range", "X-Chunk-Index")
-        .methods("POST"_method, "GET"_method, "PUT"_method, "DELETE"_method, "OPTIONS"_method)
+        .headers("Origin", "Content-Type", "Accept", "Authorization", "X-Encrypted-Name", "Range", "X-Chunk-Index", "Access-Control-Allow-Origin")
+        .methods("POST"_method, "GET"_method, "PUT"_method, "DELETE"_method, "OPTIONS"_method, "PATCH"_method)
         .origin(cors_origin);
 
     CROW_ROUTE(app, "/api/docs")
@@ -998,6 +1015,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
     CROW_ROUTE(app, "/files/<int>/uploaded-chunks").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req, int file_id) {
         return handle_get_uploaded_chunks(req, file_id);
+    });
+
+    CROW_ROUTE(app, "/pending-uploads").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) {
+        auto res = handle_get_pending_uploads(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/files/<int>").methods(crow::HTTPMethod::Delete)

@@ -22,7 +22,7 @@ TEST_CASE("Rate Limiter - Prevenção de Reverse DoS (Eviction Segura)", "[rate_
     SECTION("IP que excede o limite recebe 429 e NÃO é perdoado após eviction") {
         const std::string attacker_ip = "10.0.0.1";
 
-        for (int i = 0; i < 101; ++i) {
+        for (int i = 0; i < 5001; ++i) {
             simulate_request(mw, attacker_ip);
         }
 
@@ -54,7 +54,7 @@ TEST_CASE("Rate Limiter - Prevenção de Reverse DoS (Eviction Segura)", "[rate_
     SECTION("Rate limit básico continua funcionando (sem regressão)") {
         const std::string normal_ip = "192.168.1.100";
 
-        for (int i = 0; i < 100; ++i) {
+        for (int i = 0; i < 5000; ++i) {
             crow::response res = simulate_request(mw, normal_ip);
             REQUIRE(res.code == 200); 
         }

@@ -6,6 +6,7 @@ bin/
 obj/
 out/
 .cache/
+dependencias/
 
 # === Executáveis e Binários ===
 # Ignora executáveis gerados

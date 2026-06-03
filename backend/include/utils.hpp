@@ -95,7 +95,7 @@ namespace DotEnv{
 
     inline std::string get_pepper() {
         auto& cfg = Utils::get();
-        return cfg.get_required_var("SAVEBOX_PEPPER");
+        return cfg.get_required_var("PASS_PEPPER");
     }
 
     inline std::string get_jwt_secret() {

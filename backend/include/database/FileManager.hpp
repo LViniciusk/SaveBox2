@@ -26,6 +26,7 @@ public:
     int get_total_chunks(uint64_t file_id, uint64_t user_id);
     bool can_user_download(uint64_t file_id, uint64_t user_id);
     std::vector<crow::json::wvalue> get_user_files_paginated(uint64_t user_id, int limit, int offset);
+    std::vector<crow::json::wvalue> get_pending_uploads(uint64_t user_id);
     std::vector<int> get_uploaded_chunks(uint64_t file_id, uint64_t user_id);
     void record_chunk_saved(uint64_t file_id, int chunk_index);
     int count_uploaded_chunks(uint64_t file_id);

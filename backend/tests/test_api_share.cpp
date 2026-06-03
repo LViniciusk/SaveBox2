@@ -6,6 +6,7 @@
 #include "database/FolderManager.hpp"
 #include "storage/FileChunker.hpp"
 #include "test_helpers.hpp"
+#include "utils.hpp"
 #include <crow_all.h>
 #include <filesystem>
 #include <fstream>
@@ -175,7 +176,8 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         REQUIRE(res.body == "Conte");
         REQUIRE(res.get_header_value("Content-Range").find("bytes 0-4/") != std::string::npos);
         REQUIRE(res.get_header_value("Accept-Ranges") == "bytes");
-        REQUIRE(res.get_header_value("Access-Control-Allow-Origin") == "http://localhost:3000");
+        std::string expected_cors = Utils::get().get_var("CORS_ORIGIN", "http://localhost:3000");
+        REQUIRE(res.get_header_value("Access-Control-Allow-Origin") == expected_cors);
 
         std::string expose = res.get_header_value("Access-Control-Expose-Headers");
         REQUIRE(expose.find("Content-Range") != std::string::npos);

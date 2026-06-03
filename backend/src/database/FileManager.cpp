@@ -182,6 +182,51 @@ std::vector<crow::json::wvalue> FileManager::get_user_files_paginated(uint64_t u
     return files;
 }
 
+std::vector<crow::json::wvalue> FileManager::get_pending_uploads(uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto result = txn.exec(
+        "SELECT id, folder_id, encrypted_name, size_bytes, total_chunks, encrypted_fdk FROM files "
+        "WHERE user_id = $1 AND is_upload_complete = false AND deleted_at IS NULL "
+        "ORDER BY id DESC",
+        pqxx::params{user_id}
+    );
+
+    std::vector<crow::json::wvalue> files;
+    for (const auto& row : result) {
+        crow::json::wvalue item;
+        item["id"] = row[0].as<int>();
+        
+        if (row[1].is_null()) {
+            item["folder_id"] = nullptr;
+        } else {
+            item["folder_id"] = row[1].as<int>();
+        }
+
+        item["encrypted_name"] = row[2].as<std::string>();
+        item["size_bytes"] = row[3].as<int64_t>();
+        item["total_chunks"] = row[4].as<int>();
+        item["encrypted_fdk"] = row[5].as<std::string>();
+
+        int file_id = row[0].as<int>();
+        auto chunks_result = txn.exec(
+            "SELECT COUNT(*) FROM file_chunks WHERE file_id = $1",
+            pqxx::params{file_id}
+        );
+        int chunk_count = 0;
+        if (!chunks_result.empty()) {
+            chunk_count = chunks_result[0][0].as<int>();
+        }
+        item["uploaded_chunks_count"] = chunk_count;
+
+        files.push_back(std::move(item));
+    }
+
+    txn.commit();
+    return files;
+}
+
 std::vector<int> FileManager::get_uploaded_chunks(uint64_t file_id, uint64_t user_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);

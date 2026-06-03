@@ -6,6 +6,7 @@
 #include "database/FileManager.hpp"
 #include "storage/FileChunker.hpp"
 #include "test_helpers.hpp"
+#include "utils.hpp"
 #include <crow_all.h>
 #include <filesystem>
 #include <fstream>
@@ -140,7 +141,8 @@ TEST_CASE("API Download - Resumable Downloads (Range)", "[api][download][resume]
 
         crow::response res = router.handle_download_file(req, file_id);
 
-        REQUIRE(res.get_header_value("Access-Control-Allow-Origin") == "http://localhost:3000");
+        std::string expected_cors = Utils::get().get_var("CORS_ORIGIN", "http://localhost:3000");
+        REQUIRE(res.get_header_value("Access-Control-Allow-Origin") == expected_cors);
 
         std::string expose_headers = res.get_header_value("Access-Control-Expose-Headers");
         REQUIRE(expose_headers.find("Content-Range") != std::string::npos);

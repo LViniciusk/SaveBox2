@@ -157,3 +157,120 @@ TEST_CASE("API Upload Resume - Listagem de Chunks Enviados", "[api][upload][resu
         txn.commit();
     }
 }
+
+TEST_CASE("API Upload Resume - Listagem de Uploads Pendentes", "[api][upload][pending]") {
+    std::string conn_str = get_secure_conn_string();
+    DatabasePool pool(2, conn_str);
+    MockEmailService mock_email;
+    AuthService auth("Eu_sou_eterno_aceita", "a_jovem_promessa", &mock_email);
+    FolderManager folder_mgr(pool);
+    FileManager file_mgr(pool);
+    FileChunker chunker("test_chunks_dir");
+    
+    ApiRouter router(pool, auth, folder_mgr, &file_mgr, &chunker);
+
+    int user_a_id = 0;
+    int user_b_id = 0;
+
+    int file_complete_id = 0;
+    int file_empty_id = 0;
+    int file_partial_id = 0;
+
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+
+        txn.exec("CREATE TABLE IF NOT EXISTS file_chunks (id SERIAL PRIMARY KEY, file_id INT REFERENCES files(id) ON DELETE CASCADE, chunk_index INT NOT NULL, UNIQUE(file_id, chunk_index));");
+
+        txn.exec("DELETE FROM users WHERE username IN ('pending_user_A', 'pending_user_B')");
+        
+        auto res_a = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('pending_user_A', 'pending_user_A@test.com', 'hash_a', true) RETURNING id");
+        user_a_id = res_a[0][0].as<int>();
+
+        auto res_b = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('pending_user_B', 'pending_user_B@test.com', 'hash_b', true) RETURNING id");
+        user_b_id = res_b[0][0].as<int>();
+        
+        auto res_folder = txn.exec("INSERT INTO folders (user_id, encrypted_name, name_hash) VALUES ($1, $2, $3) RETURNING id", pqxx::params{user_a_id, "pending_folder", "hash_folder"});
+        int folder_a_id = res_folder[0][0].as<int>();
+
+        auto res_file1 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_comp", "fc2", "mock_fdk", 1000, 5, true});
+        file_complete_id = res_file1[0][0].as<int>();
+
+        auto res_file2 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_empty", "fe2", "mock_fdk", 1000, 5, false});
+        file_empty_id = res_file2[0][0].as<int>();
+
+        auto res_file3 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_part", "fp2", "mock_fdk", 1000, 5, false});
+        file_partial_id = res_file3[0][0].as<int>();
+
+        txn.exec("INSERT INTO file_chunks (file_id, chunk_index) VALUES ($1, $2), ($1, $3), ($1, $4)", pqxx::params{file_partial_id, 0, 1, 3});
+
+        txn.commit();
+    }
+
+    std::string token_a = auth.generate_token(static_cast<uint64_t>(user_a_id));
+    std::string token_b = auth.generate_token(static_cast<uint64_t>(user_b_id));
+
+    SECTION("Sem Token") {
+        crow::request req;
+        req.url = "/pending-uploads";
+        
+        crow::response res = router.handle_get_pending_uploads(req);
+        
+        REQUIRE(res.code == 401);
+    }
+
+    SECTION("Sucesso - Retorna apenas arquivos com upload incompleto do usuario") {
+        crow::request req;
+        req.url = "/pending-uploads";
+        req.add_header("Authorization", "Bearer " + token_a);
+        
+        crow::response res = router.handle_get_pending_uploads(req);
+        
+        REQUIRE(res.code == 200);
+        auto body = crow::json::load(res.body);
+        REQUIRE(body.has("pending_uploads"));
+        auto pending_node = body["pending_uploads"];
+        auto pending = pending_node.lo();
+        
+        REQUIRE(pending.size() == 2); 
+
+        bool found_empty = false;
+        bool found_partial = false;
+
+        for (const auto& item : pending) {
+            int id = item["id"].i();
+            if (id == file_empty_id) {
+                found_empty = true;
+                REQUIRE(item["uploaded_chunks_count"].i() == 0);
+            } else if (id == file_partial_id) {
+                found_partial = true;
+                REQUIRE(item["uploaded_chunks_count"].i() == 3);
+                REQUIRE(item["total_chunks"].i() == 5);
+            }
+        }
+
+        REQUIRE(found_empty == true);
+        REQUIRE(found_partial == true);
+    }
+
+    SECTION("Usuario sem uploads pendentes") {
+        crow::request req;
+        req.url = "/pending-uploads";
+        req.add_header("Authorization", "Bearer " + token_b);
+        
+        crow::response res = router.handle_get_pending_uploads(req);
+        
+        REQUIRE(res.code == 200);
+        auto body = crow::json::load(res.body);
+        REQUIRE(body.has("pending_uploads"));
+        auto pending_node = body["pending_uploads"];
+        REQUIRE(pending_node.lo().size() == 0);
+    }
+
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+        txn.exec("DELETE FROM users WHERE username IN ('pending_user_A', 'pending_user_B')");
+        txn.commit();
+    }
+}
