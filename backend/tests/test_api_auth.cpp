@@ -5,6 +5,7 @@
 #include "database/FolderManager.hpp"
 #include "middlewares/RateLimitMiddleware.hpp"
 #include "test_helpers.hpp"
+#include "database/UsersManager.hpp"
 #include <crow_all.h>
 
 
@@ -133,10 +134,155 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         }
     }
 
+    SECTION("Criacao de Usuario via OAuth2 - Sucesso") {
+        UsersManager users_mgr(pool);
+        
+        int new_user_id = users_mgr.create_oauth_user("oauth_user@test.com", "google", "google_123", "OAuth User");
+        REQUIRE(new_user_id > 0);
+
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+        auto result = txn.exec(
+            "SELECT email, auth_provider, provider_id, password_hash, is_email_verified FROM users WHERE id = $1",
+            pqxx::params{new_user_id}
+        );
+
+        REQUIRE(result.size() == 1);
+        REQUIRE(result[0][0].as<std::string>() == "oauth_user@test.com");
+        REQUIRE(result[0][1].as<std::string>() == "google");
+        REQUIRE(result[0][2].as<std::string>() == "google_123");
+        REQUIRE(result[0][3].is_null());
+        REQUIRE(result[0][4].as<bool>() == true);
+    }
+
+    SECTION("Falha ao criar Usuario OAuth2 - Email local ja existe") {
+        crow::request req_register;
+        req_register.body = R"({"username": "local_user", "email": "local_user@test.com", "password": "super_senha"})";
+        router.handle_register(req_register);
+
+        // Attempt to create OAuth user with same email
+        UsersManager users_mgr(pool);
+        REQUIRE_THROWS_AS(
+            users_mgr.create_oauth_user("local_user@test.com", "google", "google_456"),
+            std::runtime_error
+        );
+    }
+    
+    SECTION("Falha ao criar Usuario OAuth2 - provider_id invalido (vazio)") {
+        UsersManager users_mgr(pool);
+        REQUIRE_THROWS_AS(
+            users_mgr.create_oauth_user("another_oauth_user@test.com", "google", ""),
+            std::invalid_argument
+        );
+    }
+
+    SECTION("Rejeita token Google com email_verified=false") {
+        std::string payload = R"({
+            "iss": "accounts.google.com",
+            "sub": "999888777",
+            "email": "unverified@evil.com",
+            "email_verified": false,
+            "aud": "test-client-id"
+        })";
+
+        REQUIRE_THROWS_AS(
+            AuthService::validate_google_claims(payload, ""),
+            std::invalid_argument
+        );
+
+        // Verificar que a mensagem é EMAIL_NOT_VERIFIED_BY_PROVIDER
+        try {
+            AuthService::validate_google_claims(payload, "");
+            FAIL("Deveria ter lancado excecao");
+        } catch (const std::invalid_argument& e) {
+            REQUIRE(std::string(e.what()) == "EMAIL_NOT_VERIFIED_BY_PROVIDER");
+        }
+
+        // Garantir que nenhum usuario foi persistido
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+        auto result = txn.exec("SELECT count(*) FROM users WHERE email = 'unverified@evil.com'");
+        REQUIRE(result[0][0].as<int>() == 0);
+    }
+
+    SECTION("Rejeita token Google com email_verified ausente") {
+        std::string payload = R"({
+            "iss": "accounts.google.com",
+            "sub": "111222333",
+            "email": "no_verified_field@test.com",
+            "aud": "test-client-id"
+        })";
+
+        REQUIRE_THROWS_AS(
+            AuthService::validate_google_claims(payload, ""),
+            std::invalid_argument
+        );
+
+        try {
+            AuthService::validate_google_claims(payload, "");
+            FAIL("Deveria ter lancado excecao");
+        } catch (const std::invalid_argument& e) {
+            REQUIRE(std::string(e.what()) == "EMAIL_NOT_VERIFIED_BY_PROVIDER");
+        }
+    }
+
+    SECTION("Aceita token Google com email_verified como string 'true'") {
+        std::string payload = R"({
+            "iss": "accounts.google.com",
+            "sub": "444555666",
+            "email": "string_verified@test.com",
+            "email_verified": "true",
+            "aud": "test-client-id",
+            "name": "String User",
+            "picture": "https://example.com/photo.jpg"
+        })";
+
+        AuthService::GoogleClaims claims;
+        REQUIRE_NOTHROW(claims = AuthService::validate_google_claims(payload, ""));
+
+        REQUIRE(claims.sub == "444555666");
+        REQUIRE(claims.email == "string_verified@test.com");
+        REQUIRE(claims.name == "String User");
+        REQUIRE(claims.picture == "https://example.com/photo.jpg");
+    }
+
+    SECTION("Rejeita token Google com email_verified como string 'false'") {
+        std::string payload = R"({
+            "iss": "accounts.google.com",
+            "sub": "777888999",
+            "email": "string_false@test.com",
+            "email_verified": "false",
+            "aud": "test-client-id"
+        })";
+
+        REQUIRE_THROWS_AS(
+            AuthService::validate_google_claims(payload, ""),
+            std::invalid_argument
+        );
+    }
+
+    SECTION("Rejeita token Google com issuer invalido") {
+        std::string payload = R"({
+            "iss": "evil-issuer.com",
+            "sub": "123456",
+            "email": "evil@test.com",
+            "email_verified": true,
+            "aud": "test-client-id"
+        })";
+
+        REQUIRE_THROWS_AS(
+            AuthService::validate_google_claims(payload, ""),
+            std::invalid_argument
+        );
+    }
+
     {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username = 'api_test_user'");
+        txn.exec("DELETE FROM users WHERE email = 'oauth_user@test.com'");
+        txn.exec("DELETE FROM users WHERE email = 'local_user@test.com'");
         txn.commit();
     }
 }
+

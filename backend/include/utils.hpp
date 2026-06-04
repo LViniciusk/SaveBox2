@@ -117,6 +117,16 @@ namespace DotEnv{
         auto& cfg = Utils::get();
         return cfg.get_required_var("EMAIL_VALIDATION_API_KEY");
     }
+
+    inline uint16_t get_port() {
+        auto& cfg = Utils::get();
+        std::string port_str = cfg.get_var("PORT", "8080");
+        try {
+            return static_cast<uint16_t>(std::stoi(port_str));
+        } catch (...) {
+            return 8080;
+        }
+    }
 }
 
 namespace EmailUtils {

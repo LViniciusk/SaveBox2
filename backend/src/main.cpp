@@ -76,13 +76,15 @@ int main() {
     // Acopla as rotas ao servidor
     router.setup_routes(app);
 
+    uint16_t port = DotEnv::get_port();
+
     std::cout << "====================================================\n";
     std::cout << "             SaveBox Backend Iniciado\n             ";
-    std::cout << "Servidor escutando na porta: http://localhost:8080\n";
+    std::cout << "Servidor escutando na porta: http://localhost:" << port << "\n";
     std::cout << "====================================================\n";
 
-    // Roda o servidor na porta 8080 usando múltiplas threads
-    app.port(8080).multithreaded().run();
+    // Roda o servidor na porta configurada usando múltiplas threads
+    app.port(port).multithreaded().run();
 
 
 

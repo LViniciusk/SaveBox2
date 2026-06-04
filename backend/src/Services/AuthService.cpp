@@ -4,6 +4,8 @@
 #include "utils.hpp"
 #include "utils/utils.hpp"
 
+#include <crow_all.h>
+
 #include <jwt-cpp/jwt.h>
 #include <sodium.h>
 #include <pqxx/pqxx>
@@ -273,5 +275,143 @@ std::optional<uint64_t> AuthService::verify_token(const std::string& token) cons
         return user_id;
     } catch (...) {
         return std::nullopt;
+    }
+}
+
+AuthService::GoogleClaims AuthService::validate_google_claims(const std::string& payload_json, const std::string& expected_client_id) {
+    auto data = crow::json::load(payload_json);
+    if (!data) {
+        throw std::invalid_argument("INVALID_ID_TOKEN");
+    }
+
+    if (!data.has("sub") || !data.has("email") || !data.has("iss")) {
+        throw std::invalid_argument("INVALID_ID_TOKEN");
+    }
+
+    std::string iss = data["iss"].s();
+    if (iss != "accounts.google.com" && iss != "https://accounts.google.com") {
+        throw std::invalid_argument("INVALID_ID_TOKEN");
+    }
+
+    if (!expected_client_id.empty()) {
+        if (!data.has("aud")) {
+            throw std::invalid_argument("INVALID_ID_TOKEN");
+        }
+        std::string aud = data["aud"].s();
+        if (aud != expected_client_id) {
+            throw std::invalid_argument("INVALID_ID_TOKEN");
+        }
+    }
+
+    if (!data.has("email_verified")) {
+        throw std::invalid_argument("EMAIL_NOT_VERIFIED_BY_PROVIDER");
+    }
+
+    bool email_is_verified = false;
+    auto ev = data["email_verified"];
+    if (ev.t() == crow::json::type::True) {
+        email_is_verified = true;
+    } else if (ev.t() == crow::json::type::String) {
+        email_is_verified = (std::string(ev.s()) == "true");
+    }
+
+    if (!email_is_verified) {
+        throw std::invalid_argument("EMAIL_NOT_VERIFIED_BY_PROVIDER");
+    }
+
+    std::string sub = data["sub"].s();
+    if (sub.empty()) {
+        throw std::invalid_argument("INVALID_ID_TOKEN");
+    }
+
+    GoogleClaims claims;
+    claims.sub = sub;
+    claims.email = data["email"].s();
+    claims.name = data.has("name") ? std::string(data["name"].s()) : std::string("");
+    claims.picture = data.has("picture") ? std::string(data["picture"].s()) : std::string("");
+
+    return claims;
+}
+
+int AuthService::handle_google_login(const std::string& id_token) {
+    if (pool_ == nullptr) {
+        throw std::runtime_error("AUTH_DB_NOT_CONFIGURED");
+    }
+
+    std::string expected_client_id = Utils::get().get_var("GOOGLE_CLIENT_ID", "");
+
+    try {
+        auto decoded = jwt::decode(id_token);
+
+        if (!decoded.has_key_id()) {
+            throw std::invalid_argument("MISSING_KID_HEADER");
+        }
+
+        std::string kid = decoded.get_key_id();
+        std::string pem_key = jwks_cache_.get_pem_for_kid(kid);
+
+        auto verifier = jwt::verify()
+            .allow_algorithm(jwt::algorithm::rs256(pem_key, "", "", ""))
+            .leeway(60UL);
+
+        if (!expected_client_id.empty()) {
+            verifier.with_audience(expected_client_id);
+        }
+
+        verifier.verify(decoded);
+
+        if (!decoded.has_payload_claim("iss")) {
+            throw std::invalid_argument("INVALID_ID_TOKEN");
+        }
+        std::string iss = decoded.get_payload_claim("iss").as_string();
+        if (iss != "https://accounts.google.com" && iss != "accounts.google.com") {
+            throw std::invalid_argument("INVALID_ID_TOKEN");
+        }
+
+        if (!decoded.has_payload_claim("exp")) {
+            throw std::invalid_argument("INVALID_ID_TOKEN");
+        }
+        if (!decoded.has_payload_claim("sub") || !decoded.has_payload_claim("email")) {
+            throw std::invalid_argument("INVALID_ID_TOKEN");
+        }
+
+        std::string sub = decoded.get_payload_claim("sub").as_string();
+        std::string email = decoded.get_payload_claim("email").as_string();
+
+        if (sub.empty()) {
+            throw std::invalid_argument("INVALID_ID_TOKEN");
+        }
+
+        if (!decoded.has_payload_claim("email_verified")) {
+            throw std::invalid_argument("EMAIL_NOT_VERIFIED_BY_PROVIDER");
+        }
+
+        auto ev_claim = decoded.get_payload_claim("email_verified");
+        bool email_is_verified = false;
+
+        if (ev_claim.get_type() == jwt::json::type::boolean) {
+            email_is_verified = ev_claim.as_boolean();
+        } else if (ev_claim.get_type() == jwt::json::type::string) {
+            email_is_verified = (ev_claim.as_string() == "true");
+        }
+
+        if (!email_is_verified) {
+            throw std::invalid_argument("EMAIL_NOT_VERIFIED_BY_PROVIDER");
+        }
+
+        std::string name = decoded.has_payload_claim("name") 
+            ? decoded.get_payload_claim("name").as_string() : "";
+        std::string picture = decoded.has_payload_claim("picture") 
+            ? decoded.get_payload_claim("picture").as_string() : "";
+
+        UsersManager users_mgr(*pool_);
+        return users_mgr.create_oauth_user(email, "google", sub, name, picture);
+
+    } catch (const std::invalid_argument&) {
+        throw;
+    } catch (const std::runtime_error&) {
+        throw;
+    } catch (const std::exception&) {
+        throw std::invalid_argument("INVALID_ID_TOKEN");
     }
 }

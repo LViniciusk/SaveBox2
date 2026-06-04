@@ -5,8 +5,12 @@ info:
   version: 1.0.0
 
 servers:
+  - url: /
+    description: Servidor atual (Relativo)
+  - url: http://localhost:8000
+    description: Servidor local (Porta 8000)
   - url: http://localhost:8080
-    description: Servidor local
+    description: Servidor local (Porta 8080)
 
 tags:
   - name: Sistema
@@ -70,6 +74,13 @@ components:
         message:
           type: string
         token:
+          type: string
+
+    GoogleLoginRequest:
+      type: object
+      required: [id_token]
+      properties:
+        id_token:
           type: string
 
     CreateFolderRequest:
@@ -257,6 +268,45 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Erro interno
+
+  /api/auth/google:
+    post:
+      tags: [Autenticação]
+      summary: Login via Google OAuth2
+      description: Realiza a autenticação/registro silencioso usando o token ID enviado pelo Google.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleLoginRequest'
+      responses:
+        '200':
+          description: Login efetuado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          description: Parâmetro id_token inválido ou ausente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflito de provedor de credencial (e.g. e-mail já cadastrado via password)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erro interno do servidor
+        '502':
+          description: API do Google indisponível
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /verify:
     get:

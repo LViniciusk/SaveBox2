@@ -118,6 +118,38 @@ crow::response ApiRouter::handle_login(const crow::request& req) {
     }
 }
 
+crow::response ApiRouter::handle_google_login(const crow::request& req) {
+    auto req_json = crow::json::load(req.body);
+    if (!req_json) {
+        return crow::response(400, R"({"error": "JSON Invalido"})");
+    }
+
+    if (!req_json.has("id_token") || req_json["id_token"].t() != crow::json::type::String) {
+        return crow::response(400, R"({"error": "id_token obrigatorio e deve ser uma string"})");
+    }
+
+    std::string id_token = req_json["id_token"].s();
+
+    try {
+        int user_id = auth_->handle_google_login(id_token);
+        std::string jwt_token = auth_->generate_token(user_id);
+        
+        crow::json::wvalue res_body;
+        res_body["token"] = jwt_token;
+        return crow::response(200, res_body);
+    } catch (const std::invalid_argument& e) {
+        return crow::response(400, R"({"error": "Falha na autenticacao com o provedor."})");
+    } catch (const std::runtime_error& e) {
+        std::string err_msg = e.what();
+        if (err_msg == "GOOGLE_API_UNAVAILABLE") {
+            return crow::response(502, R"({"error": "Servico de autenticacao indisponivel no momento."})");
+        } else if (err_msg == "ACCOUNT_EXISTS_WITH_DIFFERENT_PROVIDER") {
+            return crow::response(409, R"({"error": "Erro interno."})");
+        }
+        return crow::response(500, R"({"error": "Erro interno durante a autenticacao."})");
+    }
+}
+
 crow::response ApiRouter::handle_verify_email(const crow::request& req) {
     try {
         char* token_raw = req.url_params.get("token");
@@ -967,6 +999,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
     CROW_ROUTE(app, "/login").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
         auto res = handle_login(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/auth/google").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        auto res = handle_google_login(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });
