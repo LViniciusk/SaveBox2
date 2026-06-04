@@ -25,7 +25,7 @@ FROM ubuntu:24.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    libpq5 libpqxx-dev libssl3 libsodium23 libzip4 libcurl4 \
+    libpq5 libpqxx-dev libssl3 libsodium23 libzip4 libcurl4 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Remove pacotes desnecessarios para reduzir superficie de ataque

@@ -186,13 +186,13 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         })";
 
         REQUIRE_THROWS_AS(
-            AuthService::validate_google_claims(payload, ""),
+            AuthService::validate_google_claims(payload, "test-client-id"),
             std::invalid_argument
         );
 
         // Verificar que a mensagem é EMAIL_NOT_VERIFIED_BY_PROVIDER
         try {
-            AuthService::validate_google_claims(payload, "");
+            AuthService::validate_google_claims(payload, "test-client-id");
             FAIL("Deveria ter lancado excecao");
         } catch (const std::invalid_argument& e) {
             REQUIRE(std::string(e.what()) == "EMAIL_NOT_VERIFIED_BY_PROVIDER");
@@ -214,12 +214,12 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         })";
 
         REQUIRE_THROWS_AS(
-            AuthService::validate_google_claims(payload, ""),
+            AuthService::validate_google_claims(payload, "test-client-id"),
             std::invalid_argument
         );
 
         try {
-            AuthService::validate_google_claims(payload, "");
+            AuthService::validate_google_claims(payload, "test-client-id");
             FAIL("Deveria ter lancado excecao");
         } catch (const std::invalid_argument& e) {
             REQUIRE(std::string(e.what()) == "EMAIL_NOT_VERIFIED_BY_PROVIDER");
@@ -238,7 +238,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         })";
 
         AuthService::GoogleClaims claims;
-        REQUIRE_NOTHROW(claims = AuthService::validate_google_claims(payload, ""));
+        REQUIRE_NOTHROW(claims = AuthService::validate_google_claims(payload, "test-client-id"));
 
         REQUIRE(claims.sub == "444555666");
         REQUIRE(claims.email == "string_verified@test.com");
@@ -256,7 +256,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         })";
 
         REQUIRE_THROWS_AS(
-            AuthService::validate_google_claims(payload, ""),
+            AuthService::validate_google_claims(payload, "test-client-id"),
             std::invalid_argument
         );
     }
@@ -271,7 +271,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         })";
 
         REQUIRE_THROWS_AS(
-            AuthService::validate_google_claims(payload, ""),
+            AuthService::validate_google_claims(payload, "test-client-id"),
             std::invalid_argument
         );
     }

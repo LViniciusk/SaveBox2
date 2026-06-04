@@ -40,6 +40,17 @@ public:
     void restore_file(uint64_t file_id, uint64_t user_id);
     void empty_trash(uint64_t user_id, class FileChunker* chunker);
 
+
+    int init_external_upload(uint64_t user_id, std::optional<uint64_t> folder_id,
+                             const std::string& enc_name, const std::string& name_hash,
+                             const std::string& encrypted_fdk,
+                             uint64_t size_bytes, const std::string& storage_provider);
+
+    void finalize_external_upload(uint64_t file_id, uint64_t user_id,
+                                  const std::string& external_file_id);
+
+    std::string get_storage_provider(uint64_t file_id, uint64_t user_id);
+
 private:
     DatabasePool& pool_;
 };

@@ -7,12 +7,14 @@
 #include "storage/GarbageCollector.hpp"
 #include "middlewares/RateLimitMiddleware.hpp"
 #include "storage/FileChunker.hpp"
+#include "Services/GoogleDriveService.hpp"
 #include "utils.hpp"
 #include <csignal>
 #include <crow_all.h>
 #include <iostream>
 #include <sodium.h>
-
+#include <openssl/provider.h>
+#include <openssl/crypto.h>
 
 
 
@@ -22,6 +24,10 @@ int main() {
         std::cerr << "[FATAL] libsodium nao pode ser inicializada.\n";
         return 1;
     }
+
+    // Inicialização manual dos provedores OpenSSL para evitar falhas no Windows (jwt-cpp / verificação RSA)
+    OSSL_PROVIDER_load(nullptr, "default");
+    OSSL_PROVIDER_load(nullptr, "legacy");
 
 
     std::string conn_str = DotEnv::get_secure_conn_string();
@@ -41,6 +47,7 @@ int main() {
     FolderManager folder_mgr(pool);
     FileManager file_mgr(pool);
     FileChunker chunker(storage_path);
+    GoogleDriveService gdrive(pool);
 
     // Garbage Collector 
     GarbageCollector gc(pool, &chunker);
@@ -71,7 +78,7 @@ int main() {
     app.get_middleware<RateLimitMiddleware>().init(pool);
 
     // Configurando Rotaseador com injeção de dependência
-    ApiRouter router(pool, auth, folder_mgr, &file_mgr, &chunker);
+    ApiRouter router(pool, auth, folder_mgr, &file_mgr, &chunker, &gdrive);
 
     // Acopla as rotas ao servidor
     router.setup_routes(app);

@@ -8,6 +8,7 @@
 class FileManager;
 class FolderManager;
 class FileChunker;
+class GoogleDriveService;
 
 #include <optional>
 #include <cstdint>
@@ -17,7 +18,8 @@ class ApiRouter {
 public:
     ApiRouter() = default;
     ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr,
-              FileManager* file_mgr = nullptr, FileChunker* chunker = nullptr);
+              FileManager* file_mgr = nullptr, FileChunker* chunker = nullptr,
+              GoogleDriveService* gdrive = nullptr);
 
     std::string handle_healthcheck() const;
     crow::response handle_get_quota(const crow::request& req);
@@ -45,6 +47,10 @@ public:
     crow::response handle_update_folder(const crow::request& req, int folder_id);
     crow::response handle_share_file(const crow::request& req, int file_id);
     crow::response handle_get_shared_file(const crow::request& req, const std::string& uuid);
+    crow::response handle_link_google_drive(const crow::request& req);
+    crow::response handle_get_google_token(const crow::request& req);
+    crow::response handle_generate_google_state(const crow::request& req);
+    crow::response handle_finalize_external_upload(const crow::request& req, int file_id);
 
     void setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app);
 
@@ -54,6 +60,7 @@ private:
     FolderManager* folder_mgr_ = nullptr;
     FileManager* file_mgr_ = nullptr;
     FileChunker* chunker_ = nullptr;
+    GoogleDriveService* gdrive_ = nullptr;
 
     std::optional<uint64_t> authenticate_request(const crow::request& req) const;
 };

@@ -73,10 +73,11 @@ std::string GoogleJwksCache::get_pem_for_kid(const std::string& kid) {
 }
 
 void GoogleJwksCache::refresh_keys(const std::string& missing_kid) {
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-
-    if (key_cache_.find(missing_kid) != key_cache_.end()) {
-        return; 
+    {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        if (key_cache_.find(missing_kid) != key_cache_.end()) {
+            return;
+        }
     }
 
     cpr::Response r = cpr::Get(
@@ -100,7 +101,7 @@ void GoogleJwksCache::refresh_keys(const std::string& missing_kid) {
         throw std::runtime_error("INVALID_JWKS_RESPONSE");
     }
 
-    key_cache_.clear();
+    std::unordered_map<std::string, std::string> new_keys;
 
     for (const auto& key_val : keys_it->second.get<picojson::array>()) {
         if (!key_val.is<picojson::object>()) continue;
@@ -165,7 +166,12 @@ void GoogleJwksCache::refresh_keys(const std::string& missing_kid) {
         long pem_len = BIO_get_mem_data(bio.get(), &pem_data);
         if (pem_len > 0 && pem_data != nullptr) {
             std::string pem(pem_data, pem_len);
-            key_cache_[kid_val] = pem;
+            new_keys[kid_val] = pem;
         }
+    }
+
+    {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        key_cache_ = std::move(new_keys);
     }
 }

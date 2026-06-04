@@ -520,7 +520,8 @@ void FileManager::empty_trash(uint64_t user_id, FileChunker* chunker) {
     pqxx::work txn(*conn);
 
     auto quota_release = txn.exec(
-        "SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL",
+        "SELECT COALESCE(SUM(CASE WHEN storage_provider = 'local' THEN size_bytes ELSE 2048 END), 0) "
+        "FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL",
         pqxx::params{user_id}
     );
     uint64_t freed_bytes = quota_release[0][0].as<uint64_t>();
@@ -556,3 +557,134 @@ crow::json::wvalue FileManager::get_user_quota(uint64_t user_id) {
     txn.commit();
     return json;
 }
+
+
+int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> folder_id,
+                                       const std::string& enc_name, const std::string& name_hash,
+                                       const std::string& encrypted_fdk,
+                                       uint64_t size_bytes, const std::string& storage_provider) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    // Verificação de pasta válida
+    if (folder_id.has_value()) {
+        auto folder_check = txn.exec(
+            "SELECT id FROM folders WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+            pqxx::params{folder_id.value(), user_id}
+        );
+        if (folder_check.empty()) {
+            throw std::runtime_error("FORBIDDEN");
+        }
+    }
+
+    // Verificação de duplicidade
+    std::string dup_query;
+    if (folder_id.has_value()) {
+        dup_query = "SELECT id FROM files WHERE user_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND folder_id = $3";
+    } else {
+        dup_query = "SELECT id FROM files WHERE user_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND folder_id IS NULL";
+    }
+
+    pqxx::result dup_res;
+    if (folder_id.has_value()) {
+        dup_res = txn.exec(dup_query, pqxx::params{user_id, name_hash, folder_id.value()});
+    } else {
+        dup_res = txn.exec(dup_query, pqxx::params{user_id, name_hash});
+    }
+
+    if (!dup_res.empty()) {
+        throw std::runtime_error("FILE_ALREADY_EXISTS");
+    }
+
+    auto check_quota = txn.exec(
+        "SELECT used_storage_bytes, max_storage_bytes FROM users WHERE id = $1 FOR UPDATE",
+        pqxx::params{user_id}
+    );
+    if (check_quota.empty()) throw std::runtime_error("NOT_FOUND");
+    uint64_t used = check_quota[0][0].as<uint64_t>();
+    uint64_t max = check_quota[0][1].as<uint64_t>();
+    uint64_t metadata_cost = 2048; // Costo fixo de 2KB para metadados de arquivos externos
+    if (used + metadata_cost > max) {
+        throw std::runtime_error("QUOTA_EXCEEDED");
+    }
+
+    txn.exec("UPDATE users SET used_storage_bytes = used_storage_bytes + $1 WHERE id = $2",
+             pqxx::params{metadata_cost, user_id});
+
+    auto result = txn.exec(
+        "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, "
+        "size_bytes, total_chunks, storage_provider) "
+        "VALUES ($1, $2, $3, $4, $5, $6, 0, $7) RETURNING id",
+        pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider}
+    );
+
+    int file_id = result[0][0].as<int>();
+    txn.commit();
+    return file_id;
+}
+
+void FileManager::finalize_external_upload(uint64_t file_id, uint64_t user_id,
+                                            const std::string& external_file_id) {
+    if (external_file_id.empty()) {
+        throw std::invalid_argument("EXTERNAL_FILE_ID_REQUIRED");
+    }
+
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto result = txn.exec(
+        "SELECT storage_provider, is_upload_complete FROM files "
+        "WHERE id = $1 AND deleted_at IS NULL",
+        pqxx::params{file_id}
+    );
+
+    if (result.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+
+    auto owner_check = txn.exec(
+        "SELECT id FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+        pqxx::params{file_id, user_id}
+    );
+    if (owner_check.empty()) {
+        throw std::runtime_error("FORBIDDEN");
+    }
+
+    std::string provider = result[0][0].as<std::string>();
+    bool already_complete = result[0][1].as<bool>();
+
+    if (provider == "local") {
+        throw std::runtime_error("INVALID_STORAGE_PROVIDER");
+    }
+
+    if (already_complete) {
+        throw std::runtime_error("ALREADY_COMPLETE");
+    }
+
+    txn.exec(
+        "UPDATE files SET external_file_id = $1, is_upload_complete = true "
+        "WHERE id = $2 AND user_id = $3",
+        pqxx::params{external_file_id, file_id, user_id}
+    );
+
+    txn.commit();
+}
+
+std::string FileManager::get_storage_provider(uint64_t file_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto result = txn.exec(
+        "SELECT storage_provider FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+        pqxx::params{file_id, user_id}
+    );
+
+    txn.commit();
+
+    if (result.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+
+    return result[0][0].is_null() ? "local" : result[0][0].as<std::string>();
+}
+

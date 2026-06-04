@@ -24,7 +24,7 @@ void GarbageCollector::run_cleanup() {
         pqxx::read_transaction R(*conn);
 
         std::string query_select = R"(
-            SELECT id, user_id, size_bytes FROM files
+            SELECT id, user_id, CASE WHEN storage_provider = 'local' THEN size_bytes ELSE 2048 END as size_bytes FROM files
             WHERE (is_upload_complete = FALSE AND created_at < NOW() - INTERVAL '4 hours')
                OR (deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days')
         )";

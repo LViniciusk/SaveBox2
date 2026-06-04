@@ -2,6 +2,7 @@
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
 #include "storage/FileChunker.hpp"
+#include "Services/GoogleDriveService.hpp"
 #include "utils.hpp"
 
 #include <optional>
@@ -9,9 +10,10 @@
 #include <sstream>
 
 ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr,
-                     FileManager* file_mgr, FileChunker* chunker)
+                     FileManager* file_mgr, FileChunker* chunker,
+                     GoogleDriveService* gdrive)
     : pool_(&pool), auth_(&auth), folder_mgr_(&folder_mgr),
-            file_mgr_(file_mgr), chunker_(chunker) {
+            file_mgr_(file_mgr), chunker_(chunker), gdrive_(gdrive) {
         auth_->set_database_pool(pool);
 }
 
@@ -128,10 +130,15 @@ crow::response ApiRouter::handle_google_login(const crow::request& req) {
         return crow::response(400, R"({"error": "id_token obrigatorio e deve ser uma string"})");
     }
 
+    if (!req_json.has("nonce") || req_json["nonce"].t() != crow::json::type::String) {
+        return crow::response(400, R"({"error": "nonce obrigatorio e deve ser uma string"})");
+    }
+
     std::string id_token = req_json["id_token"].s();
+    std::string nonce = req_json["nonce"].s();
 
     try {
-        int user_id = auth_->handle_google_login(id_token);
+        int user_id = auth_->handle_google_login(id_token, nonce);
         std::string jwt_token = auth_->generate_token(user_id);
         
         crow::json::wvalue res_body;
@@ -146,6 +153,8 @@ crow::response ApiRouter::handle_google_login(const crow::request& req) {
         } else if (err_msg == "ACCOUNT_EXISTS_WITH_DIFFERENT_PROVIDER") {
             return crow::response(409, R"({"error": "Erro interno."})");
         }
+        
+        std::cerr << "[Google Login Error] " << err_msg << std::endl;
         return crow::response(500, R"({"error": "Erro interno durante a autenticacao."})");
     }
 }
@@ -236,7 +245,7 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
 
         auto body = crow::json::load(req.body);
         if (!body || !body.has("folder_id") || !body.has("encrypted_name") ||
-            !body.has("name_hash") || !body.has("encrypted_fdk") || !body.has("size_bytes") || !body.has("total_chunks")) {
+            !body.has("name_hash") || !body.has("encrypted_fdk") || !body.has("size_bytes")) {
             return crow::response(400, R"({"error":"JSON invalido"})");
         }
 
@@ -245,7 +254,7 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
         std::string name_hash;
         std::string encrypted_fdk;
         int64_t raw_size_bytes;
-        int64_t raw_total_chunks;
+        std::string storage_provider = "local";
 
         try {
             if (body.has("folder_id") && body["folder_id"].t() != crow::json::type::Null) {
@@ -255,17 +264,56 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
             name_hash   = body["name_hash"].s();
             encrypted_fdk = body["encrypted_fdk"].s();
             raw_size_bytes = body["size_bytes"].i();
+
+            if (body.has("storage_provider") && body["storage_provider"].t() == crow::json::type::String) {
+                storage_provider = body["storage_provider"].s();
+            }
+        } catch (const std::runtime_error&) {
+            return crow::response(400, R"({"error":"Tipos de dados invalidos no JSON"})");
+        }
+
+        if (raw_size_bytes < 0) {
+            return crow::response(400, R"({"error":"Valores numericos invalidos"})");
+        }
+
+        uint64_t size_bytes = static_cast<uint64_t>(raw_size_bytes);
+
+        if (storage_provider == "google_drive") {
+            if (!gdrive_ || !gdrive_->is_linked(user_id)) {
+                return crow::response(400, R"({"error":"Conta Google Drive nao vinculada"})");
+            }
+
+            int file_id = file_mgr_->init_external_upload(
+                user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider
+            );
+
+            std::string access_token = gdrive_->get_valid_access_token(user_id);
+            std::string root_folder_id = gdrive_->get_root_folder_id(user_id);
+
+            crow::json::wvalue res_body;
+            res_body["file_id"] = file_id;
+            res_body["storage_provider"] = "google_drive";
+            res_body["access_token"] = access_token;
+            res_body["root_folder_id"] = root_folder_id;
+            return crow::response(201, res_body);
+        }
+
+        if (!body.has("total_chunks")) {
+            return crow::response(400, R"({"error":"JSON invalido"})");
+        }
+
+        int64_t raw_total_chunks;
+        try {
             raw_total_chunks = body["total_chunks"].i();
         } catch (const std::runtime_error&) {
             return crow::response(400, R"({"error":"Tipos de dados invalidos no JSON"})");
         }
 
-        if (raw_size_bytes < 0 || raw_total_chunks <= 0) {
+        if (raw_total_chunks <= 0) {
             return crow::response(400, R"({"error":"Valores numericos invalidos"})");
         }
 
-        uint64_t size_bytes     = static_cast<uint64_t>(raw_size_bytes);
-        int total_chunks        = static_cast<int>(raw_total_chunks);
+        int total_chunks = static_cast<int>(raw_total_chunks);
 
         constexpr uint64_t CHUNK_SIZE = 5ULL * 1024 * 1024;
         int expected_chunks = static_cast<int>((size_bytes + CHUNK_SIZE - 1) / CHUNK_SIZE);
@@ -289,6 +337,12 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
         if (msg == "FILE_ALREADY_EXISTS") {
             return crow::response(409, R"({"error":"Um arquivo com este nome ja existe nesta pasta"})");
         }
+        if (msg == "GOOGLE_DRIVE_NOT_LINKED") {
+            return crow::response(400, R"({"error":"Conta Google Drive nao vinculada"})");
+        }
+        if (msg == "GOOGLE_TOKEN_REFRESH_FAILED") {
+            return crow::response(502, R"({"error":"Falha ao obter token do Google Drive"})");
+        }
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -300,6 +354,11 @@ crow::response ApiRouter::handle_upload_chunk(const crow::request& req, int file
             return crow::response(401, R"({"error":"Token ausente ou invalido"})");
         }
         uint64_t user_id = *user_id_opt;
+
+        std::string provider = file_mgr_->get_storage_provider(static_cast<uint64_t>(file_id), user_id);
+        if (provider != "local") {
+            return crow::response(400, R"({"error":"Operacao de chunks nao suportada para armazenamento externo"})");
+        }
 
         if (file_mgr_->is_upload_complete(static_cast<uint64_t>(file_id), user_id)) {
             return crow::response(400, R"({"error":"Upload ja finalizado"})");
@@ -347,6 +406,43 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
         return crow::response(401, R"({"error":"Token ausente ou invalido"})");
     }
     uint64_t user_id = *user_id_opt;
+
+    try {
+        std::string provider = file_mgr_->get_storage_provider(static_cast<uint64_t>(file_id), user_id);
+        if (provider == "google_drive") {
+            file_mgr_->can_user_download(static_cast<uint64_t>(file_id), user_id);
+            auto conn = pool_->acquire_connection();
+            pqxx::work txn(*conn);
+            auto result = txn.exec(
+                "SELECT external_file_id FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+                pqxx::params{file_id, user_id}
+            );
+            txn.commit();
+
+            if (result.empty() || result[0][0].is_null()) {
+                return crow::response(404, R"({"error":"Arquivo externo nao encontrado"})");
+            }
+
+            std::string external_file_id = result[0][0].as<std::string>();
+            std::string access_token = gdrive_->get_valid_access_token(user_id);
+
+            crow::json::wvalue res_body;
+            res_body["storage_provider"] = "google_drive";
+            res_body["external_file_id"] = external_file_id;
+            res_body["access_token"] = access_token;
+
+            crow::response res(200, res_body);
+            res.set_header("Content-Type", "application/json");
+            return res;
+        }
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
+        if (msg == "INCOMPLETE") return crow::response(400, R"({"error":"Upload incompleto"})");
+        if (msg == "GOOGLE_DRIVE_NOT_LINKED") return crow::response(400, R"({"error":"Conta Google Drive nao vinculada"})");
+        if (msg == "GOOGLE_TOKEN_REFRESH_FAILED") return crow::response(502, R"({"error":"Falha ao obter token do Google Drive"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
 
     const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "http://localhost:3000");
     auto set_streaming_headers = [cors_origin](crow::response& res, size_t content_length, size_t total_size) {
@@ -907,7 +1003,109 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
 }
 
 
+crow::response ApiRouter::handle_link_google_drive(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
 
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("auth_code") || !body.has("state")) {
+        return crow::response(400, R"({"error":"JSON invalido, auth_code e state obrigatorios"})");
+    }
+
+    if (!gdrive_) {
+        return crow::response(500, R"({"error":"Servico Google Drive nao configurado"})");
+    }
+
+    try {
+        std::string auth_code = body["auth_code"].s();
+        std::string state = body["state"].s();
+        auto result = gdrive_->link_account(user_id, auth_code, state);
+
+        crow::json::wvalue res;
+        res["message"] = "Conta vinculada com sucesso";
+        res["root_folder_id"] = result.root_folder_id;
+        return crow::response(200, res);
+
+    } catch (const std::invalid_argument& e) {
+        std::string msg = e.what();
+        if (msg == "INVALID_OAUTH_STATE") return crow::response(400, R"({"error":"State invalido ou expirado"})");
+        return crow::response(400, R"({"error":"Parametros invalidos"})");
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "ALREADY_LINKED") return crow::response(409, R"({"error":"Conta ja vinculada"})");
+        if (msg == "GOOGLE_DRIVE_NOT_CONFIGURED") return crow::response(501, R"({"error":"Integracao nao configurada"})");
+        if (msg == "GOOGLE_TOKEN_EXCHANGE_FAILED") return crow::response(400, R"({"error":"Falha ao trocar o codigo de autorizacao"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_generate_google_state(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    if (!gdrive_) {
+        return crow::response(500, R"({"error":"Servico Google Drive nao configurado"})");
+    }
+
+    std::string state = gdrive_->generate_oauth_state(user_id);
+    crow::json::wvalue res;
+    res["state"] = state;
+    return crow::response(200, res);
+}
+
+crow::response ApiRouter::handle_get_google_token(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    if (!gdrive_) {
+        return crow::response(500, R"({"error":"Servico Google Drive nao configurado"})");
+    }
+
+    try {
+        std::string token = gdrive_->get_valid_access_token(user_id);
+        std::string root_folder_id = gdrive_->get_root_folder_id(user_id);
+
+        crow::json::wvalue res;
+        res["access_token"] = token;
+        res["root_folder_id"] = root_folder_id;
+        return crow::response(200, res);
+
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "GOOGLE_DRIVE_NOT_LINKED") return crow::response(404, R"({"error":"Conta nao vinculada"})");
+        if (msg == "GOOGLE_TOKEN_REFRESH_FAILED") return crow::response(502, R"({"error":"Falha ao atualizar o token"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_finalize_external_upload(const crow::request& req, int file_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("external_file_id")) {
+        return crow::response(400, R"({"error":"JSON invalido ou external_file_id ausente"})");
+    }
+
+    try {
+        std::string external_file_id = body["external_file_id"].s();
+        file_mgr_->finalize_external_upload(file_id, user_id, external_file_id);
+
+        return crow::response(200, R"({"message":"Upload externo finalizado com sucesso"})");
+
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
+        if (msg == "FORBIDDEN") return crow::response(403, R"({"error":"Sem permissao"})");
+        if (msg == "INVALID_STORAGE_PROVIDER") return crow::response(400, R"({"error":"Arquivo nao configurado para armazenamento externo"})");
+        if (msg == "ALREADY_COMPLETE") return crow::response(409, R"({"error":"Upload ja concluido"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
 
 void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app) {
     const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "*");
@@ -924,7 +1122,7 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
         <html lang="pt-br">
         <head>
             <meta charset="UTF-8">
-            <title>SaveBox API Docs</title>
+            <title>Nanika API Docs</title>
             <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.css" >
         </head>
         <body>
@@ -1026,7 +1224,9 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
 
     CROW_ROUTE(app, "/files").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
-        return handle_init_file_upload(req);
+        auto res = handle_init_file_upload(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/files/<int>/chunks").methods(crow::HTTPMethod::Post)
@@ -1043,17 +1243,23 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
 
     CROW_ROUTE(app, "/folders/<int>/contents").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req, int folder_id) {
-        return handle_list_folder_contents(req, folder_id);
+        auto res = handle_list_folder_contents(req, folder_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/tree").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req) {
-        return handle_get_tree(req);
+        auto res = handle_get_tree(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/files/<int>/uploaded-chunks").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req, int file_id) {
-        return handle_get_uploaded_chunks(req, file_id);
+        auto res = handle_get_uploaded_chunks(req, file_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/pending-uploads").methods(crow::HTTPMethod::Get)
@@ -1065,22 +1271,30 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
 
     CROW_ROUTE(app, "/files/<int>").methods(crow::HTTPMethod::Delete)
     ([this](const crow::request& req, int file_id) {
-        return handle_delete_file(req, file_id);
+        auto res = handle_delete_file(req, file_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/folders/<int>").methods(crow::HTTPMethod::Delete)
     ([this](const crow::request& req, int folder_id) {
-        return handle_delete_folder(req, folder_id);
+        auto res = handle_delete_folder(req, folder_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/files/<int>").methods(crow::HTTPMethod::Put)
     ([this](const crow::request& req, int file_id) {
-        return handle_update_file(req, file_id);
+        auto res = handle_update_file(req, file_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/folders/<int>").methods(crow::HTTPMethod::Put)
     ([this](const crow::request& req, int folder_id) {
-        return handle_update_folder(req, folder_id);
+        auto res = handle_update_folder(req, folder_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/files/<int>/share").methods(crow::HTTPMethod::Post)
@@ -1092,27 +1306,65 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
 
     CROW_ROUTE(app, "/share/<string>").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req, std::string uuid) {
-        return handle_get_shared_file(req, uuid);
+        auto res = handle_get_shared_file(req, uuid);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/trash").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req) {
-        return handle_get_trash(req);
+        auto res = handle_get_trash(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/trash/empty").methods(crow::HTTPMethod::Delete)
     ([this](const crow::request& req) {
-        return handle_empty_trash(req);
+        auto res = handle_empty_trash(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/files/<int>/restore").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req, int file_id) {
-        return handle_restore_file(req, file_id);
+        auto res = handle_restore_file(req, file_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 
     CROW_ROUTE(app, "/folders/<int>/restore").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req, int folder_id) {
-        return handle_restore_folder(req, folder_id);
+        auto res = handle_restore_folder(req, folder_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/storage/google/generate-state").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) {
+        auto res = handle_generate_google_state(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/storage/google/link").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        auto res = handle_link_google_drive(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/storage/google/token").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) {
+        auto res = handle_get_google_token(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/files/<int>/finalize-external").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req, int file_id) {
+        auto res = handle_finalize_external_upload(req, file_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
     });
 }
 

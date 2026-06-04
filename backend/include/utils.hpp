@@ -25,6 +25,9 @@ private:
                 if (pos != std::string::npos) {
                     std::string key = line.substr(0, pos);
                     std::string value = line.substr(pos + 1);
+                    if (!value.empty() && value.back() == '\r') {
+                        value.pop_back();
+                    }
                     env_vars[key] = value;
                 }
             }
@@ -52,7 +55,11 @@ public:
 
     std::string get_var(const std::string& key, const std::string& default_val = "") {
         if (env_vars.count(key)) return env_vars[key];
-        if (const char* sys_val = std::getenv(key.c_str())) return std::string(sys_val);
+        if (const char* sys_val = std::getenv(key.c_str())) {
+            std::string value(sys_val);
+            if (!value.empty() && value.back() == '\r') value.pop_back();
+            return value;
+        }
         return default_val;
     }
 
@@ -64,6 +71,7 @@ public:
 
         if (const char* sys_val = std::getenv(key.c_str())) {
             std::string value(sys_val);
+            if (!value.empty() && value.back() == '\r') value.pop_back();
             if (!value.empty()) {
                 return value;
             }

@@ -89,6 +89,23 @@ bool DatabaseMigration::run(DatabasePool& pool) {
             );
         )");
 
+        // TABELA DE ARMAZENAMENTO EXTERNO (Google Drive)
+        w.exec(R"(
+            CREATE TABLE IF NOT EXISTS user_external_storages (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                provider VARCHAR(20) NOT NULL DEFAULT 'google_drive',
+                refresh_token TEXT NOT NULL,
+                root_folder_id VARCHAR(255) NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, provider)
+            );
+        )");
+
+        // COLUNAS DE ARMAZENAMENTO EXTERNO NA TABELA FILES
+        w.exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS storage_provider VARCHAR(20) DEFAULT 'local';");
+        w.exec("ALTER TABLE files ADD COLUMN IF NOT EXISTS external_file_id VARCHAR(255) NULL;");
+
         // PASTAS
         w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_folder_root_active ON folders (user_id, name_hash) WHERE parent_id IS NULL AND deleted_at IS NULL;");
         w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_folder_sub_active ON folders (user_id, parent_id, name_hash) WHERE parent_id IS NOT NULL AND deleted_at IS NULL;");

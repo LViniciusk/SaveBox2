@@ -37,6 +37,8 @@ services:
       SAVEBOX_JWT_SECRET: ${SAVEBOX_JWT_SECRET}
       RESEND_API_KEY: ${RESEND_API_KEY}
       EMAIL_VALIDATION_API_KEY: ${EMAIL_VALIDATION_API_KEY}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       SAVEBOX_STORAGE_PATH: /app/savebox_storage/
     volumes:
       - ./savebox_storage:/app/savebox_storage

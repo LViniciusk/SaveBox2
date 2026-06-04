@@ -293,14 +293,16 @@ AuthService::GoogleClaims AuthService::validate_google_claims(const std::string&
         throw std::invalid_argument("INVALID_ID_TOKEN");
     }
 
-    if (!expected_client_id.empty()) {
-        if (!data.has("aud")) {
-            throw std::invalid_argument("INVALID_ID_TOKEN");
-        }
-        std::string aud = data["aud"].s();
-        if (aud != expected_client_id) {
-            throw std::invalid_argument("INVALID_ID_TOKEN");
-        }
+    if (expected_client_id.empty()) {
+        throw std::invalid_argument("GOOGLE_CLIENT_ID_REQUIRED");
+    }
+
+    if (!data.has("aud")) {
+        throw std::invalid_argument("INVALID_ID_TOKEN");
+    }
+    std::string aud = data["aud"].s();
+    if (aud != expected_client_id) {
+        throw std::invalid_argument("INVALID_ID_TOKEN");
     }
 
     if (!data.has("email_verified")) {
@@ -333,12 +335,16 @@ AuthService::GoogleClaims AuthService::validate_google_claims(const std::string&
     return claims;
 }
 
-int AuthService::handle_google_login(const std::string& id_token) {
+int AuthService::handle_google_login(const std::string& id_token, const std::string& expected_nonce) {
     if (pool_ == nullptr) {
         throw std::runtime_error("AUTH_DB_NOT_CONFIGURED");
     }
 
-    std::string expected_client_id = Utils::get().get_var("GOOGLE_CLIENT_ID", "");
+    if (expected_nonce.empty()) {
+        throw std::invalid_argument("NONCE_REQUIRED");
+    }
+
+    std::string expected_client_id = Utils::get().get_required_var("GOOGLE_CLIENT_ID");
 
     try {
         auto decoded = jwt::decode(id_token);
@@ -352,11 +358,9 @@ int AuthService::handle_google_login(const std::string& id_token) {
 
         auto verifier = jwt::verify()
             .allow_algorithm(jwt::algorithm::rs256(pem_key, "", "", ""))
+            .with_audience(expected_client_id)
+            .with_claim("nonce", jwt::claim(expected_nonce))
             .leeway(60UL);
-
-        if (!expected_client_id.empty()) {
-            verifier.with_audience(expected_client_id);
-        }
 
         verifier.verify(decoded);
 

@@ -31,7 +31,7 @@ public:
     std::string generate_token(uint64_t user_id) const;
     std::optional<uint64_t> verify_token(const std::string& token) const;
     
-    int handle_google_login(const std::string& id_token);
+    int handle_google_login(const std::string& id_token, const std::string& expected_nonce);
 
     struct GoogleClaims {
         std::string sub;
