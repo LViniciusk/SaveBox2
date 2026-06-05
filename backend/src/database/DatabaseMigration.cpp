@@ -22,7 +22,7 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 verification_token VARCHAR(128) UNIQUE,
                 token_expires_at TIMESTAMP WITH TIME ZONE,
                 max_storage_bytes BIGINT DEFAULT 5368709120,
-                used_storage_bytes BIGINT DEFAULT 0,
+                used_storage_bytes BIGINT DEFAULT 0 CHECK (used_storage_bytes >= 0),
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 registration_ip VARCHAR(45)
             );
@@ -84,7 +84,7 @@ bool DatabaseMigration::run(DatabasePool& pool) {
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS banned_ips (
                 ip VARCHAR(45) PRIMARY KEY,
-                banned_until TIMESTAMP NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
                 reason VARCHAR(255)
             );
         )");

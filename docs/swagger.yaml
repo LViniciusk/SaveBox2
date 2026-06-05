@@ -79,9 +79,11 @@ components:
 
     GoogleLoginRequest:
       type: object
-      required: [id_token]
+      required: [id_token, nonce]
       properties:
         id_token:
+          type: string
+        nonce:
           type: string
 
     CreateFolderRequest:
@@ -905,6 +907,27 @@ paths:
         '500':
           description: Erro interno
 
+  /api/storage/google/generate-state:
+    get:
+      tags: [Google Drive]
+      summary: Gera um estado CSRF para vinculação segura do Google Drive
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Estado gerado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  state:
+                    type: string
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
   /api/storage/google/link:
     post:
       tags: [Google Drive]
@@ -917,10 +940,14 @@ paths:
           application/json:
             schema:
               type: object
+              required: [auth_code, state]
               properties:
                 auth_code:
                   type: string
                   description: Authorization code retornado pelo Google OAuth
+                state:
+                  type: string
+                  description: O token CSRF (state) gerado previamente pela API
       responses:
         '200':
           description: Conta vinculada com sucesso

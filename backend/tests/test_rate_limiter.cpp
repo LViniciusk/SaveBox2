@@ -42,9 +42,11 @@ TEST_CASE("Rate Limiter - Prevenção de Reverse DoS (Eviction Segura)", "[rate_
         }
     }
 
-    SECTION("Sob DDoS real (mapa cheio sem entradas expiradas), novos IPs são rejeitados") {
+    SECTION("Sob DDoS real (mapa cheio de infratores com contagens elevadas), novos IPs são rejeitados") {
         for (int i = 0; i < 10001; ++i) {
-            simulate_request(mw, "ddos_" + std::to_string(i));
+            for (int j = 0; j < 5; ++j) {
+                simulate_request(mw, "ddos_" + std::to_string(i));
+            }
         }
 
         crow::response res = simulate_request(mw, "new_victim_ip");

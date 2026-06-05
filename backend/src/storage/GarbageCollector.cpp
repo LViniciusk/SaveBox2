@@ -82,6 +82,12 @@ void GarbageCollector::run_cleanup() {
         )";
         W.exec(query_delete_folders);
 
+        std::string query_delete_banned_ips = R"(
+            DELETE FROM banned_ips
+            WHERE expires_at <= CURRENT_TIMESTAMP
+        )";
+        W.exec(query_delete_banned_ips);
+
         W.commit();
 
     } catch (const std::exception& e) {

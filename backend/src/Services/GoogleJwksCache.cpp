@@ -75,10 +75,31 @@ std::string GoogleJwksCache::get_pem_for_kid(const std::string& kid) {
 void GoogleJwksCache::refresh_keys(const std::string& missing_kid) {
     {
         std::unique_lock<std::shared_mutex> lock(mutex_);
+        cv_.wait(lock, [this, &missing_kid] {
+            return key_cache_.find(missing_kid) != key_cache_.end() || !is_fetching_;
+        });
+
         if (key_cache_.find(missing_kid) != key_cache_.end()) {
             return;
         }
+
+        is_fetching_ = true;
     }
+
+    struct FetchGuard {
+        GoogleJwksCache& cache;
+        std::unordered_map<std::string, std::string> new_keys;
+        bool success = false;
+        FetchGuard(GoogleJwksCache& c) : cache(c) {}
+        ~FetchGuard() {
+            std::unique_lock<std::shared_mutex> lock(cache.mutex_);
+            if (success) {
+                cache.key_cache_ = std::move(new_keys);
+            }
+            cache.is_fetching_ = false;
+            cache.cv_.notify_all();
+        }
+    } guard(*this);
 
     cpr::Response r = cpr::Get(
         cpr::Url{"https://www.googleapis.com/oauth2/v3/certs"},
@@ -100,8 +121,6 @@ void GoogleJwksCache::refresh_keys(const std::string& missing_kid) {
     if (keys_it == root.end() || !keys_it->second.is<picojson::array>()) {
         throw std::runtime_error("INVALID_JWKS_RESPONSE");
     }
-
-    std::unordered_map<std::string, std::string> new_keys;
 
     for (const auto& key_val : keys_it->second.get<picojson::array>()) {
         if (!key_val.is<picojson::object>()) continue;
@@ -166,12 +185,9 @@ void GoogleJwksCache::refresh_keys(const std::string& missing_kid) {
         long pem_len = BIO_get_mem_data(bio.get(), &pem_data);
         if (pem_len > 0 && pem_data != nullptr) {
             std::string pem(pem_data, pem_len);
-            new_keys[kid_val] = pem;
+            guard.new_keys[kid_val] = pem;
         }
     }
 
-    {
-        std::unique_lock<std::shared_mutex> lock(mutex_);
-        key_cache_ = std::move(new_keys);
-    }
+    guard.success = true;
 }

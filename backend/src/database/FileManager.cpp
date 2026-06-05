@@ -526,7 +526,7 @@ void FileManager::empty_trash(uint64_t user_id, FileChunker* chunker) {
     );
     uint64_t freed_bytes = quota_release[0][0].as<uint64_t>();
     if (freed_bytes > 0) {
-        txn.exec("UPDATE users SET used_storage_bytes = used_storage_bytes - $1 WHERE id = $2",
+        txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
                  pqxx::params{freed_bytes, user_id});
     }
 

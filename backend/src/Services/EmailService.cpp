@@ -7,6 +7,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 
 namespace {
 
@@ -52,6 +54,23 @@ namespace {
         std::transform(text.begin(), text.end(), text.begin(),
                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return text;
+    }
+
+    std::string url_encode(const std::string& value) {
+        std::ostringstream escaped;
+        escaped.fill('0');
+        escaped << std::hex;
+
+        for (char c : value) {
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
+                escaped << c;
+            } else {
+                escaped << std::uppercase;
+                escaped << '%' << std::setw(2) << int(static_cast<unsigned char>(c));
+                escaped << std::nouppercase;
+            }
+        }
+        return escaped.str();
     }
 
 } 
@@ -117,7 +136,7 @@ bool EmailService::is_domain_valid_via_api(const std::string& domain) const {
 
     const std::string url =
         "https://emailreputation.abstractapi.com/v1/?api_key=" + validation_api_key_ +
-        "&email=" + email_to_check;
+        "&email=" + url_encode(email_to_check);
 
     auto response = make_get_request(url);
 

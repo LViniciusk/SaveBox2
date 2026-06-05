@@ -29,8 +29,8 @@ struct RateLimitMiddleware {
         pqxx::work w(*conn_wrapper);
 
         auto result = w.exec(
-            "SELECT ip, EXTRACT(EPOCH FROM banned_until)::BIGINT AS banned_until_epoch "
-            "FROM banned_ips WHERE banned_until > NOW();");
+            "SELECT ip, EXTRACT(EPOCH FROM expires_at)::BIGINT AS expires_at_epoch "
+            "FROM banned_ips WHERE expires_at > NOW();");
         w.commit();
 
         const auto now = std::chrono::system_clock::now();
@@ -38,7 +38,7 @@ struct RateLimitMiddleware {
         std::unique_lock<std::shared_timed_mutex> lock(mutex_);
         for (const auto& row : result) {
             const std::string ip = row["ip"].c_str();
-            const std::int64_t epoch_seconds = row["banned_until_epoch"].as<std::int64_t>();
+            const std::int64_t epoch_seconds = row["expires_at_epoch"].as<std::int64_t>();
             const auto banned_until = std::chrono::system_clock::time_point(std::chrono::seconds(epoch_seconds));
 
             if (banned_until > now) {
@@ -87,18 +87,33 @@ struct RateLimitMiddleware {
                 banned_ips_cache.erase(banned_it);
             }
 
-            if (clients_.size() > MAX_CLIENTS) {
-                evict_expired_clients(now_steady);
-            }
-
             if (clients_.size() >= MAX_CLIENTS) {
-                auto existing = clients_.find(ip);
-                if (existing == clients_.end()) {
-                    res.code = 429;
-                    res.set_header("Content-Type", "application/json");
-                    res.body = R"({"error": "Too Many Requests"})";
-                    res.end();
-                    return;
+                evict_expired_clients(now_steady);
+
+                if (clients_.size() >= MAX_CLIENTS) {
+                    auto existing = clients_.find(ip);
+                    if (existing == clients_.end()) {
+                        auto lowest_it = clients_.end();
+                        int lowest_count = std::numeric_limits<int>::max();
+
+                        for (auto it = clients_.begin(); it != clients_.end(); ++it) {
+                            if (it->second.count < lowest_count) {
+                                lowest_count = it->second.count;
+                                lowest_it = it;
+                            }
+                        }
+
+                        const int HIGH_THREAT_THRESHOLD = 5;
+                        if (lowest_it != clients_.end() && lowest_count < HIGH_THREAT_THRESHOLD) {
+                            clients_.erase(lowest_it);
+                        } else {
+                            res.code = 429;
+                            res.set_header("Content-Type", "application/json");
+                            res.body = R"({"error": "Too Many Requests"})";
+                            res.end();
+                            return;
+                        }
+                    }
                 }
             }
 
@@ -146,10 +161,10 @@ struct RateLimitMiddleware {
                     ban_until.time_since_epoch()).count();
 
                 w.exec(
-                    "INSERT INTO banned_ips (ip, banned_until, reason) "
+                    "INSERT INTO banned_ips (ip, expires_at, reason) "
                     "VALUES ($1, to_timestamp($2), 'Força bruta em autenticação') "
                     "ON CONFLICT (ip) DO UPDATE "
-                    "SET banned_until = EXCLUDED.banned_until, reason = EXCLUDED.reason;",
+                    "SET expires_at = EXCLUDED.expires_at, reason = EXCLUDED.reason;",
                     pqxx::params{ip, epoch_seconds});
                 w.commit();
             } catch (...) {

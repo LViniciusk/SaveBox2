@@ -26,8 +26,8 @@ int main() {
     }
 
     // Inicialização manual dos provedores OpenSSL para evitar falhas no Windows (jwt-cpp / verificação RSA)
-    OSSL_PROVIDER_load(nullptr, "default");
-    OSSL_PROVIDER_load(nullptr, "legacy");
+    OSSL_PROVIDER* prov_def = OSSL_PROVIDER_load(nullptr, "default");
+    OSSL_PROVIDER* prov_leg = OSSL_PROVIDER_load(nullptr, "legacy");
 
 
     std::string conn_str = DotEnv::get_secure_conn_string();
@@ -111,6 +111,9 @@ int main() {
     pool.close_all_connections();
 
     std::cout << "[SERVER] Banco de dados desconectado.\n";
+
+    if (prov_leg) OSSL_PROVIDER_unload(prov_leg);
+    if (prov_def) OSSL_PROVIDER_unload(prov_def);
 
     return 0;
 }
