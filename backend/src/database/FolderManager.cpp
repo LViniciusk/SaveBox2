@@ -1,5 +1,6 @@
 #include "database/FolderManager.hpp"
 #include "database/DatabasePool.hpp"
+#include "storage/FileChunker.hpp"
 #include <pqxx/pqxx>
 #include <stdexcept>
 #include <vector>
@@ -24,43 +25,31 @@ uint64_t FolderManager::create_folder(uint64_t user_id,
         }
     }
 
-    // Verificação de duplicidade
-    std::string dup_query;
-    pqxx::result dup_res;
-    if (parent_id.has_value()) {
-        dup_query = "SELECT id FROM folders WHERE user_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND parent_id = $3";
-        dup_res = W.exec(dup_query, pqxx::params{user_id, name_hash, parent_id.value()});
-    } else {
-        dup_query = "SELECT id FROM folders WHERE user_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND parent_id IS NULL";
-        dup_res = W.exec(dup_query, pqxx::params{user_id, name_hash});
-    }
-
-    if (!dup_res.empty()) {
-        throw std::runtime_error("FOLDER_ALREADY_EXISTS");
-    }
-
     pqxx::result res;
 
-    if (parent_id.has_value()) {
-        res = W.exec(
-            "INSERT INTO folders (user_id, parent_id, encrypted_name, name_hash) "
-            "VALUES ($1, $2, $3, $4) RETURNING id;",
-            pqxx::params{user_id, parent_id.value(), encrypted_name, name_hash}
-        );
-    } else {
-        res = W.exec(
-            "INSERT INTO folders (user_id, parent_id, encrypted_name, name_hash) "
-            "VALUES ($1, NULL, $2, $3) RETURNING id;",
-            pqxx::params{user_id, encrypted_name, name_hash}
-        );
+    try {
+        if (parent_id.has_value()) {
+            res = W.exec(
+                "INSERT INTO folders (user_id, parent_id, encrypted_name, name_hash) "
+                "VALUES ($1, $2, $3, $4) RETURNING id;",
+                pqxx::params{user_id, parent_id.value(), encrypted_name, name_hash}
+            );
+        } else {
+            res = W.exec(
+                "INSERT INTO folders (user_id, parent_id, encrypted_name, name_hash) "
+                "VALUES ($1, NULL, $2, $3) RETURNING id;",
+                pqxx::params{user_id, encrypted_name, name_hash}
+            );
+        }
+        W.commit();
+    } catch (const pqxx::unique_violation& e) {
+        throw std::runtime_error("FOLDER_ALREADY_EXISTS");
     }
-
-    W.commit();
 
     return res[0][0].as<uint64_t>();
 }
 
-std::vector<uint64_t> FolderManager::delete_folder(uint64_t folder_id, uint64_t user_id) {
+std::vector<std::string> FolderManager::delete_folder(uint64_t folder_id, uint64_t user_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
@@ -91,17 +80,19 @@ std::vector<uint64_t> FolderManager::delete_folder(uint64_t folder_id, uint64_t 
         ") "
         "UPDATE files SET deleted_at = CURRENT_TIMESTAMP "
         "WHERE folder_id IN (SELECT id FROM folder_tree) "
-        "RETURNING id;",
+        "RETURNING external_file_id;",
         pqxx::params{folder_id}
     );
 
-    std::vector<uint64_t> files_to_delete;
+    std::vector<std::string> external_files;
     for (const auto& row : file_res) {
-        files_to_delete.push_back(row[0].as<uint64_t>());
+        if (!row[0].is_null()) {
+            external_files.push_back(row[0].as<std::string>());
+        }
     }
 
     txn.commit();
-    return files_to_delete;
+    return external_files;
 }
 
 bool FolderManager::folder_exists(uint64_t folder_id) {
@@ -314,7 +305,7 @@ crow::json::wvalue FolderManager::update_folder(uint64_t folder_id, uint64_t use
     return ret;
 }
 
-void FolderManager::restore_folder(uint64_t folder_id, uint64_t user_id) {
+std::vector<std::string> FolderManager::restore_folder(uint64_t folder_id, uint64_t user_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
@@ -352,6 +343,8 @@ void FolderManager::restore_folder(uint64_t folder_id, uint64_t user_id) {
         throw std::runtime_error("FOLDER_ALREADY_EXISTS");
     }
 
+    std::vector<std::string> external_files;
+
     if (parent_id.has_value()) {
         txn.exec(
             "WITH RECURSIVE folder_tree AS ( "
@@ -364,16 +357,23 @@ void FolderManager::restore_folder(uint64_t folder_id, uint64_t user_id) {
             pqxx::params{folder_id}
         );
 
-        txn.exec(
+        auto file_res = txn.exec(
             "WITH RECURSIVE folder_tree AS ( "
             "  SELECT id FROM folders WHERE id = $1 "
             "  UNION ALL "
             "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
             ") "
             "UPDATE files SET deleted_at = NULL "
-            "WHERE folder_id IN (SELECT id FROM folder_tree);",
+            "WHERE folder_id IN (SELECT id FROM folder_tree) "
+            "RETURNING external_file_id;",
             pqxx::params{folder_id}
         );
+
+        for (const auto& row : file_res) {
+            if (!row[0].is_null()) {
+                external_files.push_back(row[0].as<std::string>());
+            }
+        }
     } else {
         txn.exec(
             "UPDATE folders SET parent_id = NULL WHERE id = $1 AND user_id = $2",
@@ -391,17 +391,92 @@ void FolderManager::restore_folder(uint64_t folder_id, uint64_t user_id) {
             pqxx::params{folder_id}
         );
 
-        txn.exec(
+        auto file_res = txn.exec(
             "WITH RECURSIVE folder_tree AS ( "
             "  SELECT id FROM folders WHERE id = $1 "
             "  UNION ALL "
             "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
             ") "
             "UPDATE files SET deleted_at = NULL "
-            "WHERE folder_id IN (SELECT id FROM folder_tree);",
+            "WHERE folder_id IN (SELECT id FROM folder_tree) "
+            "RETURNING external_file_id;",
             pqxx::params{folder_id}
         );
+
+        for (const auto& row : file_res) {
+            if (!row[0].is_null()) {
+                external_files.push_back(row[0].as<std::string>());
+            }
+        }
     }
 
     txn.commit();
+    return external_files;
+}
+
+
+
+std::vector<std::string> FolderManager::hard_delete_folder(uint64_t folder_id, uint64_t user_id, class FileChunker* chunker) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto check = txn.exec(
+        "SELECT id FROM folders WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL",
+        pqxx::params{folder_id, user_id}
+    );
+    if (check.empty()) throw std::runtime_error("NOT_FOUND");
+
+    auto deleted_files_res = txn.exec(
+        "WITH RECURSIVE folder_tree AS ( "
+        "  SELECT id FROM folders WHERE id = $1 "
+        "  UNION ALL "
+        "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
+        "), "
+        "deleted_files AS ("
+        "  DELETE FROM files WHERE folder_id IN (SELECT id FROM folder_tree) "
+        "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
+        ") "
+        "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files;",
+        pqxx::params{folder_id}
+    );
+
+    uint64_t freed_bytes = 0;
+    std::vector<std::string> external_files;
+
+    for (const auto& row : deleted_files_res) {
+        auto fid = row[0].as<uint64_t>();
+        std::string provider = row[1].as<std::string>();
+        uint64_t size = row[2].as<uint64_t>();
+        
+        freed_bytes += (provider == "local") ? size : 2048;
+        
+        if (provider == "google_drive") {
+            if (!row[3].is_null() && !row[4].is_null()) {
+                std::string ext_file_id = row[3].as<std::string>();
+                external_files.push_back(ext_file_id);
+                txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
+                         pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+            }
+        } else {
+            if (chunker) chunker->delete_file(fid);
+        }
+    }
+
+    if (freed_bytes > 0) {
+        txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
+                 pqxx::params{freed_bytes, user_id});
+    }
+
+    txn.exec(
+        "WITH RECURSIVE folder_tree AS ( "
+        "  SELECT id FROM folders WHERE id = $1 "
+        "  UNION ALL "
+        "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
+        ") "
+        "DELETE FROM folders WHERE id IN (SELECT id FROM folder_tree);",
+        pqxx::params{folder_id}
+    );
+
+    txn.commit();
+    return external_files;
 }

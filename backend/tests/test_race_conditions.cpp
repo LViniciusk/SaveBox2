@@ -71,7 +71,7 @@ TEST_CASE("Race Condition - Upload de Chunks Simultâneos", "[concurrency][chunk
     const std::string test_dir = "./test_race_chunks/";
     constexpr uint64_t file_id = 9999;
     constexpr int num_threads = 10;
-    constexpr size_t chunk_size = 5 * 1024 * 1024;
+    constexpr size_t chunk_size = 4 * 1024 * 1024;
 
     std::filesystem::remove_all(test_dir);
     std::filesystem::create_directories(test_dir);

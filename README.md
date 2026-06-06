@@ -36,6 +36,7 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 | `GET` | `/verify?token=<uuid>` | Valida o token recebido por e-mail e ativa a conta. |
 | `POST` | `/login` | Autentica e retorna o JWT Bearer Token. |
 | `GET` | `/users/me/quota` | Consulta limite e uso de armazenamento. |
+| `DELETE` | `/users/me` | Deleta permanentemente a conta do usuário. |
 | `POST` | `/api/auth/google` | Realiza login via Google. |
 
 ### Gerenciamento de Pastas
@@ -64,6 +65,8 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 | `GET` | `/trash` | Lista todos os itens deletados (Soft Deleted). |
 | `POST` | `/folders/<id>/restore` | Restaura pasta (resolve colisões de nome). |
 | `POST` | `/files/<id>/restore` | Restaura arquivo para local original ou raiz. |
+| `DELETE` | `/trash/folders/<id>` | **Hard Delete:** Deleta a pasta e seu conteúdo permanentemente. |
+| `DELETE` | `/trash/files/<id>` | **Hard Delete:** Deleta um arquivo permanentemente. |
 | `DELETE` | `/trash/empty` | **Hard Delete:** Limpa a lixeira permanentemente. |
 
 ### Compartilhamento (Links Públicos)
@@ -75,9 +78,13 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 ### Armazenamento Externo (Google Drive)
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
-| `POST` | `/api/storage/google/link` | Vincula uma conta Google. |
-| `GET` | `/api/storage/google/token` | Retorna um `access_token` fresco de 1h do Google. |
-| `POST` | `/files/<id>/finalize-external` | Registra no banco um upload concluído direto no Drive. |
+| `GET` | `/api/storage/google/generate-state` | Gera um OAuth state seguro via cookies para o fluxo do OAuth2. |
+| `POST` | `/api/storage/google/link` | Finaliza a vinculação de uma conta Google através de um Authorization Code. |
+| `GET` | `/api/storage/google/accounts` | Lista todas as contas Google Drive vinculadas. |
+| `DELETE`| `/api/storage/google/accounts/<id>` | Desvincula e remove credenciais da conta Google Drive associada. |
+| `POST` | `/files/<id>/finalize-external` | Registra no banco de dados um arquivo concluído direto no Drive pelo frontend. |
+| `GET` | `/api/storage/google/accounts/<id>/sync-map` | Retorna o mapa de sincronização dos External IDs para o Client-Side Sync. |
+| `POST` | `/api/storage/google/accounts/<id>/sync-cleanup` | Recebe fantasmas locais da Nuvem e efetua limpeza Soft Delete em massa. |
 
 ### Documentação (Swagger)
 | Método | Endpoint | Descrição |
@@ -103,21 +110,20 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 mingw32-make -j8 savebox_tests
 
-# Para rodar APENAS os benchmarks filtrando pela tag:
 .\savebox_tests.exe [#benchmark]
 ```
 
 ### 2. Load & Stress Testing (k6)
 
-Localizados na pasta `/performance_tests`, os scripts k6 estressam os recursos de rede, banco de dados (Connection Pool) e disco.
+Localizados na pasta `/performance_tests`, os scripts k6 estressam os recursos de rede, banco de dados e disco.
 
 Para executar, você precisará ter o k6 instalado e passar um token JWT válido:
 
 ```bash
-# Teste de Cache Stampede (Concorrência extrema no JWT/Google Login)
+# Teste de Cache Stampede
 k6 run performance_tests/load_auth_stampede.js
 
-# Teste de Estresse de Upload de Chunks (4MB I/O massivo)
+# Teste de Estresse de Upload de Chunks
 # NOTA: Crie um arquivo no banco de dados e passe o ID dele
 k6 run -e JWT_TOKEN="token" -e FILE_ID="1" performance_tests/load_upload_chunks.js
 
@@ -127,7 +133,7 @@ k6 run -e JWT_TOKEN="token" performance_tests/load_google_drive_proxy.js
 
 ### 3. Soak Testing (Deteção de Memory Leaks)
 
-Para garantir matematicamente que o nosso servidor C++ não possui vazamentos de memória da API C do OpenSSL (RAII/Smart Pointers), utilize o Valgrind envelopando o servidor em modo de Release ou Debug (preferencialmente Release com símbolos `-DCMAKE_BUILD_TYPE=RelWithDebInfo`).
+Para garantir matematicamente que o nosso servidor C++ não possui vazamentos de memória da API C do OpenSSL, utilize o Valgrind envelopando o servidor em modo de Release ou Debug (preferencialmente Release com símbolos `-DCMAKE_BUILD_TYPE=RelWithDebInfo`).
 
 **Passo Crítico (Ambiente Linux ou WSL2):**
 
@@ -138,10 +144,9 @@ valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./savebox_s
 
 2. Num terminal paralelo, dispare o tráfego de maratona (duração de 4 a 8 horas):
 ```bash
-k6 run -e JWT_TOKEN="seu.token.jwt" performance_tests/soak_test.js
+k6 run -e JWT_TOKEN="token" performance_tests/soak_test.js
 ```
 
-3. No final da execução, force o encerramento seguro do servidor (Ctrl+C). O relatório do Valgrind DEVE terminar com: `definitely lost: 0 bytes`. Isso confirma a blindagem do servidor contra Memory Leaks.
 
 ---
 

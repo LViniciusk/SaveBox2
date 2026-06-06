@@ -35,6 +35,7 @@ AuthService::AuthService(const std::string& pepper, const std::string& jwt_secre
 
     owned_email_service_ = std::make_unique<EmailService>(resend_api_key, validation_api_key);
     email_service_ = owned_email_service_.get();
+    init_dummy_hash();
 }
 
 AuthService::AuthService(const std::string& pepper, const std::string& jwt_secret, EmailService* email_service)
@@ -56,6 +57,11 @@ AuthService::AuthService(const std::string& pepper, const std::string& jwt_secre
         );
         email_service_ = owned_email_service_.get();
     }
+    init_dummy_hash();
+}
+
+void AuthService::init_dummy_hash() {
+    dummy_hash_ = hash_password("dummy_constant_time_password");
 }
 
 void AuthService::set_database_pool(DatabasePool& pool) {
@@ -195,6 +201,8 @@ int AuthService::authenticate_user(const std::string& username, const std::strin
     txn.commit();
 
     if (result.empty()) {
+        // [AppSec] Constant-time mitigation against User Enumeration Timing Attack
+        verify_password(password, dummy_hash_);
         throw std::runtime_error("INVALID_CREDENTIALS");
     }
 
@@ -254,11 +262,25 @@ std::string AuthService::generate_token(uint64_t user_id) const {
     auto now = std::chrono::system_clock::now();
     auto expiry = now + std::chrono::hours(24);
 
+    int token_version = 1;
+    if (pool_) {
+        try {
+            auto conn = pool_->acquire_connection();
+            pqxx::work txn(*conn);
+            auto res = txn.exec("SELECT token_version FROM users WHERE id = $1", pqxx::params{user_id});
+            txn.commit();
+            if (!res.empty() && !res[0][0].is_null()) {
+                token_version = res[0][0].as<int>();
+            }
+        } catch (...) {}
+    }
+
     return jwt::create()
         .set_type("JWT")
         .set_issued_at(now)
         .set_expires_at(expiry)
         .set_payload_claim("user_id", jwt::claim(std::to_string(user_id)))
+        .set_payload_claim("tver", jwt::claim(std::to_string(token_version)))
         .sign(jwt::algorithm::hs256{jwt_secret_});
 }
 
@@ -272,6 +294,33 @@ std::optional<uint64_t> AuthService::verify_token(const std::string& token) cons
         verifier.verify(decoded);
 
         uint64_t user_id = std::stoull(decoded.get_payload_claim("user_id").as_string());
+
+        if (pool_) {
+            auto conn = pool_->acquire_connection();
+            pqxx::work txn(*conn);
+            auto res = txn.exec("SELECT token_version, deleted_at FROM users WHERE id = $1", pqxx::params{user_id});
+            txn.commit();
+            if (res.empty()) {
+                return std::nullopt;
+            }
+            int db_token_version = 1;
+            if (!res[0][0].is_null()) {
+                db_token_version = res[0][0].as<int>();
+            }
+            bool is_deleted = !res[0][1].is_null();
+            if (is_deleted) {
+                return std::nullopt;
+            }
+
+            int token_tver = 1;
+            if (decoded.has_payload_claim("tver")) {
+                token_tver = std::stoi(decoded.get_payload_claim("tver").as_string());
+            }
+            if (token_tver < db_token_version) {
+                return std::nullopt;
+            }
+        }
+
         return user_id;
     } catch (...) {
         return std::nullopt;

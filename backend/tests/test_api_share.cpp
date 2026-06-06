@@ -195,7 +195,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
             auto big_file_res = txn.exec(
                 "INSERT INTO files (user_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
                 "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-                pqxx::params{user_a_id, "file_share_big", "hash_share_big", "mock_fdk", 6 * 1024 * 1024 + 1, 1, true}
+                pqxx::params{user_a_id, "file_share_big", "hash_share_big", "mock_fdk", 5 * 1024 * 1024 + 1, 1, true}
             );
             file_big_id = big_file_res[0][0].as<int>();
 
@@ -208,7 +208,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         {
             std::ofstream out_big(big_file_path, std::ios::binary);
             REQUIRE(out_big.is_open());
-            out_big.seekp(6 * 1024 * 1024);
+            out_big.seekp(5 * 1024 * 1024);
             out_big.write("X", 1);
             out_big.close();
         }

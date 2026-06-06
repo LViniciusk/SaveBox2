@@ -66,6 +66,20 @@ TEST_CASE("Gestão de Pastas - Hierarquia e Cascata", "[folders][hierarchy][casc
         }
     }
 
+    SECTION("Proteção contra SQL Injection (Mass Assignment)") {
+        std::string malicious_payload = "' OR 1=1; DROP TABLE folders; --";
+        uint64_t parent_id = manager.create_folder(fake_user_id, std::nullopt, malicious_payload, malicious_payload);
+        REQUIRE(parent_id > 0);
+
+        auto conn = pool.acquire_connection();
+        pqxx::work W(*conn);
+        auto res = W.exec("SELECT encrypted_name FROM folders WHERE id = $1", pqxx::params{parent_id});
+        REQUIRE(res[0][0].as<std::string>() == malicious_payload);
+
+        auto table_check = W.exec("SELECT count(*) FROM folders");
+        REQUIRE(table_check[0][0].as<int>() >= 1);
+    }
+
     {
         auto conn = pool.acquire_connection();
         pqxx::work W(*conn);

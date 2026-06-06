@@ -57,3 +57,23 @@ int UsersManager::create_oauth_user(const std::string& email, const std::string&
     txn.commit();
     return insert_result[0][0].as<int>();
 }
+
+void UsersManager::delete_user(uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    txn.exec(
+        "UPDATE users SET deleted_at = CURRENT_TIMESTAMP, token_version = token_version + 1 WHERE id = $1",
+        pqxx::params{user_id}
+    );
+    txn.commit();
+}
+
+void UsersManager::increment_token_version(uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    txn.exec(
+        "UPDATE users SET token_version = token_version + 1 WHERE id = $1",
+        pqxx::params{user_id}
+    );
+    txn.commit();
+}

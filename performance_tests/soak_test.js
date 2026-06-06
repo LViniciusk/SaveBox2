@@ -9,7 +9,7 @@ export const options = {
 
 export function setup() {
     return {
-        token: __ENV.JWT_TOKEN || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODA3NjY4MTAsImlhdCI6MTc4MDY4MDQxMCwidXNlcl9pZCI6IjE4NCJ9.9bAYKSUJzcsY4MstOxZm7AtbpN5FzQYmBPSF2zKYH3A'
+        token: __ENV.JWT_TOKEN || 'token'
     };
 }
 

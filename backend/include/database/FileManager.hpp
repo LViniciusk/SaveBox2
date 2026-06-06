@@ -25,20 +25,22 @@ public:
 
     int get_total_chunks(uint64_t file_id, uint64_t user_id);
     bool can_user_download(uint64_t file_id, uint64_t user_id);
+    std::string get_file_name(uint64_t file_id, uint64_t user_id);
     std::vector<crow::json::wvalue> get_user_files_paginated(uint64_t user_id, int limit, int offset);
     std::vector<crow::json::wvalue> get_pending_uploads(uint64_t user_id);
     std::vector<int> get_uploaded_chunks(uint64_t file_id, uint64_t user_id);
     void record_chunk_saved(uint64_t file_id, int chunk_index);
     int count_uploaded_chunks(uint64_t file_id);
-    void delete_file(uint64_t file_id, uint64_t user_id);
+    std::optional<std::string> delete_file(uint64_t file_id, uint64_t user_id);
     crow::json::wvalue update_file(uint64_t file_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& folder_id);
     
     std::string share_file(uint64_t file_id, uint64_t user_id);
     std::pair<uint64_t, std::string> get_shared_file_info(const std::string& uuid);
 
     crow::json::wvalue get_trash(uint64_t user_id);
-    void restore_file(uint64_t file_id, uint64_t user_id);
-    void empty_trash(uint64_t user_id, class FileChunker* chunker);
+    std::optional<std::string> restore_file(uint64_t file_id, uint64_t user_id);
+    std::optional<std::string> hard_delete_file(uint64_t file_id, uint64_t user_id, class FileChunker* chunker);
+    std::vector<std::string> empty_trash(uint64_t user_id, class FileChunker* chunker);
 
 
     int init_external_upload(uint64_t user_id, std::optional<uint64_t> folder_id,
@@ -51,6 +53,13 @@ public:
                                   const std::string& external_file_id);
 
     std::string get_storage_provider(uint64_t file_id, uint64_t user_id);
+
+    struct ExternalSyncFile {
+        uint64_t id;
+        std::string external_file_id;
+    };
+    std::vector<ExternalSyncFile> get_external_sync_map(uint64_t user_id, uint64_t external_storage_id);
+    void cleanup_external_sync(uint64_t user_id, uint64_t external_storage_id, const std::vector<std::string>& missing_external_ids);
 
 private:
     DatabasePool& pool_;

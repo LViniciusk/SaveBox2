@@ -45,6 +45,7 @@ private:
 
     std::string pepper_;
     std::string jwt_secret_;
+    std::string dummy_hash_;
     DatabasePool* pool_ = nullptr;
     EmailService* email_service_ = nullptr;
     std::unique_ptr<EmailService> owned_email_service_;
@@ -52,4 +53,5 @@ private:
 
     std::string apply_pepper(const std::string& plain_password) const;
     std::string generate_uuid_v4() const;
+    void init_dummy_hash();
 };

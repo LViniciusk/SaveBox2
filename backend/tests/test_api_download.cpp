@@ -148,6 +148,50 @@ TEST_CASE("API de Download de Arquivos", "[api][download]") {
         REQUIRE(res.code < 600);
     }
 
+    SECTION("Range Header Memory DoS Prevention - Limite de 5MB") {
+        int large_file_id = 0;
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            auto res = txn.exec(
+                "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+                "VALUES ($1, $2, 'enc_large', 'hash_large', 'mock_fdk', 10000000, 1, true) RETURNING id",
+                pqxx::params{user_a_id, fake_folder_id}
+            );
+            large_file_id = res[0][0].as<int>();
+            txn.commit();
+        }
+
+        std::string large_storage_path = test_storage_dir + std::to_string(large_file_id) + ".dat";
+        {
+            std::ofstream ofs(large_storage_path, std::ios::binary);
+            ofs << "A"; 
+            ofs.seekp(6000000);
+            ofs << "Z";
+            ofs.close();
+        }
+
+        crow::request req;
+        req.add_header("Authorization", "Bearer " + token_a);
+        req.add_header("Range", "bytes=0-6000000"); 
+        req.url = "/files/" + std::to_string(large_file_id) + "/download";
+
+        crow::response res = router.handle_download_file(req, large_file_id);
+        REQUIRE(res.code == 400);
+        REQUIRE(res.body.find("excede o limite de 5MB") != std::string::npos);
+    }
+
+    SECTION("Proteção contra Out-Of-Bounds e Path Traversal no File ID") {
+        crow::request req;
+        req.add_header("Authorization", "Bearer " + token_a);
+        req.url = "/files/-999999/download";
+
+        crow::response res = router.handle_download_file(req, -999999);
+        REQUIRE((res.code == 404 || res.code == 400 || res.code == 500));
+
+        crow::response res_overflow = router.handle_download_file(req, 2147483647);
+        REQUIRE((res_overflow.code == 404 || res_overflow.code == 400 || res_overflow.code == 500));
+    }
 
     {
         auto conn = pool.acquire_connection();

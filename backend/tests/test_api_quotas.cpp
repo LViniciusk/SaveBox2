@@ -125,7 +125,7 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
             init_body["name_hash"] = "thash2_" + std::to_string(rand());
             init_body["encrypted_fdk"] = "mock_fdk";
             init_body["size_bytes"] = 9 * 1024 * 1024; 
-            init_body["total_chunks"] = 2;
+            init_body["total_chunks"] = 3;
             
             req.body = init_body.dump();
             

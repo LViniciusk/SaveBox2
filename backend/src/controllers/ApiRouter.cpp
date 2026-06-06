@@ -1,6 +1,7 @@
 #include "controllers/ApiRouter.hpp"
 #include "database/FolderManager.hpp"
 #include "database/FileManager.hpp"
+#include "database/UsersManager.hpp"
 #include "storage/FileChunker.hpp"
 #include "Services/GoogleDriveService.hpp"
 #include "utils.hpp"
@@ -34,6 +35,20 @@ crow::response ApiRouter::handle_get_quota(const crow::request& req) {
     }
 }
 
+crow::response ApiRouter::handle_delete_user(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        UsersManager users_mgr(*pool_);
+        users_mgr.delete_user(user_id);
+        return crow::response(200, R"({"message":"Conta encerrada com sucesso"})");
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 crow::response ApiRouter::handle_register(const crow::request& req) {
     try {
         auto body = crow::json::load(req.body);
@@ -45,7 +60,10 @@ crow::response ApiRouter::handle_register(const crow::request& req) {
             return crow::response(400, R"({"error":"Campos obrigatorios ausentes"})");
         }
 
-        std::string client_ip = req.remote_ip_address;
+        std::string client_ip = req.get_header_value("CF-Connecting-IP");
+        if (client_ip.empty()) {
+            client_ip = req.remote_ip_address.empty() ? "unknown" : req.remote_ip_address;
+        }
         std::string username;
         std::string email;
         std::string password;
@@ -320,7 +338,7 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
 
         int total_chunks = static_cast<int>(raw_total_chunks);
 
-        constexpr uint64_t CHUNK_SIZE = 5ULL * 1024 * 1024;
+        constexpr uint64_t CHUNK_SIZE = 4ULL * 1024 * 1024;
         int expected_chunks = static_cast<int>((size_bytes + CHUNK_SIZE - 1) / CHUNK_SIZE);
         if (expected_chunks == 0) expected_chunks = 1;
         if (total_chunks != expected_chunks) {
@@ -456,13 +474,25 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 
+    auto sanitize_header_filename = [](const std::string& name) {
+        std::string safe_name = name;
+        for (char& c : safe_name) {
+            if (c == '\r' || c == '\n' || c == '"' || static_cast<unsigned char>(c) < 32 || static_cast<unsigned char>(c) == 127) {
+                c = '_';
+            }
+        }
+        return safe_name;
+    };
+
     const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "http://localhost:3000");
-    auto set_streaming_headers = [cors_origin](crow::response& res, size_t content_length, size_t total_size) {
+    auto set_streaming_headers = [&cors_origin, &sanitize_header_filename](crow::response& res, size_t content_length, size_t total_size, const std::string& file_name) {
         res.set_header("Content-Type", "application/octet-stream");
         res.set_header("Accept-Ranges", "bytes");
         res.set_header("Content-Length", std::to_string(content_length));
         res.set_header("Access-Control-Allow-Origin", cors_origin);
-        res.set_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+        res.set_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, Content-Disposition");
+        std::string safe_name = sanitize_header_filename(file_name);
+        res.set_header("Content-Disposition", "attachment; filename=\"" + safe_name + "\"");
     };
 
     try {
@@ -471,7 +501,9 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
         size_t total_size = chunker_->get_file_size(file_id);
         std::string range_header = req.get_header_value("Range");
 
-        constexpr size_t MAX_FULL_DOWNLOAD_SIZE = 5 * 1024 * 1024; // 5MB
+        constexpr size_t MAX_FULL_DOWNLOAD_SIZE = 4 * 1024 * 1024; // 4MB
+
+        std::string file_name = file_mgr_->get_file_name(file_id, user_id);
 
         if (range_header.empty()) {
             if (total_size > MAX_FULL_DOWNLOAD_SIZE) {
@@ -479,7 +511,7 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
             }
             std::string content = chunker_->read_entire_file(static_cast<uint64_t>(file_id));
             crow::response res(200, content);
-            set_streaming_headers(res, content.size(), total_size);
+            set_streaming_headers(res, content.size(), total_size, file_name);
             return res;
         }
 
@@ -549,11 +581,14 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
         }
 
         size_t length = end - start + 1;
+        if (length > MAX_FULL_DOWNLOAD_SIZE) {
+            return crow::response(400, R"({"error":"Range solicitado excede o limite de 5MB por requisicao."})");
+        }
         std::string data = chunker_->read_file_portion(file_id, start, length);
 
         crow::response res(206, data);
         res.set_header("Content-Range", "bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" + std::to_string(total_size));
-        set_streaming_headers(res, data.size(), total_size);
+        set_streaming_headers(res, data.size(), total_size, file_name);
 
         return res;
 
@@ -721,8 +756,11 @@ crow::response ApiRouter::handle_trash_folder(const crow::request& req, int fold
     uint64_t user_id = *user_id_opt;
 
     try {
-        folder_mgr_->delete_folder(static_cast<uint64_t>(folder_id), user_id);
-        return crow::response(200, R"({"message":"Pasta enviada para a lixeira"})");
+        std::vector<std::string> ext_files = folder_mgr_->delete_folder(static_cast<uint64_t>(folder_id), user_id);
+        crow::json::wvalue res;
+        res["message"] = "Pasta enviada para a lixeira";
+        res["external_files"] = ext_files;
+        return crow::response(200, res);
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Pasta nao encontrada"})");
@@ -736,8 +774,13 @@ crow::response ApiRouter::handle_trash_file(const crow::request& req, int file_i
     uint64_t user_id = *user_id_opt;
 
     try {
-        file_mgr_->delete_file(static_cast<uint64_t>(file_id), user_id);
-        return crow::response(200, R"({"message":"Arquivo enviado para a lixeira"})");
+        auto ext_file = file_mgr_->delete_file(static_cast<uint64_t>(file_id), user_id);
+        crow::json::wvalue res;
+        res["message"] = "Arquivo enviado para a lixeira";
+        std::vector<std::string> ext_files;
+        if (ext_file.has_value()) ext_files.push_back(*ext_file);
+        res["external_files"] = ext_files;
+        return crow::response(200, res);
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
@@ -751,8 +794,11 @@ crow::response ApiRouter::handle_restore_folder(const crow::request& req, int fo
     uint64_t user_id = *user_id_opt;
 
     try {
-        folder_mgr_->restore_folder(static_cast<uint64_t>(folder_id), user_id);
-        return crow::response(200, R"({"message":"Pasta restaurada com sucesso"})");
+        std::vector<std::string> ext_files = folder_mgr_->restore_folder(static_cast<uint64_t>(folder_id), user_id);
+        crow::json::wvalue res;
+        res["message"] = "Pasta restaurada com sucesso";
+        res["external_files"] = ext_files;
+        return crow::response(200, res);
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "NOT_FOUND")
@@ -772,8 +818,13 @@ crow::response ApiRouter::handle_restore_file(const crow::request& req, int file
     uint64_t user_id = *user_id_opt;
 
     try {
-        file_mgr_->restore_file(static_cast<uint64_t>(file_id), user_id);
-        return crow::response(200, R"({"message":"Arquivo restaurado com sucesso"})");
+        auto ext_file = file_mgr_->restore_file(static_cast<uint64_t>(file_id), user_id);
+        crow::json::wvalue res;
+        res["message"] = "Arquivo restaurado com sucesso";
+        std::vector<std::string> ext_files;
+        if (ext_file.has_value()) ext_files.push_back(*ext_file);
+        res["external_files"] = ext_files;
+        return crow::response(200, res);
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Arquivo nao encontrado na lixeira"})");
@@ -803,12 +854,54 @@ crow::response ApiRouter::handle_empty_trash(const crow::request& req) {
     uint64_t user_id = *user_id_opt;
 
     try {
-        file_mgr_->empty_trash(user_id, chunker_);
-        return crow::response(200, R"({"message":"Lixeira esvaziada com sucesso"})");
+        std::vector<std::string> ext_files = file_mgr_->empty_trash(user_id, chunker_);
+        crow::json::wvalue res;
+        res["message"] = "Lixeira esvaziada com sucesso";
+        res["external_files"] = ext_files;
+        return crow::response(200, res);
     } catch (const std::exception& e) {
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
+
+crow::response ApiRouter::handle_hard_delete_file(const crow::request& req, int file_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        auto ext_file = file_mgr_->hard_delete_file(static_cast<uint64_t>(file_id), user_id, chunker_);
+        crow::json::wvalue res;
+        res["message"] = "Arquivo deletado permanentemente";
+        std::vector<std::string> ext_files;
+        if (ext_file.has_value()) ext_files.push_back(*ext_file);
+        res["external_files"] = ext_files;
+        return crow::response(200, res);
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Arquivo nao encontrado na lixeira"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_hard_delete_folder(const crow::request& req, int folder_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        std::vector<std::string> ext_files = folder_mgr_->hard_delete_folder(static_cast<uint64_t>(folder_id), user_id, chunker_);
+        crow::json::wvalue res;
+        res["message"] = "Pasta deletada permanentemente";
+        res["external_files"] = ext_files;
+        return crow::response(200, res);
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Pasta nao encontrada na lixeira"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 
 crow::response ApiRouter::handle_update_file(const crow::request& req, int file_id) {
     auto user_id_opt = authenticate_request(req);
@@ -908,14 +1001,27 @@ crow::response ApiRouter::handle_share_file(const crow::request& req, int file_i
 }
 
 crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const std::string& uuid) {
+    auto sanitize_header_filename = [](const std::string& name) {
+        std::string safe_name = name;
+        for (char& c : safe_name) {
+            if (c == '\r' || c == '\n' || c == '"' || static_cast<unsigned char>(c) < 32 || static_cast<unsigned char>(c) == 127) {
+                c = '_';
+            }
+        }
+        return safe_name;
+    };
+
     const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "http://localhost:3000");
-    auto set_share_headers = [cors_origin](crow::response& res, const std::string& encrypted_name, size_t content_length, size_t total_size) {
+    auto set_share_headers = [&cors_origin, &sanitize_header_filename](crow::response& res, const std::string& encrypted_name, size_t content_length, size_t total_size) {
         res.set_header("Content-Type", "application/octet-stream");
         res.set_header("Accept-Ranges", "bytes");
         res.set_header("Content-Length", std::to_string(content_length));
         res.set_header("X-Encrypted-Name", encrypted_name);
         res.set_header("Access-Control-Allow-Origin", cors_origin);
-        res.set_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, X-Encrypted-Name");
+        res.set_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges, X-Encrypted-Name, Content-Disposition");
+        
+        std::string safe_name = sanitize_header_filename(encrypted_name);
+        res.set_header("Content-Disposition", "attachment; filename=\"" + safe_name + "\"");
     };
 
     try {
@@ -924,7 +1030,7 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
         size_t total_size = chunker_->get_file_size(file_id);
         std::string range_header = req.get_header_value("Range");
 
-        constexpr size_t MAX_FULL_DOWNLOAD_SIZE = 5 * 1024 * 1024; // 5MB
+        constexpr size_t MAX_FULL_DOWNLOAD_SIZE = 4 * 1024 * 1024; // 4MB
 
         if (range_header.empty()) {
             if (total_size > MAX_FULL_DOWNLOAD_SIZE) {
@@ -997,6 +1103,9 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
         }
 
         size_t length = end - start + 1;
+        if (length > MAX_FULL_DOWNLOAD_SIZE) {
+            return crow::response(400, R"({"error":"Range solicitado excede o limite de 5MB por requisicao."})");
+        }
         std::string data = chunker_->read_file_portion(file_id, start, length);
 
         crow::response res(206, data);
@@ -1151,6 +1260,64 @@ crow::response ApiRouter::handle_finalize_external_upload(const crow::request& r
     }
 }
 
+crow::response ApiRouter::handle_get_google_sync_map(const crow::request& req, int account_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    if (!gdrive_) {
+        return crow::response(500, R"({"error":"Servico Google Drive nao configurado"})");
+    }
+
+    try {
+        auto map = file_mgr_->get_external_sync_map(user_id, static_cast<uint64_t>(account_id));
+        
+        crow::json::wvalue res;
+        std::vector<crow::json::wvalue> file_list;
+        for (const auto& file : map) {
+            crow::json::wvalue f_json;
+            f_json["id"] = file.id;
+            f_json["external_file_id"] = file.external_file_id;
+            file_list.push_back(std::move(f_json));
+        }
+        res["files"] = std::move(file_list);
+        
+        return crow::response(200, res);
+
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_google_sync_cleanup(const crow::request& req, int account_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("missing_external_ids") || body["missing_external_ids"].t() != crow::json::type::List) {
+        return crow::response(400, R"({"error":"JSON invalido, missing_external_ids obrigatorio e deve ser uma lista"})");
+    }
+
+    std::vector<std::string> missing_ids;
+    for (const auto& item : body["missing_external_ids"]) {
+        if (item.t() == crow::json::type::String) {
+            missing_ids.push_back(item.s());
+        }
+    }
+
+    if (!gdrive_) {
+        return crow::response(500, R"({"error":"Servico Google Drive nao configurado"})");
+    }
+
+    try {
+        file_mgr_->cleanup_external_sync(user_id, static_cast<uint64_t>(account_id), missing_ids);
+        return crow::response(200, R"({"message":"Sincronizacao concluida com sucesso"})");
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app) {
     const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "*");
     auto& cors = app.get_middleware<crow::CORSHandler>();
@@ -1227,6 +1394,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
     CROW_ROUTE(app, "/users/me/quota").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req) {
         auto res = handle_get_quota(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/users/me").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req) {
+        auto res = handle_delete_user(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });
@@ -1383,6 +1557,20 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
         return res;
     });
 
+    CROW_ROUTE(app, "/trash/files/<int>").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req, int file_id) {
+        auto res = handle_hard_delete_file(req, file_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/trash/folders/<int>").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req, int folder_id) {
+        auto res = handle_hard_delete_folder(req, folder_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
     CROW_ROUTE(app, "/api/storage/google/generate-state").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req) {
         auto res = handle_generate_google_state(req);
@@ -1414,6 +1602,20 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
     CROW_ROUTE(app, "/files/<int>/finalize-external").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req, int file_id) {
         auto res = handle_finalize_external_upload(req, file_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/storage/google/accounts/<int>/sync-map").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, int account_id) {
+        auto res = handle_get_google_sync_map(req, account_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/storage/google/accounts/<int>/sync-cleanup").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req, int account_id) {
+        auto res = handle_google_sync_cleanup(req, account_id);
         res.set_header("Content-Type", "application/json");
         return res;
     });

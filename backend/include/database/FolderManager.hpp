@@ -16,7 +16,7 @@ public:
                            const std::string& encrypted_name,
                            const std::string& name_hash);
 
-    std::vector<uint64_t> delete_folder(uint64_t folder_id, uint64_t user_id);
+    std::vector<std::string> delete_folder(uint64_t folder_id, uint64_t user_id);
     bool folder_exists(uint64_t folder_id);
 
     crow::json::wvalue get_folder_contents(int folder_id, int user_id);
@@ -24,7 +24,8 @@ public:
     
     crow::json::wvalue update_folder(uint64_t folder_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& parent_id);
 
-    void restore_folder(uint64_t folder_id, uint64_t user_id);
+    std::vector<std::string> restore_folder(uint64_t folder_id, uint64_t user_id);
+    std::vector<std::string> hard_delete_folder(uint64_t folder_id, uint64_t user_id, class FileChunker* chunker);
 
 private:
     DatabasePool& pool_;

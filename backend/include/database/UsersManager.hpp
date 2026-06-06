@@ -11,6 +11,9 @@ public:
                           const std::string& provider_id, const std::string& full_name = "", 
                           const std::string& avatar_url = "");
 
+    void delete_user(uint64_t user_id);
+    void increment_token_version(uint64_t user_id);
+
 private:
     DatabasePool& pool_;
 };

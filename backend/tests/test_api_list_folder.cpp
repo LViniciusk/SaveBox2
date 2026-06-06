@@ -115,6 +115,18 @@ TEST_CASE("API de Listagem de Diretórios", "[api][list_folder]") {
         REQUIRE((res.code == 403 || res.code == 404));
     }
 
+    SECTION("BOLA: Escalonamento Lateral - Tentar aceder aos ficheiros do Utilizador A pelo Utilizador B") {
+        crow::request req;
+        req.add_header("Authorization", "Bearer " + token_b);
+        // O utilizador B tenta forjar a visualização chamando explicitamente a sub-pasta 2 (que pertence ao A)
+        req.url = "/folders/" + std::to_string(folder_2_id) + "/contents";
+
+        crow::response res = router.handle_list_folder_contents(req, folder_2_id);
+        
+        // A API de Listagem de Pastas deve assegurar BOLA bloqueando de imediato com 403 Forbidden ou 404 Not Found.
+        REQUIRE((res.code == 403 || res.code == 404));
+    }
+
     SECTION("Sucesso - Pasta Vazia") {
         crow::request req;
         req.add_header("Authorization", "Bearer " + token_a);

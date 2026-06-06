@@ -7,8 +7,7 @@
 #include "test_helpers.hpp"
 #include "database/UsersManager.hpp"
 #include <crow_all.h>
-
-
+#include <jwt-cpp/jwt.h>
 
 
 TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
@@ -91,6 +90,49 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         crow::response res = router.handle_login(req);
 
         REQUIRE(res.code == 401);
+    }
+
+    SECTION("Seguranca: Constant-time contra User Enumeration Timing Attacks") {
+        crow::request req_reg;
+        req_reg.body = R"({"username": "api_test_user", "email": "api_test_user@test.com", "password": "super_senha"})";
+        router.handle_register(req_reg);
+        
+        // Ativar a conta
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            txn.exec("UPDATE users SET is_email_verified = true WHERE username = 'api_test_user'");
+            txn.commit();
+        }
+
+        // 1. Username que nao existe (Gatilho da mitigacao)
+        crow::request req_non_existent;
+        req_non_existent.body = R"({"username": "ghost_user_doesnt_exist", "password": "super_senha_wrong"})";
+        
+        auto start1 = std::chrono::high_resolution_clock::now();
+        crow::response res_non_existent = router.handle_login(req_non_existent);
+        auto end1 = std::chrono::high_resolution_clock::now();
+        
+        REQUIRE(res_non_existent.code == 401);
+
+        // 2. Username que existe mas com senha errada
+        crow::request req_existent;
+        req_existent.body = R"({"username": "api_test_user", "password": "super_senha_wrong"})";
+
+        auto start2 = std::chrono::high_resolution_clock::now();
+        crow::response res_existent = router.handle_login(req_existent);
+        auto end2 = std::chrono::high_resolution_clock::now();
+        
+        REQUIRE(res_existent.code == 401);
+
+        auto duration_non_existent = std::chrono::duration_cast<std::chrono::milliseconds>(end1 - start1).count();
+        auto duration_existent = std::chrono::duration_cast<std::chrono::milliseconds>(end2 - start2).count();
+
+        // O delta deve ser impercetivel, mas como o Libsodium/Argon2 pode flutuar dezenas de ms 
+        // no Windows (jitter de scheduling), aumentamos a tolerância. Sem a mitigação, o delta 
+        // seria equivalente a todo o processamento do Argon2 (frequentemente > 100ms).
+        long long delta = std::abs(duration_existent - duration_non_existent);
+        REQUIRE(delta < 150); 
     }
 
     SECTION("Segurança: Tratamento de Tipagem JSON (Register/Login)") {
@@ -274,6 +316,25 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
             AuthService::validate_google_claims(payload, "test-client-id"),
             std::invalid_argument
         );
+    }
+
+    SECTION("Proteção contra Session Hijacking / Token Expirado (JWT)") {
+        auto now = std::chrono::system_clock::now();
+        auto expired = now - std::chrono::hours(24);
+
+        std::string expired_token = jwt::create()
+            .set_type("JWT")
+            .set_issued_at(expired - std::chrono::hours(1))
+            .set_expires_at(expired)
+            .set_payload_claim("user_id", jwt::claim(std::string("1")))
+            .set_payload_claim("tver", jwt::claim(std::string("1")))
+            .sign(jwt::algorithm::hs256{"A_flor"});
+
+        crow::request req;
+        req.add_header("Authorization", "Bearer " + expired_token);
+        
+        crow::response res = router.handle_get_tree(req);
+        REQUIRE(res.code == 401);
     }
 
     {

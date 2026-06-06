@@ -23,25 +23,6 @@ int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id
         }
     }
 
-    // Verificação de duplicidade
-    std::string dup_query;
-    if (folder_id.has_value()) {
-        dup_query = "SELECT id FROM files WHERE user_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND folder_id = $3";
-    } else {
-        dup_query = "SELECT id FROM files WHERE user_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND folder_id IS NULL";
-    }
-
-    pqxx::result dup_res;
-    if (folder_id.has_value()) {
-        dup_res = txn.exec(dup_query, pqxx::params{user_id, name_hash, folder_id.value()});
-    } else {
-        dup_res = txn.exec(dup_query, pqxx::params{user_id, name_hash});
-    }
-
-    if (!dup_res.empty()) {
-        throw std::runtime_error("FILE_ALREADY_EXISTS");
-    }
-
     auto check_quota = txn.exec(
         "SELECT used_storage_bytes, max_storage_bytes FROM users WHERE id = $1 FOR UPDATE",
         pqxx::params{user_id}
@@ -56,22 +37,26 @@ int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id
     txn.exec("UPDATE users SET used_storage_bytes = used_storage_bytes + $1 WHERE id = $2",
              pqxx::params{size_bytes, user_id});
 
-    auto result = txn.exec(
-        "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-        pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, total_chunks}
-    );
+    try {
+        auto result = txn.exec(
+            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+            pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, total_chunks}
+        );
 
-    int file_id = result[0][0].as<int>();
+        int file_id = result[0][0].as<int>();
 
-    std::string physical_path = std::to_string(file_id) + ".dat";
-    txn.exec(
-        "UPDATE files SET physical_path = $1 WHERE id = $2",
-        pqxx::params{physical_path, file_id}
-    );
+        std::string physical_path = std::to_string(file_id) + ".dat";
+        txn.exec(
+            "UPDATE files SET physical_path = $1 WHERE id = $2",
+            pqxx::params{physical_path, file_id}
+        );
 
-    txn.commit();
-    return file_id;
+        txn.commit();
+        return file_id;
+    } catch (const pqxx::unique_violation& e) {
+        throw std::runtime_error("FILE_ALREADY_EXISTS");
+    }
 }
 
 void FileManager::mark_upload_complete(uint64_t file_id, uint64_t user_id) {
@@ -268,7 +253,7 @@ void FileManager::record_chunk_saved(uint64_t file_id, int chunk_index) {
     txn.commit();
 }
 
-void FileManager::delete_file(uint64_t file_id, uint64_t user_id) {
+std::optional<std::string> FileManager::delete_file(uint64_t file_id, uint64_t user_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
@@ -281,12 +266,18 @@ void FileManager::delete_file(uint64_t file_id, uint64_t user_id) {
         throw std::runtime_error("NOT_FOUND");
     }
 
-    txn.exec(
-        "UPDATE files SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2",
+    auto update_res = txn.exec(
+        "UPDATE files SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 RETURNING external_file_id",
         pqxx::params{file_id, user_id}
     );
 
+    std::optional<std::string> external_id;
+    if (!update_res.empty() && !update_res[0][0].is_null()) {
+        external_id = update_res[0][0].as<std::string>();
+    }
+
     txn.commit();
+    return external_id;
 }
 
 crow::json::wvalue FileManager::update_file(uint64_t file_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& folder_id) {
@@ -466,60 +457,86 @@ crow::json::wvalue FileManager::get_trash(uint64_t user_id) {
     return res;
 }
 
-void FileManager::restore_file(uint64_t file_id, uint64_t user_id) {
+std::optional<std::string> FileManager::restore_file(uint64_t file_id, uint64_t user_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
-    auto check = txn.exec(
-        "SELECT folder_id, name_hash FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL",
-        pqxx::params{file_id, user_id}
-    );
-    if (check.empty()) throw std::runtime_error("NOT_FOUND");
-
-    std::string name_hash = check[0][1].as<std::string>();
-
-    std::optional<uint64_t> folder_id;
-    if (!check[0][0].is_null()) {
-        folder_id = check[0][0].as<uint64_t>();
-        auto parent_check = txn.exec(
-            "SELECT deleted_at FROM folders WHERE id = $1 AND user_id = $2",
-            pqxx::params{*folder_id, user_id}
-        );
-        if (!parent_check.empty() && !parent_check[0][0].is_null()) {
-            folder_id.reset();
-        }
-    }
-
-    std::string dup_query;
-    pqxx::result dup_res;
-    if (folder_id.has_value()) {
-        dup_query = "SELECT id FROM files WHERE user_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND folder_id = $3";
-        dup_res = txn.exec(dup_query, pqxx::params{user_id, name_hash, *folder_id});
-    } else {
-        dup_query = "SELECT id FROM files WHERE user_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND folder_id IS NULL";
-        dup_res = txn.exec(dup_query, pqxx::params{user_id, name_hash});
-    }
-
-    if (!dup_res.empty()) {
-        throw std::runtime_error("FILE_ALREADY_EXISTS");
-    }
-
-    if (folder_id.has_value()) {
-        txn.exec(
-            "UPDATE files SET deleted_at = NULL, folder_id = $1 WHERE id = $2 AND user_id = $3",
-            pqxx::params{*folder_id, file_id, user_id}
-        );
-    } else {
-        txn.exec(
-            "UPDATE files SET deleted_at = NULL, folder_id = NULL WHERE id = $1 AND user_id = $2",
+    try {
+        auto res = txn.exec(
+            "UPDATE files "
+            "SET deleted_at = NULL, "
+            "    folder_id = ("
+            "        SELECT CASE WHEN deleted_at IS NOT NULL THEN NULL ELSE id END "
+            "        FROM folders WHERE id = files.folder_id"
+            "    ) "
+            "WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL "
+            "RETURNING external_file_id",
             pqxx::params{file_id, user_id}
         );
+
+        if (res.empty()) {
+            throw std::runtime_error("NOT_FOUND");
+        }
+
+        std::optional<std::string> external_id;
+        if (!res[0][0].is_null()) {
+            external_id = res[0][0].as<std::string>();
+        }
+
+        txn.commit();
+        return external_id;
+    } catch (const pqxx::unique_violation&) {
+        throw std::runtime_error("FILE_ALREADY_EXISTS");
+    }
+}
+
+std::optional<std::string> FileManager::hard_delete_file(uint64_t file_id, uint64_t user_id, FileChunker* chunker) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto deleted_files_res = txn.exec(
+        "WITH deleted_file AS ("
+        "  DELETE FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL "
+        "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
+        ") "
+        "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_file",
+        pqxx::params{file_id, user_id}
+    );
+
+    if (deleted_files_res.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+
+    auto row = deleted_files_res[0];
+    auto fid = row[0].as<uint64_t>();
+    std::string provider = row[1].as<std::string>();
+    uint64_t size = row[2].as<uint64_t>();
+    
+    uint64_t freed_bytes = (provider == "local") ? size : 2048;
+    
+    std::optional<std::string> ext_file_id_opt;
+
+    if (provider == "google_drive") {
+        if (!row[3].is_null() && !row[4].is_null()) {
+            std::string ext_file_id = row[3].as<std::string>();
+            ext_file_id_opt = ext_file_id;
+            txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
+                     pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+        }
+    } else {
+        if (chunker) chunker->delete_file(fid);
+    }
+
+    if (freed_bytes > 0) {
+        txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
+                 pqxx::params{freed_bytes, user_id});
     }
 
     txn.commit();
+    return ext_file_id_opt;
 }
 
-void FileManager::empty_trash(uint64_t user_id, FileChunker* chunker) {
+std::vector<std::string> FileManager::empty_trash(uint64_t user_id, FileChunker* chunker) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
@@ -533,6 +550,8 @@ void FileManager::empty_trash(uint64_t user_id, FileChunker* chunker) {
     );
 
     uint64_t freed_bytes = 0;
+    std::vector<std::string> external_files;
+
     for (const auto& row : deleted_files_res) {
         auto fid = row[0].as<uint64_t>();
         std::string provider = row[1].as<std::string>();
@@ -542,8 +561,10 @@ void FileManager::empty_trash(uint64_t user_id, FileChunker* chunker) {
         
         if (provider == "google_drive") {
             if (!row[3].is_null() && !row[4].is_null()) {
+                std::string ext_file_id = row[3].as<std::string>();
+                external_files.push_back(ext_file_id);
                 txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
-                         pqxx::params{row[3].as<std::string>(), row[4].as<uint64_t>()});
+                         pqxx::params{ext_file_id, row[4].as<uint64_t>()});
             }
         } else {
             if (chunker) chunker->delete_file(fid);
@@ -558,6 +579,7 @@ void FileManager::empty_trash(uint64_t user_id, FileChunker* chunker) {
     txn.exec("DELETE FROM folders WHERE user_id = $1 AND deleted_at IS NOT NULL", pqxx::params{user_id});
 
     txn.commit();
+    return external_files;
 }
 
 crow::json::wvalue FileManager::get_user_quota(uint64_t user_id) {
@@ -592,25 +614,6 @@ int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> 
         }
     }
 
-    // Verificação de duplicidade
-    std::string dup_query;
-    if (folder_id.has_value()) {
-        dup_query = "SELECT id FROM files WHERE user_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND folder_id = $3";
-    } else {
-        dup_query = "SELECT id FROM files WHERE user_id = $1 AND name_hash = $2 AND deleted_at IS NULL AND folder_id IS NULL";
-    }
-
-    pqxx::result dup_res;
-    if (folder_id.has_value()) {
-        dup_res = txn.exec(dup_query, pqxx::params{user_id, name_hash, folder_id.value()});
-    } else {
-        dup_res = txn.exec(dup_query, pqxx::params{user_id, name_hash});
-    }
-
-    if (!dup_res.empty()) {
-        throw std::runtime_error("FILE_ALREADY_EXISTS");
-    }
-
     auto check_quota = txn.exec(
         "SELECT used_storage_bytes, max_storage_bytes FROM users WHERE id = $1 FOR UPDATE",
         pqxx::params{user_id}
@@ -626,16 +629,20 @@ int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> 
     txn.exec("UPDATE users SET used_storage_bytes = used_storage_bytes + $1 WHERE id = $2",
              pqxx::params{metadata_cost, user_id});
 
-    auto result = txn.exec(
-        "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, "
-        "size_bytes, total_chunks, storage_provider, external_storage_id) "
-        "VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8) RETURNING id",
-        pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider, external_storage_id}
-    );
+    try {
+        auto result = txn.exec(
+            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, "
+            "size_bytes, total_chunks, storage_provider, external_storage_id) "
+            "VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8) RETURNING id",
+            pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider, external_storage_id}
+        );
 
-    int file_id = result[0][0].as<int>();
-    txn.commit();
-    return file_id;
+        int file_id = result[0][0].as<int>();
+        txn.commit();
+        return file_id;
+    } catch (const pqxx::unique_violation& e) {
+        throw std::runtime_error("FILE_ALREADY_EXISTS");
+    }
 }
 
 void FileManager::finalize_external_upload(uint64_t file_id, uint64_t user_id,
@@ -703,3 +710,60 @@ std::string FileManager::get_storage_provider(uint64_t file_id, uint64_t user_id
     return result[0][0].is_null() ? "local" : result[0][0].as<std::string>();
 }
 
+std::string FileManager::get_file_name(uint64_t file_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto result = txn.exec(
+        "SELECT encrypted_name FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+        pqxx::params{file_id, user_id}
+    );
+    txn.commit();
+    if (result.empty()) {
+        throw std::runtime_error("NOT_FOUND");
+    }
+    return result[0][0].as<std::string>();
+}
+
+std::vector<FileManager::ExternalSyncFile> FileManager::get_external_sync_map(uint64_t user_id, uint64_t external_storage_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    auto result = txn.exec(
+        "SELECT id, external_file_id FROM files "
+        "WHERE user_id = $1 AND external_storage_id = $2 AND deleted_at IS NULL AND external_file_id IS NOT NULL",
+        pqxx::params{user_id, external_storage_id}
+    );
+    txn.commit();
+
+    std::vector<ExternalSyncFile> map;
+    for (const auto& row : result) {
+        map.push_back({
+            row[0].as<uint64_t>(),
+            row[1].as<std::string>()
+        });
+    }
+    return map;
+}
+
+void FileManager::cleanup_external_sync(uint64_t user_id, uint64_t external_storage_id, const std::vector<std::string>& missing_external_ids) {
+    if (missing_external_ids.empty()) return;
+
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    std::string array_literal = "{";
+    for (size_t i = 0; i < missing_external_ids.size(); ++i) {
+        if (i > 0) array_literal += ",";
+        array_literal += "\"" + txn.esc(missing_external_ids[i]) + "\"";
+    }
+    array_literal += "}";
+
+
+    txn.exec(
+        "UPDATE files SET deleted_at = CURRENT_TIMESTAMP "
+        "WHERE user_id = $1 AND external_storage_id = $2 AND external_file_id = ANY($3::text[]) AND deleted_at IS NULL",
+        pqxx::params{user_id, external_storage_id, array_literal}
+    );
+
+    txn.commit();
+}

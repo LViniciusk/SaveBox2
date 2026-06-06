@@ -23,6 +23,7 @@ public:
 
     std::string handle_healthcheck() const;
     crow::response handle_get_quota(const crow::request& req);
+    crow::response handle_delete_user(const crow::request& req);
     crow::response handle_register(const crow::request& req);
     crow::response handle_login(const crow::request& req);
     crow::response handle_google_login(const crow::request& req);
@@ -39,6 +40,8 @@ public:
     crow::response handle_delete_folder(const crow::request& req, int folder_id);
     crow::response handle_trash_folder(const crow::request& req, int folder_id);
     crow::response handle_trash_file(const crow::request& req, int file_id);
+    crow::response handle_hard_delete_folder(const crow::request& req, int folder_id);
+    crow::response handle_hard_delete_file(const crow::request& req, int file_id);
     crow::response handle_restore_folder(const crow::request& req, int folder_id);
     crow::response handle_restore_file(const crow::request& req, int file_id);
     crow::response handle_get_trash(const crow::request& req);
@@ -52,6 +55,8 @@ public:
     crow::response handle_unlink_google_account(const crow::request& req, int account_id);
     crow::response handle_generate_google_state(const crow::request& req);
     crow::response handle_finalize_external_upload(const crow::request& req, int file_id);
+    crow::response handle_get_google_sync_map(const crow::request& req, int account_id);
+    crow::response handle_google_sync_cleanup(const crow::request& req, int account_id);
 
     void setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app);
 

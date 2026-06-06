@@ -916,6 +916,59 @@ paths:
         '500':
           description: Erro interno
 
+  /trash/files/{fileId}:
+    delete:
+      tags: [Lixeira]
+      summary: Deleta arquivo permanentemente da lixeira
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Arquivo deletado permanentemente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Arquivo não encontrado na lixeira
+        '500':
+          description: Erro interno
+
+  /trash/folders/{folderId}:
+    delete:
+      tags: [Lixeira]
+      summary: Deleta pasta permanentemente da lixeira
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Pasta deletada permanentemente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Pasta não encontrada na lixeira
+        '500':
+          description: Erro interno
+
+
   /files/{fileId}/restore:
     post:
       tags: [Lixeira]
@@ -1104,5 +1157,76 @@ paths:
           description: Arquivo não encontrado
         '409':
           description: Upload já estava concluído
+        '500':
+          description: Erro interno
+
+  /api/storage/google/accounts/{accountId}/sync-map:
+    get:
+      tags: [Google Drive]
+      summary: Obtém o mapa de arquivos no Drive associados a uma conta
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Mapa de sincronização obtido
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        external_file_id:
+                          type: string
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /api/storage/google/accounts/{accountId}/sync-cleanup:
+    post:
+      tags: [Google Drive]
+      summary: Informa quais arquivos estão ausentes na nuvem para realizar limpeza local (Soft Delete)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                missing_external_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Limpeza executada com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '400':
+          description: Requisição inválida
+        '401':
+          description: Token ausente ou inválido
         '500':
           description: Erro interno

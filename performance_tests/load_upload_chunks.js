@@ -15,8 +15,8 @@ export function setup() {
 
     
     return {
-        token: __ENV.JWT_TOKEN || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3ODA3NjY4MTAsImlhdCI6MTc4MDY4MDQxMCwidXNlcl9pZCI6IjE4NCJ9.9bAYKSUJzcsY4MstOxZm7AtbpN5FzQYmBPSF2zKYH3A',
-        fileId: __ENV.FILE_ID || '962'
+        token: __ENV.JWT_TOKEN || 'token',
+        fileId: __ENV.FILE_ID || '1'
     };
 }
 

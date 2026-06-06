@@ -429,36 +429,40 @@ int64_t GoogleDriveService::get_available_space(const std::string& access_token)
 }
 
 uint64_t GoogleDriveService::select_best_storage(uint64_t user_id, int64_t file_size_bytes, std::string& out_access_token, std::string& out_root_folder_id) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-    auto result = txn.exec(
-        "SELECT id, root_folder_id FROM user_external_storages WHERE user_id = $1 AND is_unlinking = FALSE",
-        pqxx::params{user_id}
-    );
-    txn.commit();
+    std::vector<std::pair<uint64_t, std::string>> storages;
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+        auto result = txn.exec(
+            "SELECT id, root_folder_id FROM user_external_storages WHERE user_id = $1 AND is_unlinking = FALSE ORDER BY id ASC",
+            pqxx::params{user_id}
+        );
+        txn.commit();
+        for (const auto& row : result) {
+            uint64_t storage_id = row[0].as<uint64_t>();
+            std::string root_folder_id = row[1].as<std::string>();
+            storages.emplace_back(storage_id, root_folder_id);
+        }
+    }
     
-    uint64_t best_id = 0;
-    int64_t max_free_space = -1;
-    
-    for (const auto& row : result) {
-        uint64_t storage_id = row[0].as<uint64_t>();
-        std::string root_folder_id = row[1].as<std::string>();
+    for (const auto& storage : storages) {
+        uint64_t storage_id = storage.first;
+        std::string root_folder_id = storage.second;
         
         try {
             std::string token = get_access_token_for_storage(storage_id);
             int64_t free_space = get_available_space(token);
-            if (free_space >= file_size_bytes && free_space > max_free_space) {
-                max_free_space = free_space;
-                best_id = storage_id;
+            if (free_space >= file_size_bytes) {
                 out_access_token = token;
                 out_root_folder_id = root_folder_id;
+                return storage_id;
             }
         } catch (...) {
             continue;
         }
     }
     
-    return best_id;
+    return 0;
 }
 
 cpr::Response GoogleDriveService::make_post_request(const std::string& url, const cpr::Payload& payload) const {

@@ -74,12 +74,29 @@ void GarbageCollector::run_cleanup() {
             }
         }
 
-        std::string query_delete_files = R"(
-            DELETE FROM files
-            WHERE (is_upload_complete = FALSE AND created_at < NOW() - INTERVAL '4 hours')
-               OR (deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days')
-        )";
-        W.exec(query_delete_files);
+        auto deleted_rows = W.exec(R"(
+            WITH deleted_files AS (
+                DELETE FROM files
+                WHERE (is_upload_complete = FALSE AND created_at < NOW() - INTERVAL '4 hours')
+                   OR (deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days')
+                RETURNING id, storage_provider, external_file_id, external_storage_id
+            )
+            SELECT id, storage_provider, external_file_id, external_storage_id FROM deleted_files;
+        )");
+
+        for (const auto& row : deleted_rows) {
+            std::string provider = row["storage_provider"].is_null() ? "" : row["storage_provider"].as<std::string>();
+            if (provider == "google_drive") {
+                if (!row["external_file_id"].is_null() && !row["external_storage_id"].is_null()) {
+                    std::string ext_file_id = row["external_file_id"].as<std::string>();
+                    uint64_t ext_storage_id = row["external_storage_id"].as<uint64_t>();
+                    W.exec(
+                        "INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
+                        pqxx::params{ext_file_id, ext_storage_id}
+                    );
+                }
+            }
+        }
 
         std::string query_delete_folders = R"(
             DELETE FROM folders
@@ -147,5 +164,33 @@ void GarbageCollector::run_cleanup() {
         } catch (const std::exception& e) {
             std::cerr << "GC: Falha ao limpar arquivos orfaos: " << e.what() << "\n";
         }
+    }
+}
+
+void GarbageCollector::cleanup_deleted_users() {
+    try {
+        auto conn = pool_.acquire_connection();
+        pqxx::work W(*conn);
+
+        auto users = W.exec("SELECT id FROM users WHERE deleted_at IS NOT NULL");
+        for (const auto& row : users) {
+            uint64_t user_id = row[0].as<uint64_t>();
+
+            W.exec(
+                "UPDATE files SET deleted_at = CURRENT_TIMESTAMP - INTERVAL '31 days' "
+                "WHERE id IN ("
+                "  SELECT id FROM files WHERE user_id = $1 AND deleted_at IS NULL LIMIT 50"
+                ")", 
+                pqxx::params{user_id}
+            );
+
+            auto count_res = W.exec("SELECT count(*) FROM files WHERE user_id = $1", pqxx::params{user_id});
+            if (count_res[0][0].as<uint64_t>() == 0) {
+                W.exec("DELETE FROM users WHERE id = $1", pqxx::params{user_id});
+            }
+        }
+        W.commit();
+    } catch (const std::exception& e) {
+        std::cerr << "GC: Erro em cleanup_deleted_users: " << e.what() << "\n";
     }
 }

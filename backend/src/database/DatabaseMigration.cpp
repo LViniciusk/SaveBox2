@@ -24,7 +24,9 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 max_storage_bytes BIGINT DEFAULT 5368709120,
                 used_storage_bytes BIGINT DEFAULT 0 CHECK (used_storage_bytes >= 0),
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                registration_ip VARCHAR(45)
+                deleted_at TIMESTAMP NULL,
+                registration_ip VARCHAR(45),
+                token_version INT DEFAULT 1
             );
         )");
 
@@ -37,7 +39,8 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 encrypted_name TEXT NOT NULL,
                 name_hash VARCHAR(128) NOT NULL,
                 deleted_at TIMESTAMP NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT unique_folder_name UNIQUE (user_id, parent_id, name_hash)
             );
         )");
 
@@ -72,7 +75,8 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 external_file_id VARCHAR(255) NULL,
                 external_storage_id BIGINT REFERENCES user_external_storages(id) ON DELETE CASCADE,
                 deleted_at TIMESTAMP NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT unique_file_name UNIQUE (user_id, folder_id, name_hash)
             );
         )");
 
