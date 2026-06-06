@@ -89,11 +89,20 @@ GoogleDriveService::LinkResult GoogleDriveService::link_account(uint64_t user_id
         throw std::invalid_argument("INVALID_OAUTH_STATE");
     }
 
-    if (is_linked(user_id)) {
-        throw std::runtime_error("ALREADY_LINKED");
-    }
-
     TokenResponse tokens = exchange_code(auth_code);
+    
+
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+        auto check_res = txn.exec(
+            "SELECT 1 FROM user_external_storages WHERE user_id = $1 AND provider = 'google_drive' AND account_email = $2 AND is_unlinking = FALSE",
+            pqxx::params{user_id, tokens.account_email}
+        );
+        if (!check_res.empty()) {
+            throw std::runtime_error("ALREADY_LINKED");
+        }
+    }
 
     std::string root_folder_id = create_savebox_folder(tokens.access_token);
 
@@ -105,58 +114,73 @@ GoogleDriveService::LinkResult GoogleDriveService::link_account(uint64_t user_id
     std::string encrypted_refresh_token = encrypt_token_symmetric(tokens.refresh_token, key);
 
     txn.exec(
-        "INSERT INTO user_external_storages (user_id, provider, refresh_token, root_folder_id) "
-        "VALUES ($1, 'google_drive', $2, $3) "
-        "ON CONFLICT (user_id, provider) DO UPDATE SET "
-        "refresh_token = EXCLUDED.refresh_token, root_folder_id = EXCLUDED.root_folder_id",
-        pqxx::params{user_id, encrypted_refresh_token, root_folder_id}
+        "INSERT INTO user_external_storages (user_id, provider, account_email, refresh_token, root_folder_id) "
+        "VALUES ($1, 'google_drive', $2, $3, $4)",
+        pqxx::params{user_id, tokens.account_email, encrypted_refresh_token, root_folder_id}
     );
 
     txn.commit();
 
-    return LinkResult{root_folder_id};
+    return LinkResult{root_folder_id, tokens.account_email};
 }
 
-std::string GoogleDriveService::get_valid_access_token(uint64_t user_id) {
+std::vector<GoogleDriveService::LinkedAccount> GoogleDriveService::get_linked_accounts(uint64_t user_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
     auto result = txn.exec(
-        "SELECT refresh_token FROM user_external_storages "
-        "WHERE user_id = $1 AND provider = 'google_drive'",
+        "SELECT id, account_email, root_folder_id FROM user_external_storages "
+        "WHERE user_id = $1 AND provider = 'google_drive' AND is_unlinking = FALSE",
         pqxx::params{user_id}
     );
 
     txn.commit();
 
-    if (result.empty()) {
-        throw std::runtime_error("GOOGLE_DRIVE_NOT_LINKED");
+    std::vector<LinkedAccount> accounts;
+    for (const auto& row : result) {
+        LinkedAccount acc;
+        acc.id = row[0].as<uint64_t>();
+        acc.account_email = row[1].is_null() ? "" : row[1].as<std::string>();
+        acc.root_folder_id = row[2].is_null() ? "" : row[2].as<std::string>();
+        accounts.push_back(acc);
     }
 
+    return accounts;
+}
+
+std::string GoogleDriveService::get_access_token_for_storage(uint64_t storage_id) {
+    {
+        std::shared_lock<std::shared_mutex> lock(cache_mutex_);
+        auto it = token_cache_.find(storage_id);
+        if (it != token_cache_.end()) {
+            if (std::chrono::steady_clock::now() < it->second.expires_at) {
+                return it->second.access_token;
+            }
+        }
+    }
+
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto result = txn.exec(
+        "SELECT refresh_token FROM user_external_storages WHERE id = $1",
+        pqxx::params{storage_id}
+    );
+    txn.commit();
+    
+    if (result.empty()) throw std::runtime_error("STORAGE_NOT_FOUND");
+    
     std::string encrypted_refresh_token = result[0][0].as<std::string>();
     std::string pepper = Utils::get().get_required_var("PASS_PEPPER");
     auto key = derive_symmetric_key(pepper);
     std::string refresh_token = decrypt_token_symmetric(encrypted_refresh_token, key);
-    return refresh_access_token(refresh_token);
-}
-
-std::string GoogleDriveService::get_root_folder_id(uint64_t user_id) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-
-    auto result = txn.exec(
-        "SELECT root_folder_id FROM user_external_storages "
-        "WHERE user_id = $1 AND provider = 'google_drive'",
-        pqxx::params{user_id}
-    );
-
-    txn.commit();
-
-    if (result.empty()) {
-        throw std::runtime_error("GOOGLE_DRIVE_NOT_LINKED");
+    
+    std::string new_access_token = refresh_access_token(refresh_token);
+    
+    {
+        std::unique_lock<std::shared_mutex> lock(cache_mutex_);
+        token_cache_[storage_id] = { new_access_token, std::chrono::steady_clock::now() + std::chrono::minutes(50) };
     }
-
-    return result[0][0].as<std::string>();
+    return new_access_token;
 }
 
 bool GoogleDriveService::is_linked(uint64_t user_id) {
@@ -165,7 +189,7 @@ bool GoogleDriveService::is_linked(uint64_t user_id) {
 
     auto result = txn.exec(
         "SELECT 1 FROM user_external_storages "
-        "WHERE user_id = $1 AND provider = 'google_drive'",
+        "WHERE user_id = $1 AND provider = 'google_drive' AND is_unlinking = FALSE",
         pqxx::params{user_id}
     );
 
@@ -173,15 +197,50 @@ bool GoogleDriveService::is_linked(uint64_t user_id) {
     return !result.empty();
 }
 
-void GoogleDriveService::unlink_account(uint64_t user_id) {
+void GoogleDriveService::unlink_account(uint64_t user_id, std::optional<uint64_t> storage_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
-    auto result = txn.exec(
-        "DELETE FROM user_external_storages "
-        "WHERE user_id = $1 AND provider = 'google_drive' RETURNING id",
-        pqxx::params{user_id}
-    );
+    pqxx::result result;
+    if (storage_id.has_value()) {
+        result = txn.exec(
+            "UPDATE user_external_storages SET is_unlinking = TRUE "
+            "WHERE user_id = $1 AND id = $2 AND provider = 'google_drive' AND is_unlinking = FALSE RETURNING id",
+            pqxx::params{user_id, storage_id.value()}
+        );
+    } else {
+        result = txn.exec(
+            "UPDATE user_external_storages SET is_unlinking = TRUE "
+            "WHERE user_id = $1 AND provider = 'google_drive' AND is_unlinking = FALSE RETURNING id",
+            pqxx::params{user_id}
+        );
+    }
+
+    for (const auto& row : result) {
+        uint64_t s_id = row[0].as<uint64_t>();
+        
+        auto count_res = txn.exec(
+            "SELECT count(*) FROM files WHERE external_storage_id = $1 AND storage_provider = 'google_drive'",
+            pqxx::params{s_id}
+        );
+        uint64_t file_count = count_res[0][0].as<uint64_t>();
+        uint64_t refund_bytes = file_count * 2048;
+        if (refund_bytes > 0) {
+            txn.exec(
+                "UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
+                pqxx::params{refund_bytes, user_id}
+            );
+        }
+
+        txn.exec(
+            "INSERT INTO pending_external_deletions (external_file_id, external_storage_id) "
+            "SELECT external_file_id, external_storage_id FROM files "
+            "WHERE external_storage_id = $1 AND storage_provider = 'google_drive' AND external_file_id IS NOT NULL",
+            pqxx::params{s_id}
+        );
+
+        txn.exec("DELETE FROM files WHERE external_storage_id = $1", pqxx::params{s_id});
+    }
 
     txn.commit();
 
@@ -198,8 +257,7 @@ GoogleDriveService::TokenResponse GoogleDriveService::exchange_code(const std::s
             {"client_id", client_id_},
             {"client_secret", client_secret_},
             {"grant_type", "authorization_code"},
-            {"redirect_uri", "postmessage"}
-            //{"redirect_uri", "https://developers.google.com/oauthplayground"}
+            {"redirect_uri", Utils::get().get_var("GOOGLE_REDIRECT_URI", "postmessage")}
         }
     );
 
@@ -231,6 +289,24 @@ GoogleDriveService::TokenResponse GoogleDriveService::exchange_code(const std::s
         tokens.refresh_token = rt_it->second.get<std::string>();
     } else {
         throw std::runtime_error("GOOGLE_REFRESH_TOKEN_MISSING");
+    }
+
+    cpr::Response userinfo_r = make_get_request(
+        "https://www.googleapis.com/oauth2/v2/userinfo",
+        cpr::Header{{"Authorization", "Bearer " + tokens.access_token}}
+    );
+    if (userinfo_r.status_code == 200) {
+        picojson::value ui_json;
+        if (picojson::parse(ui_json, userinfo_r.text).empty() && ui_json.is<picojson::object>()) {
+            auto email_it = ui_json.get<picojson::object>().find("email");
+            if (email_it != ui_json.get<picojson::object>().end() && email_it->second.is<std::string>()) {
+                tokens.account_email = email_it->second.get<std::string>();
+            }
+        }
+    }
+    
+    if (tokens.account_email.empty()) {
+        throw std::runtime_error("GOOGLE_EMAIL_SCOPE_MISSING");
     }
 
     return tokens;
@@ -322,6 +398,67 @@ std::string GoogleDriveService::refresh_access_token(const std::string& refresh_
     }
 
     return at_it->second.get<std::string>();
+}
+
+int64_t GoogleDriveService::get_available_space(const std::string& access_token) {
+    cpr::Response r = make_get_request(
+        "https://www.googleapis.com/drive/v3/about?fields=storageQuota",
+        cpr::Header{{"Authorization", "Bearer " + access_token}}
+    );
+    if (r.status_code != 200) return 0;
+    
+    picojson::value json_val;
+    if (!picojson::parse(json_val, r.text).empty() || !json_val.is<picojson::object>()) return 0;
+    
+    auto& obj = json_val.get<picojson::object>();
+    auto quota_it = obj.find("storageQuota");
+    if (quota_it == obj.end() || !quota_it->second.is<picojson::object>()) return 0;
+    
+    auto& quota = quota_it->second.get<picojson::object>();
+    auto limit_it = quota.find("limit");
+    auto usage_it = quota.find("usage");
+    
+    if (limit_it != quota.end() && usage_it != quota.end() && limit_it->second.is<std::string>() && usage_it->second.is<std::string>()) {
+        try {
+            int64_t limit = std::stoll(limit_it->second.get<std::string>());
+            int64_t usage = std::stoll(usage_it->second.get<std::string>());
+            return limit - usage;
+        } catch (...) {}
+    }
+    return 0;
+}
+
+uint64_t GoogleDriveService::select_best_storage(uint64_t user_id, int64_t file_size_bytes, std::string& out_access_token, std::string& out_root_folder_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto result = txn.exec(
+        "SELECT id, root_folder_id FROM user_external_storages WHERE user_id = $1 AND is_unlinking = FALSE",
+        pqxx::params{user_id}
+    );
+    txn.commit();
+    
+    uint64_t best_id = 0;
+    int64_t max_free_space = -1;
+    
+    for (const auto& row : result) {
+        uint64_t storage_id = row[0].as<uint64_t>();
+        std::string root_folder_id = row[1].as<std::string>();
+        
+        try {
+            std::string token = get_access_token_for_storage(storage_id);
+            int64_t free_space = get_available_space(token);
+            if (free_space >= file_size_bytes && free_space > max_free_space) {
+                max_free_space = free_space;
+                best_id = storage_id;
+                out_access_token = token;
+                out_root_folder_id = root_folder_id;
+            }
+        } catch (...) {
+            continue;
+        }
+    }
+    
+    return best_id;
 }
 
 cpr::Response GoogleDriveService::make_post_request(const std::string& url, const cpr::Payload& payload) const {

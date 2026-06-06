@@ -104,26 +104,27 @@ TEST_CASE("API Google Drive - Endpoints", "[api][googledrive]") {
         gdrive.link_account(user_id, "valid_code_456", state);
 
         crow::request req;
-        req.url = "/api/storage/google/token";
+        req.url = "/api/storage/google/accounts";
         req.add_header("Authorization", "Bearer " + valid_token);
 
         gdrive.expect_refresh = true;
-        crow::response res = router.handle_get_google_token(req);
+        crow::response res = router.handle_get_google_accounts(req);
         
         REQUIRE(res.code == 200);
-        REQUIRE(res.body.find("mock_access_token_xyz") != std::string::npos);
         REQUIRE(res.body.find("mock_folder_123") != std::string::npos);
     }
     
     SECTION("GET /api/storage/google/token - Nao Vinculado") {
         crow::request req;
-        req.url = "/api/storage/google/token";
+        req.url = "/api/storage/google/accounts";
         req.add_header("Authorization", "Bearer " + valid_token);
 
-        crow::response res = router.handle_get_google_token(req);
+        crow::response res = router.handle_get_google_accounts(req);
         
-        REQUIRE(res.code == 404);
-        REQUIRE(res.body.find("Conta nao vinculada") != std::string::npos);
+        REQUIRE(res.code == 200);
+        bool has_empty_accounts = res.body.find("\"accounts\":[]") != std::string::npos || 
+                                  res.body.find("\"accounts\": []") != std::string::npos;
+        REQUIRE(has_empty_accounts);
     }
 
     SECTION("POST /files - Inicializacao google_drive e bloqueio de Chunks") {

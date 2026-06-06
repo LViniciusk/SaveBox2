@@ -283,12 +283,17 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
                 return crow::response(400, R"({"error":"Conta Google Drive nao vinculada"})");
             }
 
-            int file_id = file_mgr_->init_external_upload(
-                user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider
-            );
+            std::string access_token;
+            std::string root_folder_id;
+            uint64_t best_storage_id = gdrive_->select_best_storage(user_id, size_bytes, access_token, root_folder_id);
+            
+            if (best_storage_id == 0) {
+                return crow::response(507, R"({"error":"Espaço insuficiente nas contas vinculadas"})");
+            }
 
-            std::string access_token = gdrive_->get_valid_access_token(user_id);
-            std::string root_folder_id = gdrive_->get_root_folder_id(user_id);
+            int file_id = file_mgr_->init_external_upload(
+                user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider, best_storage_id
+            );
 
             crow::json::wvalue res_body;
             res_body["file_id"] = file_id;
@@ -414,7 +419,7 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
             auto conn = pool_->acquire_connection();
             pqxx::work txn(*conn);
             auto result = txn.exec(
-                "SELECT external_file_id FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+                "SELECT external_file_id, external_storage_id FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
                 pqxx::params{file_id, user_id}
             );
             txn.commit();
@@ -424,7 +429,14 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
             }
 
             std::string external_file_id = result[0][0].as<std::string>();
-            std::string access_token = gdrive_->get_valid_access_token(user_id);
+            std::string access_token;
+            
+            if (!result[0][1].is_null()) {
+                uint64_t storage_id = result[0][1].as<uint64_t>();
+                access_token = gdrive_->get_access_token_for_storage(storage_id);
+            } else {
+                return crow::response(500, R"({"error":"Storage externo nao encontrado para este arquivo"})");
+            }
 
             crow::json::wvalue res_body;
             res_body["storage_provider"] = "google_drive";
@@ -889,7 +901,8 @@ crow::response ApiRouter::handle_share_file(const crow::request& req, int file_i
         return crow::response(200, res);
     } catch (const std::exception& e) {
         std::string msg = e.what();
-        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Nao encontrado ou acesso negado"})");
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
+        if (msg == "EXTERNAL_SHARE_NOT_SUPPORTED") return crow::response(400, R"({"error":"Compartilhamento publico apenas para arquivos locais"})");
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -1036,6 +1049,7 @@ crow::response ApiRouter::handle_link_google_drive(const crow::request& req) {
         if (msg == "ALREADY_LINKED") return crow::response(409, R"({"error":"Conta ja vinculada"})");
         if (msg == "GOOGLE_DRIVE_NOT_CONFIGURED") return crow::response(501, R"({"error":"Integracao nao configurada"})");
         if (msg == "GOOGLE_TOKEN_EXCHANGE_FAILED") return crow::response(400, R"({"error":"Falha ao trocar o codigo de autorizacao"})");
+        if (msg == "GOOGLE_EMAIL_SCOPE_MISSING") return crow::response(400, R"({"error":"Escopo userinfo.email faltando"})");
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -1055,7 +1069,7 @@ crow::response ApiRouter::handle_generate_google_state(const crow::request& req)
     return crow::response(200, res);
 }
 
-crow::response ApiRouter::handle_get_google_token(const crow::request& req) {
+crow::response ApiRouter::handle_get_google_accounts(const crow::request& req) {
     auto user_id_opt = authenticate_request(req);
     if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
     uint64_t user_id = *user_id_opt;
@@ -1065,18 +1079,48 @@ crow::response ApiRouter::handle_get_google_token(const crow::request& req) {
     }
 
     try {
-        std::string token = gdrive_->get_valid_access_token(user_id);
-        std::string root_folder_id = gdrive_->get_root_folder_id(user_id);
-
+        auto accounts = gdrive_->get_linked_accounts(user_id);
+        
         crow::json::wvalue res;
-        res["access_token"] = token;
-        res["root_folder_id"] = root_folder_id;
+        std::vector<crow::json::wvalue> acc_list;
+        for (const auto& acc : accounts) {
+            crow::json::wvalue acc_json;
+            acc_json["id"] = acc.id;
+            acc_json["account_email"] = acc.account_email;
+            acc_json["root_folder_id"] = acc.root_folder_id;
+            acc_list.push_back(std::move(acc_json));
+        }
+        res["accounts"] = std::move(acc_list);
+        
         return crow::response(200, res);
 
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "GOOGLE_DRIVE_NOT_LINKED") return crow::response(404, R"({"error":"Conta nao vinculada"})");
         if (msg == "GOOGLE_TOKEN_REFRESH_FAILED") return crow::response(502, R"({"error":"Falha ao atualizar o token"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_unlink_google_account(const crow::request& req, int account_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    if (!gdrive_) {
+        return crow::response(500, R"({"error":"Servico Google Drive nao configurado"})");
+    }
+
+    try {
+        gdrive_->unlink_account(user_id, account_id);
+        
+        crow::json::wvalue res;
+        res["message"] = "Conta desvinculada com sucesso";
+        return crow::response(200, res);
+
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "GOOGLE_DRIVE_NOT_LINKED") return crow::response(404, R"({"error":"Conta nao encontrada ou nao pertence ao usuario"})");
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -1353,9 +1397,16 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
         return res;
     });
 
-    CROW_ROUTE(app, "/api/storage/google/token").methods(crow::HTTPMethod::Get)
+    CROW_ROUTE(app, "/api/storage/google/accounts").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req) {
-        auto res = handle_get_google_token(req);
+        auto res = handle_get_google_accounts(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/storage/google/accounts/<int>").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req, int account_id) {
+        auto res = handle_unlink_google_account(req, account_id);
         res.set_header("Content-Type", "application/json");
         return res;
     });

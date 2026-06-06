@@ -140,7 +140,6 @@ bool EmailService::is_domain_valid_via_api(const std::string& domain) const {
 
     auto response = make_get_request(url);
 
-    // Resiliencia: em falha de rede/timeout/5xx, nao bloqueia cadastro.
     if (response.error.code != cpr::ErrorCode::OK || response.status_code >= 500 || response.status_code == 0) {
         return true;
     }

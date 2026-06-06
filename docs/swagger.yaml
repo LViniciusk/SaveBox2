@@ -621,6 +621,43 @@ paths:
         '500':
           description: Erro interno
 
+  /pending-uploads:
+    get:
+      tags: [Arquivos]
+      summary: Lista todos os uploads de arquivos incompletos do usuário
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de uploads pendentes retornada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pending_uploads:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        folder_id:
+                          type: integer
+                          nullable: true
+                        encrypted_name:
+                          type: string
+                        size_bytes:
+                          type: integer
+                        total_chunks:
+                          type: integer
+                        encrypted_fdk:
+                          type: string
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
   /files/{fileId}/download:
     get:
       tags: [Arquivos]
@@ -960,6 +997,8 @@ paths:
                     type: string
                   root_folder_id:
                     type: string
+                  account_email:
+                    type: string
         '400':
           description: Falha na troca do token ou JSON inválido
         '401':
@@ -969,30 +1008,60 @@ paths:
         '500':
           description: Erro interno
 
-  /api/storage/google/token:
+  /api/storage/google/accounts:
     get:
       tags: [Google Drive]
-      summary: Obtém um access_token fresco do Google Drive
+      summary: Obtém a lista de contas do Google Drive vinculadas
       security:
         - bearerAuth: []
       responses:
         '200':
-          description: Access token gerado
+          description: Lista de contas
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  access_token:
-                    type: string
-                  root_folder_id:
-                    type: string
+                  accounts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        account_email:
+                          type: string
+                        root_folder_id:
+                          type: string
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /api/storage/google/accounts/{accountId}:
+    delete:
+      tags: [Google Drive]
+      summary: Desvincula uma conta do Google Drive específica
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: O ID da conta externa
+      responses:
+        '200':
+          description: Conta desvinculada com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
         '401':
           description: Token ausente ou inválido
         '404':
-          description: Conta Google Drive não vinculada
-        '502':
-          description: Falha ao obter token junto ao Google
+          description: Conta não encontrada ou não pertence ao usuário
         '500':
           description: Erro interno
 

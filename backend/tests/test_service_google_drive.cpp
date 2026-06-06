@@ -50,7 +50,9 @@ TEST_CASE("Service Google Drive - Vinculação e Lógica de Token", "[service][g
         REQUIRE(gdrive.is_linked(9999));
         
         gdrive.expect_refresh = true;
-        std::string token = gdrive.get_valid_access_token(9999);
+        auto accounts = gdrive.get_linked_accounts(9999);
+        REQUIRE(accounts.size() == 1);
+        std::string token = gdrive.get_access_token_for_storage(accounts[0].id);
         REQUIRE(token == "mock_access_token_xyz");
     }
 
@@ -75,11 +77,12 @@ TEST_CASE("Service Google Drive - Vinculação e Lógica de Token", "[service][g
         gdrive.link_account(9999, "valid_auth_code_123", state);
 
         gdrive.expect_refresh = true;
-        std::string token = gdrive.get_valid_access_token(9999);
+        auto accounts = gdrive.get_linked_accounts(9999);
+        REQUIRE(accounts.size() == 1);
+        std::string token = gdrive.get_access_token_for_storage(accounts[0].id);
         REQUIRE(token == "mock_access_token_xyz");
         
-        std::string root = gdrive.get_root_folder_id(9999);
-        REQUIRE(root == "mock_folder_123");
+        REQUIRE(accounts[0].root_folder_id == "mock_folder_123");
     }
 
     SECTION("Obter token falha (Refresh Token Expired/Revoked)") {
@@ -88,7 +91,9 @@ TEST_CASE("Service Google Drive - Vinculação e Lógica de Token", "[service][g
         gdrive.refresh_token_ok = false;
         gdrive.expect_refresh = true;
 
-        REQUIRE_THROWS_AS(gdrive.get_valid_access_token(9999), std::runtime_error);
+        auto accounts = gdrive.get_linked_accounts(9999);
+        REQUIRE(accounts.size() == 1);
+        REQUIRE_THROWS_AS(gdrive.get_access_token_for_storage(accounts[0].id), std::runtime_error);
     }
 
     SECTION("Desvincular conta Google Drive") {
@@ -100,8 +105,8 @@ TEST_CASE("Service Google Drive - Vinculação e Lógica de Token", "[service][g
         REQUIRE_FALSE(gdrive.is_linked(9999));
         
         gdrive.expect_refresh = true;
-        REQUIRE_THROWS_AS(gdrive.get_root_folder_id(9999), std::runtime_error);
-        REQUIRE_THROWS_AS(gdrive.get_valid_access_token(9999), std::runtime_error);
+        auto accounts = gdrive.get_linked_accounts(9999);
+        REQUIRE(accounts.empty());
         REQUIRE_THROWS_AS(gdrive.unlink_account(9999), std::runtime_error);
     }
 }

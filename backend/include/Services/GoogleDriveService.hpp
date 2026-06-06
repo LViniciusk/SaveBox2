@@ -2,9 +2,12 @@
 
 #include <cpr/cpr.h>
 #include <string>
+#include <vector>
 #include <cstdint>
 #include <unordered_map>
 #include <mutex>
+#include <shared_mutex>
+#include <optional>
 
 class DatabasePool;
 
@@ -14,19 +17,30 @@ public:
 
     struct LinkResult {
         std::string root_folder_id;
+        std::string account_email;
     };
 
     LinkResult link_account(uint64_t user_id, const std::string& auth_code, const std::string& state);
 
-    std::string get_valid_access_token(uint64_t user_id);
-
-    std::string get_root_folder_id(uint64_t user_id);
+    struct LinkedAccount {
+        uint64_t id;
+        std::string account_email;
+        std::string root_folder_id;
+    };
+    
+    std::vector<LinkedAccount> get_linked_accounts(uint64_t user_id);
+    
+    std::string get_access_token_for_storage(uint64_t storage_id);
 
     bool is_linked(uint64_t user_id);
 
-    void unlink_account(uint64_t user_id);
+    void unlink_account(uint64_t user_id, std::optional<uint64_t> storage_id = std::nullopt); // Se storage_id for nullopt, remove todos
 
     std::string generate_oauth_state(uint64_t user_id);
+    
+    int64_t get_available_space(const std::string& access_token);
+    
+    uint64_t select_best_storage(uint64_t user_id, int64_t file_size_bytes, std::string& out_access_token, std::string& out_root_folder_id);
 
 protected:
     std::string client_id_;
@@ -37,10 +51,19 @@ private:
     struct TokenResponse {
         std::string access_token;
         std::string refresh_token;
+        std::string account_email;
+    };
+
+    struct TokenCacheEntry {
+        std::string access_token;
+        std::chrono::steady_clock::time_point expires_at;
     };
 
     std::mutex states_mutex_;
     std::unordered_map<uint64_t, std::string> pending_states_;
+    
+    std::shared_mutex cache_mutex_;
+    std::unordered_map<uint64_t, TokenCacheEntry> token_cache_;
 
     bool validate_and_consume_state(uint64_t user_id, const std::string& state);
 

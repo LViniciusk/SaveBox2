@@ -50,7 +50,7 @@ int main() {
     GoogleDriveService gdrive(pool);
 
     // Garbage Collector 
-    GarbageCollector gc(pool, &chunker);
+    GarbageCollector gc(pool, &chunker, &gdrive);
     gc.run_cleanup();
     std::atomic<bool> gc_running{true};
     std::mutex gc_mutex;

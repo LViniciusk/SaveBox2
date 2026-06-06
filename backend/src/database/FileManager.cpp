@@ -383,11 +383,15 @@ std::string FileManager::share_file(uint64_t file_id, uint64_t user_id) {
     pqxx::work txn(*conn);
 
     auto result = txn.exec(
-        "SELECT id FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+        "SELECT id, storage_provider FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
         pqxx::params{file_id, user_id}
     );
     if (result.empty()) {
         throw std::runtime_error("NOT_FOUND");
+    }
+
+    if (result[0][1].as<std::string>() != "local") {
+        throw std::invalid_argument("EXTERNAL_SHARE_NOT_SUPPORTED");
     }
 
     std::string uuid = UuidUtils::generate_uuid_v4();
@@ -519,28 +523,38 @@ void FileManager::empty_trash(uint64_t user_id, FileChunker* chunker) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
-    auto quota_release = txn.exec(
-        "SELECT COALESCE(SUM(CASE WHEN storage_provider = 'local' THEN size_bytes ELSE 2048 END), 0) "
-        "FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL",
+    auto deleted_files_res = txn.exec(
+        "WITH deleted_files AS ("
+        "  DELETE FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL "
+        "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
+        ") "
+        "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files",
         pqxx::params{user_id}
     );
-    uint64_t freed_bytes = quota_release[0][0].as<uint64_t>();
+
+    uint64_t freed_bytes = 0;
+    for (const auto& row : deleted_files_res) {
+        auto fid = row[0].as<uint64_t>();
+        std::string provider = row[1].as<std::string>();
+        uint64_t size = row[2].as<uint64_t>();
+        
+        freed_bytes += (provider == "local") ? size : 2048;
+        
+        if (provider == "google_drive") {
+            if (!row[3].is_null() && !row[4].is_null()) {
+                txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
+                         pqxx::params{row[3].as<std::string>(), row[4].as<uint64_t>()});
+            }
+        } else {
+            if (chunker) chunker->delete_file(fid);
+        }
+    }
+
     if (freed_bytes > 0) {
         txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
                  pqxx::params{freed_bytes, user_id});
     }
 
-    auto files_to_delete = txn.exec(
-        "SELECT id FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL",
-        pqxx::params{user_id}
-    );
-
-    for (const auto& row : files_to_delete) {
-        auto fid = row[0].as<uint64_t>();
-        if (chunker) chunker->delete_file(fid);
-    }
-
-    txn.exec("DELETE FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL", pqxx::params{user_id});
     txn.exec("DELETE FROM folders WHERE user_id = $1 AND deleted_at IS NOT NULL", pqxx::params{user_id});
 
     txn.commit();
@@ -562,7 +576,8 @@ crow::json::wvalue FileManager::get_user_quota(uint64_t user_id) {
 int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> folder_id,
                                        const std::string& enc_name, const std::string& name_hash,
                                        const std::string& encrypted_fdk,
-                                       uint64_t size_bytes, const std::string& storage_provider) {
+                                       uint64_t size_bytes, const std::string& storage_provider,
+                                       std::optional<uint64_t> external_storage_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
@@ -613,9 +628,9 @@ int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> 
 
     auto result = txn.exec(
         "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, "
-        "size_bytes, total_chunks, storage_provider) "
-        "VALUES ($1, $2, $3, $4, $5, $6, 0, $7) RETURNING id",
-        pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider}
+        "size_bytes, total_chunks, storage_provider, external_storage_id) "
+        "VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8) RETURNING id",
+        pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider, external_storage_id}
     );
 
     int file_id = result[0][0].as<int>();

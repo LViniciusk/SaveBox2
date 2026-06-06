@@ -2,6 +2,9 @@
 #include <pqxx/pqxx>
 #include <stdexcept>
 #include <iostream>
+#include <random>
+#include <sstream>
+#include <iomanip>
 
 UsersManager::UsersManager(DatabasePool& pool) : pool_(pool) {}
 
@@ -35,14 +38,14 @@ int UsersManager::create_oauth_user(const std::string& email, const std::string&
 
     std::string base_username = email.substr(0, email.find('@'));
     std::string username = base_username;
-    int suffix = 1;
-
-    while (true) {
-        auto check_username = txn.exec("SELECT 1 FROM users WHERE username = $1", pqxx::params{username});
-        if (check_username.empty()) {
-            break;
-        }
-        username = base_username + std::to_string(suffix++);
+    auto check_username = txn.exec("SELECT 1 FROM users WHERE username = $1", pqxx::params{username});
+    if (!check_username.empty()) {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<uint32_t> dis(0, 0xFFFFFFFF);
+        std::stringstream ss;
+        ss << std::hex << std::setfill('0') << std::setw(8) << dis(gen);
+        username = base_username + "_" + ss.str();
     }
 
     auto insert_result = txn.exec(

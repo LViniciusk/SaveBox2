@@ -58,6 +58,14 @@ struct RateLimitMiddleware {
         }
         const bool is_auth_route = (path == "/login" || path == "/register");
 
+        if (now_steady < ddos_panic_until) {
+            res.code = 429;
+            res.set_header("Content-Type", "application/json");
+            res.body = R"({"error": "Too Many Requests"})";
+            res.end();
+            return;
+        }
+
         {
             std::shared_lock<std::shared_timed_mutex> read_lock(mutex_);
             auto banned_it = banned_ips_cache.find(ip);
@@ -107,6 +115,7 @@ struct RateLimitMiddleware {
                         if (lowest_it != clients_.end() && lowest_count < HIGH_THREAT_THRESHOLD) {
                             clients_.erase(lowest_it);
                         } else {
+                            ddos_panic_until = now_steady + std::chrono::seconds(15);
                             res.code = 429;
                             res.set_header("Content-Type", "application/json");
                             res.body = R"({"error": "Too Many Requests"})";
@@ -195,4 +204,5 @@ private:
     std::unordered_map<std::string, std::chrono::system_clock::time_point> banned_ips_cache;
     DatabasePool* pool_ = nullptr;
     std::shared_timed_mutex mutex_;
+    std::chrono::steady_clock::time_point ddos_panic_until = std::chrono::steady_clock::time_point::min();
 };

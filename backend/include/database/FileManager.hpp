@@ -44,7 +44,8 @@ public:
     int init_external_upload(uint64_t user_id, std::optional<uint64_t> folder_id,
                              const std::string& enc_name, const std::string& name_hash,
                              const std::string& encrypted_fdk,
-                             uint64_t size_bytes, const std::string& storage_provider);
+                             uint64_t size_bytes, const std::string& storage_provider,
+                             std::optional<uint64_t> external_storage_id = std::nullopt);
 
     void finalize_external_upload(uint64_t file_id, uint64_t user_id,
                                   const std::string& external_file_id);

@@ -232,6 +232,20 @@ crow::json::wvalue FolderManager::update_folder(uint64_t folder_id, uint64_t use
             if (parent_res.empty()) {
                 throw std::runtime_error("FORBIDDEN");
             }
+
+            auto circular_res = txn.exec(
+                "WITH RECURSIVE folder_tree AS ("
+                "  SELECT id, parent_id FROM folders WHERE id = $1 "
+                "  UNION ALL "
+                "  SELECT f.id, f.parent_id FROM folders f "
+                "  INNER JOIN folder_tree ft ON f.id = ft.parent_id "
+                ") "
+                "SELECT 1 FROM folder_tree WHERE id = $2 LIMIT 1",
+                pqxx::params{parent_id.value(), folder_id}
+            );
+            if (!circular_res.empty()) {
+                throw std::runtime_error("BAD_REQUEST");
+            }
         }
     }
 

@@ -48,7 +48,8 @@ public:
     crow::response handle_share_file(const crow::request& req, int file_id);
     crow::response handle_get_shared_file(const crow::request& req, const std::string& uuid);
     crow::response handle_link_google_drive(const crow::request& req);
-    crow::response handle_get_google_token(const crow::request& req);
+    crow::response handle_get_google_accounts(const crow::request& req);
+    crow::response handle_unlink_google_account(const crow::request& req, int account_id);
     crow::response handle_generate_google_state(const crow::request& req);
     crow::response handle_finalize_external_upload(const crow::request& req, int file_id);
 

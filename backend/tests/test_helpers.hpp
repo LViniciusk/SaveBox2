@@ -129,6 +129,17 @@ protected:
         if (url.find("drive/v3/files") != std::string::npos) {
             res.status_code = 200;
             res.text = R"({"files": []})";
+        } else if (url.find("oauth2/v2/userinfo") != std::string::npos) {
+            res.status_code = 200;
+            res.text = R"({"email": "mock@test.com"})";
+        } else if (url.find("drive/v3/about") != std::string::npos) {
+            res.status_code = 200;
+            res.text = R"({
+                "storageQuota": {
+                    "limit": "1000000000000",
+                    "usage": "500000000000"
+                }
+            })";
         }
         return res;
     }
