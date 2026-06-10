@@ -31,6 +31,7 @@ public:
     crow::response handle_verify_email(const crow::request& req);
     crow::response handle_create_folder(const crow::request& req);
     crow::response handle_init_file_upload(const crow::request& req);
+    crow::response handle_batch_init_uploads(const crow::request& req);
     crow::response handle_upload_chunk(const crow::request& req, int file_id);
     crow::response handle_download_file(const crow::request& req, int file_id);
     crow::response handle_list_folder_contents(const crow::request& req, int folder_id);

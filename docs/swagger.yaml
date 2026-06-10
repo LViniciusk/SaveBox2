@@ -139,13 +139,50 @@ components:
           type: integer
         storage_provider:
           type: string
-          enum: [local, google_drive]
-        access_token:
+    BatchInitUploadRequest:
+      type: object
+      required: [files]
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitUploadRequest'
+          maxItems: 100
+
+    BatchInitUploadItemResponse:
+      type: object
+      properties:
+        file_id:
+          type: integer
+        name_hash:
           type: string
-          description: Apenas para google_drive
+        storage_provider:
+          type: string
+          enum: [local, google_drive]
         root_folder_id:
           type: string
           description: Apenas para google_drive
+        access_token:
+          type: string
+          description: Apenas para google_drive
+
+    BatchInitUploadResponse:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchInitUploadItemResponse'
+
+    BatchDeleteRequest:
+      type: object
+      required: [file_ids]
+      properties:
+        file_ids:
+          type: array
+          items:
+            type: integer
+          maxItems: 100
 
     ChunkUploadStatus:
       type: object
@@ -372,32 +409,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /verify:
-    get:
-      tags: [Autenticação]
-      summary: Verifica e ativa conta por token
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        '200':
-          description: Conta ativada
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/GenericMessageResponse'
-        '400':
-          description: Token ausente, inválido ou expirado
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Erro interno
-
   /users/me/quota:
     get:
       tags: [Quota]
@@ -568,6 +579,63 @@ paths:
           description: Pasta não encontrada na lixeira
         '409':
           description: Conflito no destino
+        '500':
+          description: Erro interno
+
+  /files/batch-init:
+    post:
+      tags: [Arquivos]
+      summary: Inicializa upload de multiplos arquivos
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchInitUploadRequest'
+      responses:
+        '201':
+          description: Uploads inicializados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchInitUploadResponse'
+        '400':
+          description: JSON inválido
+        '401':
+          description: Token ausente ou inválido
+        '402':
+          description: Quota excedida
+        '409':
+          description: Arquivo já existe na pasta
+
+  /files/batch-delete:
+    post:
+      tags: [Lixeira]
+      summary: Envia multiplos arquivos para a lixeira
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchDeleteRequest'
+      responses:
+        '200':
+          description: Arquivos processados
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted_count:
+                    type: integer
+        '400':
+          description: Lote excede limite ou invalido
+        '401':
+          description: Token ausente ou invalido
         '500':
           description: Erro interno
 

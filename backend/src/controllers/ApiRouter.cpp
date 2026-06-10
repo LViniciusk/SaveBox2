@@ -394,6 +394,118 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
     }
 }
 
+crow::response ApiRouter::handle_batch_init_uploads(const crow::request& req) {
+    try {
+        auto user_id_opt = authenticate_request(req);
+        if (!user_id_opt) {
+            return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+        }
+        uint64_t user_id = *user_id_opt;
+
+        auto body = crow::json::load(req.body);
+        if (!body || !body.has("files") || body["files"].t() != crow::json::type::List) {
+            return crow::response(400, R"({"error":"JSON invalido ou ausente array 'files'"})");
+        }
+
+        auto files_json = body["files"];
+        if (files_json.size() == 0 || files_json.size() > 100) {
+            return crow::response(400, R"({"error":"Lote deve ter entre 1 e 100 arquivos"})");
+        }
+
+        std::vector<BatchInitItem> batch_items;
+        std::map<std::string, std::pair<std::string, std::string>> gdrive_tokens; // root_folder_id, access_token
+
+        constexpr uint64_t CHUNK_SIZE = 4ULL * 1024 * 1024;
+
+        for (const auto& item : files_json) {
+            if (!item.has("encrypted_name") || !item.has("name_hash") || 
+                !item.has("encrypted_fdk") || !item.has("size_bytes")) {
+                return crow::response(400, R"({"error":"Metadados incompletos no lote"})");
+            }
+
+            BatchInitItem b_item;
+            try {
+                if (item.has("folder_id") && item["folder_id"].t() != crow::json::type::Null) {
+                    b_item.folder_id = static_cast<uint64_t>(item["folder_id"].i());
+                }
+                b_item.enc_name = item["encrypted_name"].s();
+                b_item.name_hash = item["name_hash"].s();
+                b_item.encrypted_fdk = item["encrypted_fdk"].s();
+                
+                int64_t raw_size = item["size_bytes"].i();
+                if (raw_size < 0) return crow::response(400, R"({"error":"Valores numericos invalidos"})");
+                b_item.size_bytes = static_cast<uint64_t>(raw_size);
+
+                b_item.storage_provider = "local";
+                if (item.has("storage_provider") && item["storage_provider"].t() == crow::json::type::String) {
+                    b_item.storage_provider = item["storage_provider"].s();
+                }
+
+                if (b_item.storage_provider == "local") {
+                    if (!item.has("total_chunks")) return crow::response(400, R"({"error":"Arquivos locais precisam de total_chunks"})");
+                    int64_t raw_chunks = item["total_chunks"].i();
+                    if (raw_chunks <= 0) return crow::response(400, R"({"error":"total_chunks invalido"})");
+                    b_item.total_chunks = static_cast<int>(raw_chunks);
+
+                    int expected_chunks = static_cast<int>((b_item.size_bytes + CHUNK_SIZE - 1) / CHUNK_SIZE);
+                    if (expected_chunks == 0) expected_chunks = 1;
+                    if (b_item.total_chunks != expected_chunks) {
+                        return crow::response(400, R"({"error":"Quantidade de chunks incompativel"})");
+                    }
+                } else if (b_item.storage_provider == "google_drive") {
+                    if (!gdrive_ || !gdrive_->is_linked(user_id)) {
+                        return crow::response(400, R"({"error":"Conta Google Drive nao vinculada"})");
+                    }
+                    std::string access_token;
+                    std::string root_folder_id;
+                    uint64_t best_storage_id = gdrive_->select_best_storage(user_id, b_item.size_bytes, access_token, root_folder_id);
+                    if (best_storage_id == 0) {
+                        return crow::response(507, R"({"error":"Espaço insuficiente nas contas vinculadas"})");
+                    }
+                    b_item.external_storage_id = best_storage_id;
+                    gdrive_tokens[b_item.name_hash] = {root_folder_id, access_token};
+                } else {
+                    return crow::response(400, R"({"error":"storage_provider invalido"})");
+                }
+
+            } catch (const std::runtime_error&) {
+                return crow::response(400, R"({"error":"Tipos de dados invalidos no JSON"})");
+            }
+            batch_items.push_back(b_item);
+        }
+
+        auto db_results = file_mgr_->batch_init_uploads(user_id, batch_items);
+
+        std::vector<crow::json::wvalue> res_array;
+        for (const auto& r : db_results) {
+            crow::json::wvalue item_res;
+            item_res["file_id"] = r.file_id;
+            item_res["name_hash"] = r.name_hash;
+            item_res["storage_provider"] = r.storage_provider;
+            
+            if (r.storage_provider == "google_drive") {
+                auto it = gdrive_tokens.find(r.name_hash);
+                if (it != gdrive_tokens.end()) {
+                    item_res["root_folder_id"] = it->second.first;
+                    item_res["access_token"] = it->second.second;
+                }
+            }
+            res_array.push_back(std::move(item_res));
+        }
+
+        crow::json::wvalue res_body;
+        res_body["files"] = std::move(res_array);
+        return crow::response(201, res_body);
+
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "FORBIDDEN_FOLDER") return crow::response(403, R"({"error":"Proibido acesso a pasta"})");
+        if (msg == "QUOTA_EXCEEDED") return crow::response(402, R"({"error":"Payment Required - Quota Exceeded"})");
+        if (msg == "FILE_ALREADY_EXISTS") return crow::response(409, R"({"error":"Colisao de arquivos detectada"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 crow::response ApiRouter::handle_upload_chunk(const crow::request& req, int file_id) {
     try {
         auto user_id_opt = authenticate_request(req);
@@ -1516,6 +1628,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
     CROW_ROUTE(app, "/files").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
         auto res = handle_init_file_upload(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/files/batch-init").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        auto res = handle_batch_init_uploads(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });

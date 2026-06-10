@@ -9,6 +9,27 @@
 
 class DatabasePool;
 
+struct BatchInitItem {
+    std::optional<uint64_t> folder_id;
+    std::string enc_name;
+    std::string name_hash;
+    std::string encrypted_fdk;
+    uint64_t size_bytes;
+    int total_chunks;
+    std::string storage_provider;
+    std::optional<uint64_t> external_storage_id;
+};
+
+struct BatchInitResult {
+    uint64_t file_id;
+    std::string enc_name;
+    std::string name_hash;
+    std::string storage_provider;
+    std::string external_file_id; 
+    std::string access_token;     
+    std::string root_folder_id;   
+};
+
 class FileManager {
 public:
     explicit FileManager(DatabasePool& pool);
@@ -17,6 +38,8 @@ public:
                     const std::string& enc_name, const std::string& name_hash,
                     const std::string& encrypted_fdk,
                     uint64_t size_bytes, int total_chunks);
+
+    std::vector<BatchInitResult> batch_init_uploads(uint64_t user_id, const std::vector<BatchInitItem>& files);
 
     crow::json::wvalue get_user_quota(uint64_t user_id);
 

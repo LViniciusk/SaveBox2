@@ -696,6 +696,109 @@ int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> 
     }
 }
 
+std::vector<BatchInitResult> FileManager::batch_init_uploads(uint64_t user_id, const std::vector<BatchInitItem>& files) {
+    if (files.empty()) return {};
+
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    uint64_t total_local_bytes = 0;
+    uint64_t total_metadata_cost = 0;
+    const uint64_t metadata_cost = 2048;
+
+    for (const auto& file : files) {
+        if (file.folder_id.has_value()) {
+            auto folder_check = txn.exec(
+                "SELECT id FROM folders WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+                pqxx::params{file.folder_id.value(), user_id}
+            );
+            if (folder_check.empty()) {
+                throw std::runtime_error("FORBIDDEN_FOLDER");
+            }
+        }
+        if (file.storage_provider == "local") {
+            total_local_bytes += file.size_bytes;
+        } else {
+            total_metadata_cost += metadata_cost;
+        }
+    }
+
+    uint64_t total_cost = total_local_bytes + total_metadata_cost;
+
+    auto check_quota = txn.exec(
+        "SELECT used_storage_bytes, max_storage_bytes FROM users WHERE id = $1 FOR UPDATE",
+        pqxx::params{user_id}
+    );
+    if (check_quota.empty()) throw std::runtime_error("NOT_FOUND");
+    
+    uint64_t used = check_quota[0][0].as<uint64_t>();
+    uint64_t max = check_quota[0][1].as<uint64_t>();
+    
+    if (used + total_cost > max) {
+        throw std::runtime_error("QUOTA_EXCEEDED");
+    }
+
+    txn.exec("UPDATE users SET used_storage_bytes = used_storage_bytes + $1 WHERE id = $2",
+             pqxx::params{total_cost, user_id});
+
+    std::string query = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, "
+                        "size_bytes, total_chunks, storage_provider, external_storage_id) VALUES ";
+
+    for (size_t i = 0; i < files.size(); ++i) {
+        if (i > 0) query += ", ";
+        
+        std::string f_id = files[i].folder_id.has_value() ? std::to_string(files[i].folder_id.value()) : "NULL";
+        std::string ext_id = files[i].external_storage_id.has_value() ? std::to_string(files[i].external_storage_id.value()) : "NULL";
+        int chunks = files[i].storage_provider == "local" ? files[i].total_chunks : 0;
+        
+        query += "(" + std::to_string(user_id) + ", " + 
+                 f_id + ", " + 
+                 txn.quote(files[i].enc_name) + ", " + 
+                 txn.quote(files[i].name_hash) + ", " + 
+                 txn.quote(files[i].encrypted_fdk) + ", " + 
+                 std::to_string(files[i].size_bytes) + ", " + 
+                 std::to_string(chunks) + ", " + 
+                 txn.quote(files[i].storage_provider) + ", " + 
+                 ext_id + ")";
+    }
+
+    query += " RETURNING id, name_hash, storage_provider";
+
+    std::vector<BatchInitResult> results;
+    std::vector<int> local_ids;
+
+    try {
+        auto result = txn.exec(query);
+        for (auto row : result) {
+            BatchInitResult res;
+            res.file_id = row[0].as<int>();
+            res.name_hash = row[1].as<std::string>();
+            res.storage_provider = row[2].as<std::string>();
+            
+            if (res.storage_provider == "local") {
+                local_ids.push_back(static_cast<int>(res.file_id));
+            }
+            results.push_back(res);
+        }
+
+        if (!local_ids.empty()) {
+            std::string update_query = "UPDATE files SET physical_path = id || '.dat' WHERE id = ANY($1::int[]) AND physical_path IS NULL";
+            std::string ids_array = "{";
+            for (size_t i = 0; i < local_ids.size(); ++i) {
+                if (i > 0) ids_array += ",";
+                ids_array += std::to_string(local_ids[i]);
+            }
+            ids_array += "}";
+            txn.exec(update_query, pqxx::params{ids_array});
+        }
+
+        txn.commit();
+        return results;
+    } catch (const pqxx::unique_violation& e) {
+        throw std::runtime_error("FILE_ALREADY_EXISTS");
+    }
+}
+
 void FileManager::finalize_external_upload(uint64_t file_id, uint64_t user_id,
                                             const std::string& external_file_id) {
     if (external_file_id.empty()) {
