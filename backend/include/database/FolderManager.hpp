@@ -7,6 +7,16 @@
 
 class DatabasePool;
 
+struct BatchHardDeleteFolderResult {
+        int deleted_count = 0;
+        std::vector<std::string> external_files;
+    };
+
+struct BatchDeleteFolderResult {
+        int deleted_count = 0;
+        std::vector<std::string> external_files;
+    };
+
 class FolderManager {
 public:
     explicit FolderManager(DatabasePool& pool);
@@ -15,17 +25,15 @@ public:
                            std::optional<uint64_t> parent_id,
                            const std::string& encrypted_name,
                            const std::string& name_hash);
-
     std::vector<std::string> delete_folder(uint64_t folder_id, uint64_t user_id);
     bool folder_exists(uint64_t folder_id);
-
     crow::json::wvalue get_folder_contents(int folder_id, int user_id);
     std::vector<crow::json::wvalue> get_all_folders(uint64_t user_id);
-    
     crow::json::wvalue update_folder(uint64_t folder_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& parent_id);
-
     std::vector<std::string> restore_folder(uint64_t folder_id, uint64_t user_id);
     std::vector<std::string> hard_delete_folder(uint64_t folder_id, uint64_t user_id, class FileChunker* chunker);
+    BatchDeleteFolderResult batch_delete_folders(uint64_t user_id, const std::vector<int>& folder_ids);
+    BatchHardDeleteFolderResult batch_hard_delete_folders(uint64_t user_id, const std::vector<int>& folder_ids, class FileChunker* chunker);
 
 private:
     DatabasePool& pool_;

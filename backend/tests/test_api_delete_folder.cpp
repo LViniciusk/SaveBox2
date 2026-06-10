@@ -177,3 +177,93 @@ TEST_CASE("API Delete Folder - Exclusao Recursiva de Arvore", "[api][delete][fol
     
     std::filesystem::remove_all(test_dir);
 }
+
+TEST_CASE("API Batch Delete Folders", "[api][delete][folders][batch]") {
+    std::string test_dir = "./test_batch_delete_folders/";
+    std::filesystem::create_directories(test_dir);
+
+    std::string conn_str = get_secure_conn_string();
+    DatabasePool pool(2, conn_str);
+    MockEmailService mock_email;
+    AuthService auth("Abissal_nosso_amor", "Sem_você_eu_sou_superficial", &mock_email);
+    FolderManager folder_mgr(pool);
+    FileManager file_mgr(pool);
+    FileChunker chunker(test_dir);
+    ApiRouter router(pool, auth, folder_mgr, &file_mgr, &chunker);
+
+    int user_a_id = 0;
+    int folder_1 = 0, folder_2 = 0, folder_3 = 0, folder_other = 0;
+
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+
+        txn.exec("DELETE FROM users WHERE username IN ('batch_del_fa', 'batch_del_fb')");
+        user_a_id = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('batch_del_fa', 'fa@test.com', 'h', true) RETURNING id")[0][0].as<int>();
+        int user_b_id = txn.exec("INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('batch_del_fb', 'fb@test.com', 'h', true) RETURNING id")[0][0].as<int>();
+
+        folder_1 = txn.exec("INSERT INTO folders (user_id, encrypted_name, name_hash) VALUES ($1, 'f1', 'h1') RETURNING id", pqxx::params{user_a_id})[0][0].as<int>();
+        folder_2 = txn.exec("INSERT INTO folders (user_id, encrypted_name, name_hash) VALUES ($1, 'f2', 'h2') RETURNING id", pqxx::params{user_a_id})[0][0].as<int>();
+        folder_3 = txn.exec("INSERT INTO folders (user_id, parent_id, encrypted_name, name_hash) VALUES ($1, $2, 'f3', 'h3') RETURNING id", pqxx::params{user_a_id, folder_1})[0][0].as<int>();
+        
+        folder_other = txn.exec("INSERT INTO folders (user_id, encrypted_name, name_hash) VALUES ($1, 'fo', 'ho') RETURNING id", pqxx::params{user_b_id})[0][0].as<int>();
+        
+        txn.commit();
+    }
+
+    std::string token_a = auth.generate_token(static_cast<uint64_t>(user_a_id));
+
+    SECTION("Soft Delete Batch") {
+        crow::request req;
+        req.url = "/folders/batch-delete";
+        req.method = crow::HTTPMethod::Delete;
+        req.add_header("Authorization", "Bearer " + token_a);
+        
+        crow::json::wvalue body;
+        body["folder_ids"] = std::vector<int>{folder_1, folder_2};
+        req.body = body.dump();
+
+        crow::response res = router.handle_batch_delete_folders(req);
+        REQUIRE(res.code == 200);
+
+        auto conn = pool.acquire_connection();
+        pqxx::nontransaction txn(*conn);
+        
+        auto check1 = txn.exec("SELECT deleted_at FROM folders WHERE id = " + std::to_string(folder_1));
+        REQUIRE(!check1[0][0].is_null());
+
+        auto check2 = txn.exec("SELECT deleted_at FROM folders WHERE id = " + std::to_string(folder_2));
+        REQUIRE(!check2[0][0].is_null());
+
+        auto check3 = txn.exec("SELECT deleted_at FROM folders WHERE id = " + std::to_string(folder_3));
+        REQUIRE(!check3[0][0].is_null()); // Recursive
+    }
+
+    SECTION("Hard Delete Batch IDOR") {
+        crow::request req;
+        req.url = "/trash/folders/batch-delete";
+        req.method = crow::HTTPMethod::Delete;
+        req.add_header("Authorization", "Bearer " + token_a);
+        
+        crow::json::wvalue body;
+        body["folder_ids"] = std::vector<int>{folder_other};
+        req.body = body.dump();
+
+        crow::response res = router.handle_batch_hard_delete_folders(req);
+        REQUIRE(res.code == 200);
+
+        auto conn = pool.acquire_connection();
+        pqxx::nontransaction txn(*conn);
+        auto check_other = txn.exec("SELECT count(*) FROM folders WHERE id = " + std::to_string(folder_other));
+        REQUIRE(check_other[0][0].as<int>() == 1); // IDOR safe
+    }
+
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+        txn.exec("DELETE FROM users WHERE username IN ('batch_del_fa', 'batch_del_fb')");
+        txn.commit();
+    }
+    
+    std::filesystem::remove_all(test_dir);
+}

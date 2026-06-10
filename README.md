@@ -35,7 +35,8 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 | `POST` | `/register` | Registra um novo usuário. |
 | `GET` | `/verify?token=<codigo>` | Valida o codigo de 6 caracteres recebido por e-mail e ativa a conta. |
 | `POST` | `/login` | Autentica e retorna o JWT Bearer Token. |
-| `POST` | `/logout` | Invalida globalmente a sessão do usuário e remove o cookie. |
+| `POST` | `/logout` | Invalida a sessão do usuário do dispositivo atual (remove JTI local). |
+| `POST` | `/logout/global` | Invalida globalmente todas as sessões do usuário. |
 | `GET` | `/users/me/quota` | Consulta limite e uso de armazenamento. |
 | `DELETE` | `/users/me` | Deleta permanentemente a conta do usuário. |
 | `POST` | `/api/auth/google` | Realiza login via Google. |
@@ -45,19 +46,22 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 | :--- | :--- | :--- |
 | `POST` | `/folders` | Cria nova pasta. |
 | `GET` | `/folders/<id>/contents` | Lista subpastas e arquivos diretos de uma pasta. |
-| `GET` | `/tree?file_limit=&file_offset=` | Retorna a árvore raiz do usuário com paginação. |
+| `GET` | `/tree` | Retorna a árvore raiz do usuário com paginação opcional. |
 | `PUT` | `/folders/<id>` | Renomeia ou move a pasta para outro `parent_id`. |
-| `DELETE` | `/folders/<id>` | Exclusão recursiva que apaga todo o conteudo de uma pasta. |
+| `DELETE` | `/folders/batch-delete` | Envia múltiplas pastas para a lixeira (Soft Delete em lote). |
+| `DELETE` | `/folders/<id>` | Exclusão recursiva que apaga todo o conteudo de uma pasta (Soft Delete). |
 
 ### Gerenciamento de Arquivos e Chunks
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
 | `POST` | `/files` | Inicializa o upload (retorna o `file_id` para os chunks). |
+| `POST` | `/files/batch-init` | Inicializa uploads de múltiplos arquivos de uma só vez. |
 | `POST` | `/files/<id>/chunks` | Envia um pedaço binário. Exige Header `X-Chunk-Index`. |
 | `GET` | `/files/<id>/uploaded-chunks` | Retorna array com índices de chunks já salvos. |
 | `GET` | `/files/<id>/download` | Baixa o arquivo. Suporta cabeçalho HTTP `Range`. |
 | `PUT` | `/files/<id>` | Renomeia ou move o arquivo de pasta. |
-| `DELETE` | `/files/<id>` | Deleta o arquivo físico e lógico. |
+| `DELETE` | `/files/batch-delete` | Envia múltiplos arquivos para a lixeira (Soft Delete em lote). |
+| `DELETE` | `/files/<id>` | Deleta o arquivo lógico (Soft Delete). |
 | `GET` | `/pending-uploads` | Lista uploads iniciados que ainda não foram concluídos. |
 
 ### Lixeira e Recuperação
@@ -66,6 +70,8 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 | `GET` | `/trash` | Lista todos os itens deletados (Soft Deleted). |
 | `POST` | `/folders/<id>/restore` | Restaura pasta (resolve colisões de nome). |
 | `POST` | `/files/<id>/restore` | Restaura arquivo para local original ou raiz. |
+| `DELETE` | `/trash/folders/batch-delete` | **Hard Delete:** Deleta múltiplas pastas permanentemente. |
+| `DELETE` | `/trash/files/batch-delete` | **Hard Delete:** Deleta múltiplos arquivos permanentemente. |
 | `DELETE` | `/trash/folders/<id>` | **Hard Delete:** Deleta a pasta e seu conteúdo permanentemente. |
 | `DELETE` | `/trash/files/<id>` | **Hard Delete:** Deleta um arquivo permanentemente. |
 | `DELETE` | `/trash/empty` | **Hard Delete:** Limpa a lixeira permanentemente. |

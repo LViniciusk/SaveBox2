@@ -1111,6 +1111,71 @@ crow::response ApiRouter::handle_batch_hard_delete(const crow::request& req) {
     }
 }
 
+crow::response ApiRouter::handle_batch_delete_folders(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    auto req_body = crow::json::load(req.body);
+    if (!req_body || !req_body.has("folder_ids") || req_body["folder_ids"].t() != crow::json::type::List) {
+        return crow::response(400, R"({"error":"Corpo da requisicao invalido, esperado array folder_ids"})");
+    }
+
+    std::vector<int> folder_ids;
+    for (const auto& item : req_body["folder_ids"]) {
+        if (item.t() == crow::json::type::Number) {
+            folder_ids.push_back(item.i());
+        }
+    }
+
+    if (folder_ids.empty()) return crow::response(400, R"({"error":"Array folder_ids nao pode estar vazio"})");
+    if (folder_ids.size() > 100) return crow::response(400, R"({"error":"Limite maximo de 100 pastas por lote excedido"})");
+
+    try {
+        auto result = folder_mgr_->batch_delete_folders(user_id, folder_ids);
+        crow::json::wvalue res;
+        res["message"] = "Pastas enviadas para lixeira";
+        res["deleted_count"] = result.deleted_count;
+        res["external_files"] = result.external_files;
+        return crow::response(200, res);
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno ao deletar pastas"})");
+    }
+}
+
+crow::response ApiRouter::handle_batch_hard_delete_folders(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    auto req_body = crow::json::load(req.body);
+    if (!req_body || !req_body.has("folder_ids") || req_body["folder_ids"].t() != crow::json::type::List) {
+        return crow::response(400, R"({"error":"Corpo da requisicao invalido, esperado array folder_ids"})");
+    }
+
+    std::vector<int> folder_ids;
+    for (const auto& item : req_body["folder_ids"]) {
+        if (item.t() == crow::json::type::Number) {
+            folder_ids.push_back(item.i());
+        }
+    }
+
+    if (folder_ids.empty()) return crow::response(400, R"({"error":"Array folder_ids nao pode estar vazio"})");
+    if (folder_ids.size() > 100) return crow::response(400, R"({"error":"Limite maximo de 100 pastas por lote excedido"})");
+
+    try {
+        auto result = folder_mgr_->batch_hard_delete_folders(user_id, folder_ids, chunker_);
+        crow::json::wvalue res;
+        res["message"] = "Pastas deletadas permanentemente";
+        res["deleted_count"] = result.deleted_count;
+        res["external_files"] = result.external_files;
+        return crow::response(200, res);
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno ao deletar pastas"})");
+    }
+}
+
+
 crow::response ApiRouter::handle_hard_delete_folder(const crow::request& req, int folder_id) {
     auto user_id_opt = authenticate_request(req);
     if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
@@ -1751,6 +1816,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
         return res;
     });
 
+    CROW_ROUTE(app, "/folders/batch-delete").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req) {
+        auto res = handle_batch_delete_folders(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
     CROW_ROUTE(app, "/folders/<int>").methods(crow::HTTPMethod::Delete)
     ([this](const crow::request& req, int folder_id) {
         auto res = handle_delete_folder(req, folder_id);
@@ -1817,6 +1889,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
     CROW_ROUTE(app, "/trash/files/batch-delete").methods(crow::HTTPMethod::Delete)
     ([this](const crow::request& req) {
         auto res = handle_batch_hard_delete(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/trash/folders/batch-delete").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req) {
+        auto res = handle_batch_hard_delete_folders(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });

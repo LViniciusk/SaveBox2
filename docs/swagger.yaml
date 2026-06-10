@@ -444,6 +444,43 @@ paths:
         '500':
           description: Erro interno
 
+  /folders/batch-delete:
+    delete:
+      tags: [Pastas]
+      summary: Envia múltiplas pastas para a lixeira
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                folder_ids:
+                  type: array
+                  items:
+                    type: integer
+                  description: Array com até 100 IDs de pastas
+      responses:
+        '200':
+          description: Pastas processadas com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  deleted_count:
+                    type: integer
+        '400':
+          description: Formato inválido ou limite excedido
+        '401':
+          description: Não autorizado
+        '500':
+          description: Erro interno do servidor
+
   /folders:
     post:
       tags: [Pastas]
@@ -1105,6 +1142,45 @@ paths:
           description: Token ausente ou inválido
         '404':
           description: Arquivo não encontrado na lixeira
+        '500':
+          description: Erro interno
+
+  /trash/folders/batch-delete:
+    delete:
+      tags: [Lixeira]
+      summary: Deleta múltiplas pastas permanentemente
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                folder_ids:
+                  type: array
+                  items:
+                    type: integer
+                  description: Array com até 100 IDs de pastas a serem excluídas permanentemente
+      responses:
+        '200':
+          description: Pastas deletadas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  deleted_count:
+                    type: integer
+        '400':
+          description: Formato inválido ou limite excedido
+        '401':
+          description: Não autorizado
+        '404':
+          description: Uma ou mais pastas não encontradas na lixeira
         '500':
           description: Erro interno
 
