@@ -41,6 +41,7 @@ public:
     crow::response handle_get_pending_uploads(const crow::request& req);
     crow::response handle_delete_file(const crow::request& req, int file_id);
     crow::response handle_batch_delete(const crow::request& req);
+    crow::response handle_batch_hard_delete(const crow::request& req);
     crow::response handle_delete_folder(const crow::request& req, int folder_id);
     crow::response handle_trash_folder(const crow::request& req, int folder_id);
     crow::response handle_trash_file(const crow::request& req, int file_id);

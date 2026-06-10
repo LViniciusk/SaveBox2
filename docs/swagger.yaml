@@ -1047,6 +1047,41 @@ paths:
         '500':
           description: Erro interno
 
+  /trash/files/batch-delete:
+    delete:
+      tags: [Lixeira]
+      summary: Exclusão permanente em lote da lixeira
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchDeleteRequest'
+      responses:
+        '200':
+          description: Arquivos deletados permanentemente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Arquivos deletados permanentemente
+                  deleted_count:
+                    type: integer
+                    example: 3
+                  external_files:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: JSON inválido, file_ids ausente ou limite excedido
+        '401':
+          description: Token ausente ou inválido
+
   /trash/files/{fileId}:
     delete:
       tags: [Lixeira]

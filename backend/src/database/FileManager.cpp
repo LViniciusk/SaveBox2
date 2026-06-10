@@ -587,6 +587,61 @@ std::optional<std::string> FileManager::hard_delete_file(uint64_t file_id, uint6
     return ext_file_id_opt;
 }
 
+BatchHardDeleteResult FileManager::batch_hard_delete_files(uint64_t user_id, const std::vector<int>& file_ids, FileChunker* chunker) {
+    if (file_ids.empty()) return {};
+
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    std::string arr_str = "{";
+    for (size_t i = 0; i < file_ids.size(); ++i) {
+        arr_str += std::to_string(file_ids[i]);
+        if (i < file_ids.size() - 1) arr_str += ",";
+    }
+    arr_str += "}";
+
+    auto deleted_files_res = txn.exec(
+        "WITH deleted_files AS ("
+        "  DELETE FROM files WHERE id = ANY($1::int[]) AND user_id = $2 AND deleted_at IS NOT NULL "
+        "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
+        ") "
+        "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files",
+        pqxx::params{arr_str, user_id}
+    );
+
+    BatchHardDeleteResult result;
+    uint64_t total_freed_bytes = 0;
+
+    for (auto row : deleted_files_res) {
+        auto fid = row[0].as<uint64_t>();
+        std::string provider = row[1].as<std::string>();
+        uint64_t size = row[2].as<uint64_t>();
+        
+        uint64_t freed_bytes = (provider == "local") ? size : 2048;
+        total_freed_bytes += freed_bytes;
+
+        if (provider == "google_drive") {
+            if (!row[3].is_null() && !row[4].is_null()) {
+                std::string ext_file_id = row[3].as<std::string>();
+                result.external_files.push_back(ext_file_id);
+                txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
+                         pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+            }
+        } else {
+            if (chunker) chunker->delete_file(fid);
+        }
+        result.deleted_count++;
+    }
+
+    if (total_freed_bytes > 0) {
+        txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
+                 pqxx::params{total_freed_bytes, user_id});
+    }
+
+    txn.commit();
+    return result;
+}
+
 std::vector<std::string> FileManager::empty_trash(uint64_t user_id, FileChunker* chunker) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
@@ -878,7 +933,7 @@ std::string FileManager::get_file_name(uint64_t file_id, uint64_t user_id) {
     return result[0][0].as<std::string>();
 }
 
-std::vector<FileManager::ExternalSyncFile> FileManager::get_external_sync_map(uint64_t user_id, uint64_t external_storage_id) {
+std::vector<ExternalSyncFile> FileManager::get_external_sync_map(uint64_t user_id, uint64_t external_storage_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
