@@ -754,6 +754,46 @@ crow::response ApiRouter::handle_delete_file(const crow::request& req, int file_
     }
 }
 
+crow::response ApiRouter::handle_batch_delete(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    }
+    uint64_t user_id = *user_id_opt;
+
+    auto req_body = crow::json::load(req.body);
+    if (!req_body || !req_body.has("file_ids") || req_body["file_ids"].t() != crow::json::type::List) {
+        return crow::response(400, R"({"error":"Corpo da requisicao invalido, esperado array file_ids"})");
+    }
+
+    std::vector<int> file_ids;
+    for (const auto& item : req_body["file_ids"]) {
+        if (item.t() == crow::json::type::Number) {
+            file_ids.push_back(item.i());
+        }
+    }
+
+    if (file_ids.empty()) {
+        return crow::response(400, R"({"error":"Array file_ids nao pode estar vazio"})");
+    }
+
+    if (file_ids.size() > 100) {
+        return crow::response(400, R"({"error":"Limite maximo de 100 arquivos por lote excedido"})");
+    }
+
+    try {
+        int affected = file_mgr_->batch_delete_files(user_id, file_ids);
+        
+        crow::json::wvalue res;
+        res["message"] = "Arquivos movidos para a lixeira";
+        res["deleted_count"] = affected;
+        return crow::response(200, res);
+        
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 crow::response ApiRouter::handle_delete_folder(const crow::request& req, int folder_id) {
     auto user_id_opt = authenticate_request(req);
     if (!user_id_opt) {
@@ -1516,6 +1556,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
     CROW_ROUTE(app, "/pending-uploads").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req) {
         auto res = handle_get_pending_uploads(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/files/batch-delete").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        auto res = handle_batch_delete(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });

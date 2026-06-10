@@ -98,6 +98,110 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
     std::string token_a = auth.generate_token(static_cast<uint64_t>(user_a_id));
     std::string token_b = auth.generate_token(static_cast<uint64_t>(user_b_id));
 
+    SECTION("Batch Delete: Sucesso") {
+        crow::request req;
+        req.url = "/api/files/batch-delete";
+        req.method = crow::HTTPMethod::Post;
+        req.add_header("Authorization", "Bearer " + token_a);
+        
+        crow::json::wvalue req_body;
+        std::vector<int> ids = {file_1_ok_id, file_2_incompleto_id};
+        req_body["file_ids"] = ids;
+        req.body = req_body.dump();
+
+        crow::response res = router.handle_batch_delete(req);
+        REQUIRE(res.code == 200);
+        
+        auto body = crow::json::load(res.body);
+        REQUIRE(body);
+        REQUIRE(body.has("deleted_count"));
+        REQUIRE(body["deleted_count"].i() == 2);
+
+        // Verify in DB
+        auto conn = pool.acquire_connection();
+        pqxx::nontransaction txn(*conn);
+        auto check = txn.exec(
+            "SELECT count(*) FROM files WHERE deleted_at IS NOT NULL AND id IN (" + 
+            std::to_string(file_1_ok_id) + ", " + std::to_string(file_2_incompleto_id) + ")"
+        );
+        REQUIRE(check[0][0].as<int>() == 2);
+    }
+
+    SECTION("Batch Delete: Acesso Negado IDOR") {
+        // user_a tries to delete user_b's file
+        crow::request req;
+        req.url = "/api/files/batch-delete";
+        req.method = crow::HTTPMethod::Post;
+        req.add_header("Authorization", "Bearer " + token_a);
+        
+        crow::json::wvalue req_body;
+        std::vector<int> ids = {file_4_alheio_id};
+        req_body["file_ids"] = ids;
+        req.body = req_body.dump();
+
+        crow::response res = router.handle_batch_delete(req);
+        REQUIRE(res.code == 200); // the request succeeds but updates 0 rows
+        
+        auto body = crow::json::load(res.body);
+        REQUIRE(body.has("deleted_count"));
+        REQUIRE(body["deleted_count"].i() == 0); // User A does not own file_4_alheio_id
+    }
+
+    SECTION("Batch Delete: Anti-DoS (Limite de Payload)") {
+        crow::request req;
+        req.url = "/api/files/batch-delete";
+        req.method = crow::HTTPMethod::Post;
+        req.add_header("Authorization", "Bearer " + token_a);
+        
+        crow::json::wvalue req_body;
+        std::vector<int> ids(150, 1); // 150 IDs
+        req_body["file_ids"] = ids;
+        req.body = req_body.dump();
+
+        crow::response res = router.handle_batch_delete(req);
+        REQUIRE(res.code == 400); 
+    }
+
+    SECTION("Batch Delete: Payload Vazio ou Malformado") {
+        crow::request req;
+        req.url = "/api/files/batch-delete";
+        req.method = crow::HTTPMethod::Post;
+        req.add_header("Authorization", "Bearer " + token_a);
+        
+        // Vazio
+        crow::json::wvalue req_body_empty;
+        req_body_empty["file_ids"] = std::vector<int>{};
+        req.body = req_body_empty.dump();
+        crow::response res1 = router.handle_batch_delete(req);
+        REQUIRE(res1.code == 400);
+
+        // Malformado (sem file_ids)
+        crow::json::wvalue req_body_malformed;
+        req_body_malformed["wrong_key"] = std::vector<int>{1, 2};
+        req.body = req_body_malformed.dump();
+        crow::response res2 = router.handle_batch_delete(req);
+        REQUIRE(res2.code == 400);
+    }
+
+    SECTION("Batch Delete: Resiliência a Fantasmas") {
+        crow::request req;
+        req.url = "/api/files/batch-delete";
+        req.method = crow::HTTPMethod::Post;
+        req.add_header("Authorization", "Bearer " + token_a);
+        
+        crow::json::wvalue req_body;
+        std::vector<int> ids = {9999991, 9999992}; // Fantasmas
+        req_body["file_ids"] = ids;
+        req.body = req_body.dump();
+
+        crow::response res = router.handle_batch_delete(req);
+        REQUIRE(res.code == 200); 
+        
+        auto body = crow::json::load(res.body);
+        REQUIRE(body.has("deleted_count"));
+        REQUIRE(body["deleted_count"].i() == 0); 
+    }
+
 
     SECTION("Autenticacao: Sem Token") {
         crow::request req;

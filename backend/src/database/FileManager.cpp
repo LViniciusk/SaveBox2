@@ -280,6 +280,28 @@ std::optional<std::string> FileManager::delete_file(uint64_t file_id, uint64_t u
     return external_id;
 }
 
+int FileManager::batch_delete_files(uint64_t user_id, const std::vector<int>& file_ids) {
+    if (file_ids.empty()) return 0;
+    
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    std::string array_str = "{";
+    for (size_t i = 0; i < file_ids.size(); ++i) {
+        array_str += std::to_string(file_ids[i]);
+        if (i < file_ids.size() - 1) array_str += ",";
+    }
+    array_str += "}";
+
+    auto result = txn.exec(
+        "UPDATE files SET deleted_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND id = ANY($2::int[]) AND deleted_at IS NULL",
+        pqxx::params{user_id, array_str}
+    );
+
+    txn.commit();
+    return result.affected_rows();
+}
+
 crow::json::wvalue FileManager::update_file(uint64_t file_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& folder_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
