@@ -3,7 +3,6 @@
 #include "Services/EmailService.hpp"
 #include "utils.hpp"
 #include "utils/utils.hpp"
-
 #include <crow_all.h>
 
 #include <jwt-cpp/jwt.h>
@@ -263,15 +262,30 @@ std::string AuthService::generate_token(uint64_t user_id) const {
     auto expiry = now + std::chrono::hours(24);
 
     int token_version = 1;
+    std::string jti = Base62Generator::generate(7);
+
     if (pool_) {
         try {
             auto conn = pool_->acquire_connection();
             pqxx::work txn(*conn);
             auto res = txn.exec("SELECT token_version FROM users WHERE id = $1", pqxx::params{user_id});
-            txn.commit();
             if (!res.empty() && !res[0][0].is_null()) {
                 token_version = res[0][0].as<int>();
             }
+
+            txn.exec(
+                "INSERT INTO user_sessions (session_id, user_id) VALUES ($1, $2)",
+                pqxx::params{jti, user_id}
+            );
+
+            txn.exec(
+                "DELETE FROM user_sessions WHERE user_id = $1 AND session_id NOT IN ("
+                "SELECT session_id FROM user_sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10"
+                ")",
+                pqxx::params{user_id}
+            );
+
+            txn.commit();
         } catch (...) {}
     }
 
@@ -281,6 +295,7 @@ std::string AuthService::generate_token(uint64_t user_id) const {
         .set_expires_at(expiry)
         .set_payload_claim("user_id", jwt::claim(std::to_string(user_id)))
         .set_payload_claim("tver", jwt::claim(std::to_string(token_version)))
+        .set_payload_claim("jti", jwt::claim(jti))
         .sign(jwt::algorithm::hs256{jwt_secret_});
 }
 
@@ -319,12 +334,48 @@ std::optional<uint64_t> AuthService::verify_token(const std::string& token) cons
             if (token_tver < db_token_version) {
                 return std::nullopt;
             }
+
+            if (!decoded.has_payload_claim("jti")) {
+                return std::nullopt;
+            }
+
+            std::string jti = decoded.get_payload_claim("jti").as_string();
+            
+            auto conn2 = pool_->acquire_connection();
+            pqxx::work txn2(*conn2);
+            auto session_res = txn2.exec("SELECT 1 FROM user_sessions WHERE session_id = $1", pqxx::params{jti});
+            txn2.commit();
+
+            if (session_res.empty()) {
+                return std::nullopt;
+            }
         }
 
         return user_id;
     } catch (...) {
         return std::nullopt;
     }
+}
+
+void AuthService::logout_local(const std::string& jti) const {
+    if (pool_) {
+        try {
+            auto conn = pool_->acquire_connection();
+            pqxx::work txn(*conn);
+            txn.exec("DELETE FROM user_sessions WHERE session_id = $1", pqxx::params{jti});
+            txn.commit();
+        } catch (...) {}
+    }
+}
+
+std::string AuthService::extract_jti(const std::string& token) const {
+    try {
+        auto decoded = jwt::decode(token);
+        if (decoded.has_payload_claim("jti")) {
+            return decoded.get_payload_claim("jti").as_string();
+        }
+    } catch (...) {}
+    return "";
 }
 
 AuthService::GoogleClaims AuthService::validate_google_claims(const std::string& payload_json, const std::string& expected_client_id) {

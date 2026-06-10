@@ -143,6 +143,25 @@ crow::response ApiRouter::handle_logout(const crow::request& req) {
     if (!user_id_opt) {
         return crow::response(401, R"({"error":"Token ausente ou invalido"})");
     }
+
+    auto auth_header = req.get_header_value("Authorization");
+    std::string token = auth_header.substr(7);
+    std::string jti = auth_->extract_jti(token);
+
+    if (!jti.empty()) {
+        auth_->logout_local(jti);
+    }
+
+    crow::response res(200, R"({"message":"Logout local realizado com sucesso"})");
+    res.set_header("Set-Cookie", "jwt=; HttpOnly; Path=/; Max-Age=0");
+    return res;
+}
+
+crow::response ApiRouter::handle_logout_global(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    }
     uint64_t user_id = *user_id_opt;
 
     try {
@@ -154,11 +173,11 @@ crow::response ApiRouter::handle_logout(const crow::request& req) {
         );
         txn.commit();
 
-        crow::response res(200, R"({"message":"Logout realizado com sucesso"})");
+        crow::response res(200, R"({"message":"Logout global realizado com sucesso"})");
         res.set_header("Set-Cookie", "jwt=; HttpOnly; Path=/; Max-Age=0");
         return res;
     } catch (const std::exception& e) {
-        return crow::response(500, R"({"error":"Erro interno ao realizar logout"})");
+        return crow::response(500, R"({"error":"Erro interno ao realizar logout global"})");
     }
 }
 
@@ -1604,6 +1623,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
         return res;
     });
 
+    CROW_ROUTE(app, "/logout/global").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        auto res = handle_logout_global(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
     CROW_ROUTE(app, "/api/auth/google").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
         auto res = handle_google_login(req);
@@ -1679,7 +1705,7 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
         return res;
     });
 
-    CROW_ROUTE(app, "/files/batch-delete").methods(crow::HTTPMethod::Post)
+    CROW_ROUTE(app, "/files/batch-delete").methods(crow::HTTPMethod::Delete)
     ([this](const crow::request& req) {
         auto res = handle_batch_delete(req);
         res.set_header("Content-Type", "application/json");

@@ -323,18 +323,34 @@ paths:
   /logout:
     post:
       tags: [Autenticação]
-      summary: Invalidação global da sessão
+      summary: Invalidação da sessão atual (Dispositivo local)
       security:
         - bearerAuth: []
       responses:
         '200':
-          description: Sessão invalidada (Token version incrementado)
+          description: Sessão local invalidada (JTI removido)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/GenericMessageResponse'
         '401':
-          description: Token ausente ou inválido
+          description: Token ausente, inválido ou revogado
+
+  /logout/global:
+    post:
+      tags: [Autenticação]
+      summary: Invalidação global (Kill Switch) para todos os dispositivos
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Todas as sessões invalidadas (Token version incrementado)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente, inválido ou revogado
 
   /login:
     post:
@@ -611,8 +627,8 @@ paths:
           description: Arquivo já existe na pasta
 
   /files/batch-delete:
-    post:
-      tags: [Lixeira]
+    delete:
+      tags: [Arquivos]
       summary: Envia multiplos arquivos para a lixeira
       security:
         - bearerAuth: []

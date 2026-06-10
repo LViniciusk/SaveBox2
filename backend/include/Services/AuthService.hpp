@@ -30,6 +30,8 @@ public:
 
     std::string generate_token(uint64_t user_id) const;
     std::optional<uint64_t> verify_token(const std::string& token) const;
+    void logout_local(const std::string& jti) const;
+    std::string extract_jti(const std::string& token) const;
     
     int handle_google_login(const std::string& id_token, const std::string& expected_nonce);
 

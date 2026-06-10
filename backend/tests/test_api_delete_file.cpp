@@ -101,7 +101,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
     SECTION("Batch Delete: Sucesso") {
         crow::request req;
         req.url = "/api/files/batch-delete";
-        req.method = crow::HTTPMethod::Post;
+        req.method = crow::HTTPMethod::Delete;
         req.add_header("Authorization", "Bearer " + token_a);
         
         crow::json::wvalue req_body;
@@ -131,7 +131,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
         // user_a tries to delete user_b's file
         crow::request req;
         req.url = "/api/files/batch-delete";
-        req.method = crow::HTTPMethod::Post;
+        req.method = crow::HTTPMethod::Delete;
         req.add_header("Authorization", "Bearer " + token_a);
         
         crow::json::wvalue req_body;
@@ -150,7 +150,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
     SECTION("Batch Delete: Anti-DoS (Limite de Payload)") {
         crow::request req;
         req.url = "/api/files/batch-delete";
-        req.method = crow::HTTPMethod::Post;
+        req.method = crow::HTTPMethod::Delete;
         req.add_header("Authorization", "Bearer " + token_a);
         
         crow::json::wvalue req_body;
@@ -165,7 +165,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
     SECTION("Batch Delete: Payload Vazio ou Malformado") {
         crow::request req;
         req.url = "/api/files/batch-delete";
-        req.method = crow::HTTPMethod::Post;
+        req.method = crow::HTTPMethod::Delete;
         req.add_header("Authorization", "Bearer " + token_a);
         
         // Vazio
@@ -186,7 +186,7 @@ TEST_CASE("API Delete - Exclusao de Arquivos", "[api][delete][file]") {
     SECTION("Batch Delete: Resiliência a Fantasmas") {
         crow::request req;
         req.url = "/api/files/batch-delete";
-        req.method = crow::HTTPMethod::Post;
+        req.method = crow::HTTPMethod::Delete;
         req.add_header("Authorization", "Bearer " + token_a);
         
         crow::json::wvalue req_body;

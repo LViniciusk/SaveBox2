@@ -27,6 +27,15 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 deleted_at TIMESTAMP NULL,
                 registration_ip VARCHAR(45),
                 token_version INT DEFAULT 1
+        );
+        )");
+
+        // TABELA DE SESSÕES
+        w.exec(R"(
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id VARCHAR(7) PRIMARY KEY,
+                user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         )");
 

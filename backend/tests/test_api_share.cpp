@@ -241,7 +241,9 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
     }
 
     SECTION("Teste de Colisão de Base62 (Partilha de Ficheiro)") {
-        // Mock token for first share
+        std::string token_user_a = auth.generate_token(user_a_id);
+
+        // Mock token for first share (MUST be set AFTER auth token generation to avoid JTI eating it)
         Base62Generator::mock_next_token = "COLLIDE";
 
         crow::request req_share1;
@@ -252,7 +254,6 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         req_body["file_id"] = file_a_1_id;
         req_share1.body = req_body.dump();
 
-        std::string token_user_a = auth.generate_token(user_a_id);
         req_share1.add_header("Authorization", "Bearer " + token_user_a);
 
         crow::response res1 = router.handle_share_file(req_share1, file_a_1_id);
