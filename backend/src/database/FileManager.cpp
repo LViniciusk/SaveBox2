@@ -371,29 +371,58 @@ crow::json::wvalue FileManager::update_file(uint64_t file_id, uint64_t user_id, 
 
 std::string FileManager::share_file(uint64_t file_id, uint64_t user_id) {
     auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
 
-    auto result = txn.exec(
-        "SELECT id, storage_provider FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
-        pqxx::params{file_id, user_id}
-    );
-    if (result.empty()) {
-        throw std::runtime_error("NOT_FOUND");
+    {
+        pqxx::work txn(*conn);
+        auto result = txn.exec(
+            "SELECT id, storage_provider FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+            pqxx::params{file_id, user_id}
+        );
+        if (result.empty()) {
+            throw std::runtime_error("NOT_FOUND");
+        }
+
+        if (result[0][1].as<std::string>() != "local") {
+            throw std::invalid_argument("EXTERNAL_SHARE_NOT_SUPPORTED");
+        }
     }
 
-    if (result[0][1].as<std::string>() != "local") {
-        throw std::invalid_argument("EXTERNAL_SHARE_NOT_SUPPORTED");
+    {
+        pqxx::work txn(*conn);
+        auto rl_res = txn.exec(
+            "SELECT hourly_changes FROM shared_links WHERE file_id = $1 AND last_changed_at >= NOW() - INTERVAL '1 hour'",
+            pqxx::params{file_id}
+        );
+        if (!rl_res.empty() && rl_res[0][0].as<int>() >= 10) {
+            throw std::runtime_error("TOO_MANY_REQUESTS");
+        }
     }
 
-    std::string uuid = UuidUtils::generate_uuid_v4();
-
-    txn.exec(
-        "INSERT INTO shared_links (file_id, share_uuid) VALUES ($1, $2)",
-        pqxx::params{file_id, uuid}
-    );
-
-    txn.commit();
-    return uuid;
+    for (int attempts = 0; attempts < 3; ++attempts) {
+        std::string token = Base62Generator::generate(7);
+        try {
+            pqxx::work txn(*conn);
+            txn.exec(
+                "INSERT INTO shared_links (file_id, share_uuid, hourly_changes, last_changed_at) "
+                "VALUES ($1, $2, 1, CURRENT_TIMESTAMP) "
+                "ON CONFLICT (file_id) DO UPDATE SET "
+                "    share_uuid = EXCLUDED.share_uuid, "
+                "    hourly_changes = CASE "
+                "        WHEN shared_links.last_changed_at >= NOW() - INTERVAL '1 hour' THEN shared_links.hourly_changes + 1 "
+                "        ELSE 1 "
+                "    END, "
+                "    last_changed_at = CURRENT_TIMESTAMP",
+                pqxx::params{file_id, token}
+            );
+            txn.commit();
+            return token;
+        } catch (const pqxx::unique_violation&) {
+            if (attempts == 2) {
+                throw std::runtime_error("ERROR_GENERATING_SHARE_LINK");
+            }
+        }
+    }
+    throw std::runtime_error("ERROR_GENERATING_SHARE_LINK");
 }
 
 std::pair<uint64_t, std::string> FileManager::get_shared_file_info(const std::string& uuid) {

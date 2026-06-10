@@ -169,11 +169,11 @@ int AuthService::register_user(const std::string& username, const std::string& e
     }
 
     const std::string hash = hash_password(password);
-    const std::string verification_token = generate_uuid_v4();
+    const std::string verification_token = Base62Generator::generate(6);
 
     auto result = txn.exec(
         "INSERT INTO users (username, email, password_hash, verification_token, token_expires_at, registration_ip) "
-        "VALUES ($1, $2, $3, $4, NOW() + INTERVAL '24 hours', $5) RETURNING id",
+        "VALUES ($1, $2, $3, $4, NOW() + INTERVAL '5 minutes', $5) RETURNING id",
         pqxx::params{username, email, hash, verification_token, ip_address}
     );
 

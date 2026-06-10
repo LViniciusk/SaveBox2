@@ -62,7 +62,7 @@ struct RateLimitMiddleware {
         if (qpos != std::string::npos) {
             path = path.substr(0, qpos);
         }
-        const bool is_auth_route = (path == "/login" || path == "/register");
+        const bool is_auth_route = (path == "/login" || path == "/register" || path == "/verify");
 
         const int64_t now_epoch = std::chrono::duration_cast<std::chrono::seconds>(now_system.time_since_epoch()).count();
 

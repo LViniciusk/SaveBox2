@@ -84,8 +84,10 @@ bool DatabaseMigration::run(DatabasePool& pool) {
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS shared_links (
                 id SERIAL PRIMARY KEY,
-                file_id BIGINT REFERENCES files(id) ON DELETE CASCADE,
-                share_uuid VARCHAR(36) UNIQUE NOT NULL,
+                file_id BIGINT UNIQUE REFERENCES files(id) ON DELETE CASCADE,
+                share_uuid VARCHAR(7) UNIQUE NOT NULL,
+                hourly_changes INT DEFAULT 1,
+                last_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         )");

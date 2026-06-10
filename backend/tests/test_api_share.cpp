@@ -7,6 +7,7 @@
 #include "storage/FileChunker.hpp"
 #include "test_helpers.hpp"
 #include "utils.hpp"
+#include "utils/utils.hpp"
 #include <crow_all.h>
 #include <filesystem>
 #include <fstream>
@@ -29,6 +30,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
     int user_a_id = 0;
     int user_b_id = 0;
     int file_a_1_id = 0;
+    int file_a_2_id = 0;
 
     {
         auto conn = pool.acquire_connection();
@@ -48,6 +50,13 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
             pqxx::params{user_a_id}
         );
         file_a_1_id = res_file[0][0].as<int>();
+
+        auto res_file2 = txn.exec(
+            "INSERT INTO files (user_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+            "VALUES ($1, 'file_share2', 'hash_share2', 'mock_fdk2', 15, 1, true) RETURNING id",
+            pqxx::params{user_a_id}
+        );
+        file_a_2_id = res_file2[0][0].as<int>();
 
         txn.commit();
     }
@@ -95,7 +104,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
     }
 
     SECTION("Acessar Link Público: Download com Sucesso") {
-        std::string fixed_uuid = "test-uuid-1234-5678";
+        std::string fixed_uuid = "abcdefg";
         
         {
             auto conn = pool.acquire_connection();
@@ -155,7 +164,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
     }
 
     SECTION("Download Parcial via Link Público (Range: bytes=0-4)") {
-        std::string partial_uuid = "test-uuid-partial-range";
+        std::string partial_uuid = "partial";
 
         {
             auto conn = pool.acquire_connection();
@@ -186,7 +195,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
 
     SECTION("Proteção Anti-OOM via Link Público (Arquivo > 5MB sem Range)") {
         int file_big_id = 0;
-        std::string oom_uuid = "test-uuid-oom-guard";
+        std::string oom_uuid = "oomgrda";
 
         {
             auto conn = pool.acquire_connection();
@@ -229,6 +238,88 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
 
         crow::response res_with_range = router.handle_get_shared_file(req_with_range, oom_uuid);
         REQUIRE(res_with_range.code == 206);
+    }
+
+    SECTION("Teste de Colisão de Base62 (Partilha de Ficheiro)") {
+        // Mock token for first share
+        Base62Generator::mock_next_token = "COLLIDE";
+
+        crow::request req_share1;
+        req_share1.url = "/api/files/share";
+        req_share1.method = crow::HTTPMethod::Post;
+        
+        crow::json::wvalue req_body;
+        req_body["file_id"] = file_a_1_id;
+        req_share1.body = req_body.dump();
+
+        std::string token_user_a = auth.generate_token(user_a_id);
+        req_share1.add_header("Authorization", "Bearer " + token_user_a);
+
+        crow::response res1 = router.handle_share_file(req_share1, file_a_1_id);
+        REQUIRE(res1.code == 200);
+
+        auto json_res1 = crow::json::load(res1.body);
+        std::string share_link1 = json_res1["share_uuid"].s();
+        REQUIRE(share_link1.find("COLLIDE") != std::string::npos);
+
+        // For the second share, set the mock token to "COLLIDE" again.
+        // The first attempt will throw pqxx::unique_violation, the loop will catch it,
+        // and the second attempt will generate a random Base62 token.
+        Base62Generator::mock_next_token = "COLLIDE";
+        
+        crow::request req_share2;
+        req_share2.url = "/api/files/share";
+        req_share2.method = crow::HTTPMethod::Post;
+        
+        crow::json::wvalue req_body2;
+        req_body2["file_id"] = file_a_2_id;
+        req_share2.body = req_body2.dump();
+        req_share2.add_header("Authorization", "Bearer " + token_user_a);
+
+        crow::response res2 = router.handle_share_file(req_share2, file_a_2_id);
+        REQUIRE(res2.code == 200);
+
+        auto json_res2 = crow::json::load(res2.body);
+        std::string share_link2 = json_res2["share_uuid"].s();
+        REQUIRE(share_link2.find("COLLIDE") == std::string::npos); // Should have recovered
+    }
+
+    SECTION("Rate Limit de Alterações de Compartilhamento (10 por hora)") {
+        crow::request req_limit;
+        req_limit.url = "/api/files/share";
+        req_limit.method = crow::HTTPMethod::Post;
+        
+        crow::json::wvalue req_limit_body;
+        req_limit_body["file_id"] = file_a_1_id;
+        req_limit.body = req_limit_body.dump();
+        
+        std::string token_user_a = auth.generate_token(user_a_id);
+        req_limit.add_header("Authorization", "Bearer " + token_user_a);
+
+        // Generate 10 links rapidly (the first one was generated in the previous test maybe? No, we are in a new SECTION?
+        // Wait, Catch2 SECTIONS run from the top! So the DB is recreated for each SECTION.
+        // So we just generate 10 links.
+        for (int i = 0; i < 10; ++i) {
+            crow::response res_loop = router.handle_share_file(req_limit, file_a_1_id);
+            REQUIRE(res_loop.code == 200);
+        }
+
+        // The 11th should fail with 429
+        crow::response res_blocked = router.handle_share_file(req_limit, file_a_1_id);
+        REQUIRE(res_blocked.code == 429);
+        REQUIRE(res_blocked.body.find("Muitas alteracoes") != std::string::npos);
+
+        // Simulate 1 hour passing
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            txn.exec("UPDATE shared_links SET last_changed_at = NOW() - INTERVAL '1 hour' - INTERVAL '1 minute' WHERE file_id = $1", pqxx::params{file_a_1_id});
+            txn.commit();
+        }
+
+        // Now it should work again
+        crow::response res_recovered = router.handle_share_file(req_limit, file_a_1_id);
+        REQUIRE(res_recovered.code == 200);
     }
 
     {

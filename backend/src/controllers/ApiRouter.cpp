@@ -1020,6 +1020,8 @@ crow::response ApiRouter::handle_share_file(const crow::request& req, int file_i
         std::string msg = e.what();
         if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
         if (msg == "EXTERNAL_SHARE_NOT_SUPPORTED") return crow::response(400, R"({"error":"Compartilhamento publico apenas para arquivos locais"})");
+        if (msg == "TOO_MANY_REQUESTS") return crow::response(429, R"({"error":"Muitas alteracoes de compartilhamento. Tente novamente mais tarde."})");
+        std::cerr << "Exception in handle_share_file: " << msg << std::endl;
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }

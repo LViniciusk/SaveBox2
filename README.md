@@ -33,8 +33,9 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 | :--- | :--- | :--- |
 | `GET` | `/health` | Healthcheck do servidor. |
 | `POST` | `/register` | Registra um novo usuário. |
-| `GET` | `/verify?token=<uuid>` | Valida o token recebido por e-mail e ativa a conta. |
+| `GET` | `/verify?token=<codigo>` | Valida o codigo de 6 caracteres recebido por e-mail e ativa a conta. |
 | `POST` | `/login` | Autentica e retorna o JWT Bearer Token. |
+| `POST` | `/logout` | Invalida globalmente a sessão do usuário e remove o cookie. |
 | `GET` | `/users/me/quota` | Consulta limite e uso de armazenamento. |
 | `DELETE` | `/users/me` | Deleta permanentemente a conta do usuário. |
 | `POST` | `/api/auth/google` | Realiza login via Google. |
@@ -72,8 +73,8 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 ### Compartilhamento (Links Públicos)
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
-| `POST` | `/files/<id>/share` | Gera e retorna um UUID v4 para acesso público. |
-| `GET` | `/share/<uuid>` | Rota pública sem JWT. Retorna cabeçalho `X-Encrypted-Name`. |
+| `POST` | `/files/<id>/share` | Gera e retorna um codigo de 7 caracteres para acesso público. |
+| `GET` | `/share/<codigo>` | Rota pública sem JWT. Retorna cabeçalho `X-Encrypted-Name`. |
 
 ### Armazenamento Externo (Google Drive)
 | Método | Endpoint | Descrição |

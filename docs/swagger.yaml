@@ -173,6 +173,7 @@ components:
       properties:
         share_uuid:
           type: string
+          description: codigo de 7 caracteres para acesso público.
 
 paths:
   /api/docs:
@@ -252,6 +253,51 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Erro interno
+
+  /verify:
+    get:
+      tags: [Autenticação]
+      summary: Verificação de e-mail e ativação de conta
+      parameters:
+        - name: codigo
+          in: query
+          required: true
+          schema:
+            type: string
+            description: codigo de 6 caracteres. TTL de 5 minutos.
+      responses:
+        '200':
+          description: Conta ativada com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '400':
+          description: Token inválido ou expirado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Bloqueio temporário (Força Bruta)
+        '500':
+          description: Erro interno
+
+  /logout:
+    post:
+      tags: [Autenticação]
+      summary: Invalidação global da sessão
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Sessão invalidada (Token version incrementado)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
 
   /login:
     post:
@@ -797,7 +843,7 @@ paths:
             type: integer
       responses:
         '200':
-          description: UUID de compartilhamento gerado
+          description: codigo de compartilhamento gerado
           content:
             application/json:
               schema:
@@ -809,16 +855,17 @@ paths:
         '500':
           description: Erro interno
 
-  /share/{uuid}:
+  /share/{token}:
     get:
       tags: [Compartilhamento]
       summary: Baixa arquivo por link público
       parameters:
-        - name: uuid
+        - name: codigo
           in: path
           required: true
           schema:
             type: string
+            description: codigo de 7 caracteres
       responses:
         '200':
           description: Arquivo retornado

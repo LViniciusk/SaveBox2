@@ -8,6 +8,7 @@
 #include "database/UsersManager.hpp"
 #include <crow_all.h>
 #include <jwt-cpp/jwt.h>
+#include "utils/utils.hpp"
 
 
 TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
@@ -23,6 +24,25 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username = 'api_test_user'");
         txn.commit();
+    }
+
+    SECTION("Base62Generator - Tamanho, Alfabeto e Entropia") {
+        std::string token1 = Base62Generator::generate(6);
+        std::string token2 = Base62Generator::generate(7);
+
+        REQUIRE(token1.length() == 6);
+        REQUIRE(token2.length() == 7);
+        REQUIRE(token1 != token2); // Entropia básica
+
+        auto is_base62 = [](const std::string& str) {
+            for (char c : str) {
+                if (!std::isalnum(c)) return false;
+            }
+            return true;
+        };
+
+        REQUIRE(is_base62(token1));
+        REQUIRE(is_base62(token2));
     }
 
     SECTION("Registro de Usuário - handle_register") {
@@ -383,11 +403,79 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         REQUIRE(res_login2.code == 200);
     }
 
+    SECTION("Verificação de Conta (Base62, TTL e Brute-Force)") {
+        RateLimitMiddleware rl_mw;
+        rl_mw.init(pool);
+
+        crow::request req_reg;
+        req_reg.body = R"({"username": "verify_user", "email": "verify_user@test.com", "password": "super_senha"})";
+        req_reg.add_header("CF-Connecting-IP", "10.0.0.99");
+        router.handle_register(req_reg);
+        
+        std::string valid_token;
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            auto res = txn.exec("SELECT verification_token FROM users WHERE username = 'verify_user'");
+            valid_token = res[0][0].as<std::string>();
+            // Simula avanço de 6 minutos no tempo (já que o TTL é de 5 minutos, o token gerado em t=0 expiraria em t=5, em t=6 ele está expirado).
+            txn.exec("UPDATE users SET token_expires_at = NOW() - INTERVAL '1 minute' WHERE username = 'verify_user'");
+            txn.commit();
+        }
+
+        // Teste 1: Rejeição de um código expirado (simulando avanço do relógio em 6 minutos)
+        crow::request req_expired;
+        req_expired.url = "/verify?token=" + valid_token;
+        req_expired.url_params = crow::query_string("?token=" + valid_token);
+        crow::response res_expired = router.handle_verify_email(req_expired);
+        REQUIRE(res_expired.code == 400);
+
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            txn.exec("UPDATE users SET token_expires_at = NOW() + INTERVAL '5 minutes' WHERE username = 'verify_user'");
+            txn.commit();
+        }
+
+        // Teste 2: Força Bruta (5 tentativas seguidas com o código errado)
+        RateLimitMiddleware::context ctx;
+        crow::response dummy_res;
+        
+        for (int i = 0; i < 5; ++i) {
+            crow::request req_bad;
+            req_bad.url = "/verify";
+            req_bad.url_params = crow::query_string("?token=WRONG1");
+            req_bad.add_header("CF-Connecting-IP", "10.0.0.99");
+            
+            rl_mw.before_handle(req_bad, dummy_res, ctx);
+            if (dummy_res.code != 0 && dummy_res.code != 200) break; // Middleware blocked!
+
+            crow::response res_bad = router.handle_verify_email(req_bad);
+            REQUIRE(res_bad.code == 400);
+        }
+
+        // A 6ª tentativa deve ser bloqueada pelo middleware (429 ou 403)
+        crow::request req_blocked;
+        req_blocked.url = "/verify";
+        req_blocked.add_header("CF-Connecting-IP", "10.0.0.99");
+        rl_mw.before_handle(req_blocked, dummy_res, ctx);
+        REQUIRE(dummy_res.code != 0); // Está bloqueado! (Provavelmente 429 ou 403)
+
+        // Limpeza do teste
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            txn.exec("DELETE FROM banned_ips WHERE ip = '10.0.0.99'");
+            txn.commit();
+        }
+    }
+
     {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username = 'api_test_user'");
         txn.exec("DELETE FROM users WHERE username = 'logout_test_user'");
+        txn.exec("DELETE FROM users WHERE username = 'verify_user'");
         txn.exec("DELETE FROM users WHERE email = 'oauth_user@test.com'");
         txn.exec("DELETE FROM users WHERE email = 'local_user@test.com'");
         txn.commit();
