@@ -138,6 +138,30 @@ crow::response ApiRouter::handle_login(const crow::request& req) {
     }
 }
 
+crow::response ApiRouter::handle_logout(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    }
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        auto conn = pool_->acquire_connection();
+        pqxx::work txn(*conn);
+        txn.exec(
+            "UPDATE users SET token_version = token_version + 1 WHERE id = $1",
+            pqxx::params{user_id}
+        );
+        txn.commit();
+
+        crow::response res(200, R"({"message":"Logout realizado com sucesso"})");
+        res.set_header("Set-Cookie", "jwt=; HttpOnly; Path=/; Max-Age=0");
+        return res;
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno ao realizar logout"})");
+    }
+}
+
 crow::response ApiRouter::handle_google_login(const crow::request& req) {
     auto req_json = crow::json::load(req.body);
     if (!req_json) {
@@ -1415,6 +1439,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
     CROW_ROUTE(app, "/login").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
         auto res = handle_login(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/logout").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        auto res = handle_logout(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });

@@ -337,10 +337,57 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         REQUIRE(res.code == 401);
     }
 
+    SECTION("Global Logout (Invalidação de JWT)") {
+        crow::request req_reg;
+        req_reg.body = R"({"username": "logout_test_user", "email": "logout_test_user@test.com", "password": "super_senha"})";
+        router.handle_register(req_reg);
+        
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            txn.exec("UPDATE users SET is_email_verified = true WHERE username = 'logout_test_user'");
+            txn.commit();
+        }
+
+        // 1. Faz login e obtem o JWT valido (Versao A)
+        crow::request req_login;
+        req_login.body = R"({"username": "logout_test_user", "password": "super_senha"})";
+        crow::response res_login = router.handle_login(req_login);
+        REQUIRE(res_login.code == 200);
+
+        auto body_json = crow::json::load(res_login.body);
+        std::string jwt_token = body_json["token"].s();
+
+        // 2. Tenta acessar rota protegida (garante que token esta ativo)
+        crow::request req_protected;
+        req_protected.add_header("Authorization", "Bearer " + jwt_token);
+        crow::response res_protected = router.handle_create_folder(req_protected);
+        // Sem body, mas deve passar no authenticate_request e cair no erro 400
+        REQUIRE(res_protected.code == 400); 
+
+        // 3. Chama o Logout Global
+        crow::request req_logout;
+        req_logout.add_header("Authorization", "Bearer " + jwt_token);
+        crow::response res_logout = router.handle_logout(req_logout);
+        
+        REQUIRE(res_logout.code == 200);
+        // Verifica a limpeza de cookie do lado do cliente
+        REQUIRE(res_logout.get_header_value("Set-Cookie").find("jwt=; HttpOnly; Path=/; Max-Age=0") != std::string::npos);
+
+        // 4. O Passo Crítico: Tentar acessar a rota protegida novamente com o mesmo token (Versao A)
+        crow::response res_replay = router.handle_create_folder(req_protected);
+        REQUIRE(res_replay.code == 401);
+
+        // 5. Verifica se novo login funciona (Token Versioning)
+        crow::response res_login2 = router.handle_login(req_login);
+        REQUIRE(res_login2.code == 200);
+    }
+
     {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
         txn.exec("DELETE FROM users WHERE username = 'api_test_user'");
+        txn.exec("DELETE FROM users WHERE username = 'logout_test_user'");
         txn.exec("DELETE FROM users WHERE email = 'oauth_user@test.com'");
         txn.exec("DELETE FROM users WHERE email = 'local_user@test.com'");
         txn.commit();
