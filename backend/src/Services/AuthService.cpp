@@ -262,15 +262,21 @@ std::string AuthService::generate_token(uint64_t user_id) const {
     auto expiry = now + std::chrono::hours(24);
 
     int token_version = 1;
+    bool is_vault_initialized = false;
     std::string jti = Base62Generator::generate(7);
 
     if (pool_) {
         try {
             auto conn = pool_->acquire_connection();
             pqxx::work txn(*conn);
-            auto res = txn.exec("SELECT token_version FROM users WHERE id = $1", pqxx::params{user_id});
-            if (!res.empty() && !res[0][0].is_null()) {
-                token_version = res[0][0].as<int>();
+            auto res = txn.exec("SELECT token_version, is_vault_initialized FROM users WHERE id = $1", pqxx::params{user_id});
+            if (!res.empty()) {
+                if (!res[0][0].is_null()) {
+                    token_version = res[0][0].as<int>();
+                }
+                if (!res[0][1].is_null()) {
+                    is_vault_initialized = res[0][1].as<bool>();
+                }
             }
 
             txn.exec(
@@ -296,6 +302,7 @@ std::string AuthService::generate_token(uint64_t user_id) const {
         .set_payload_claim("user_id", jwt::claim(std::to_string(user_id)))
         .set_payload_claim("tver", jwt::claim(std::to_string(token_version)))
         .set_payload_claim("jti", jwt::claim(jti))
+        .set_payload_claim("is_vault_initialized", jwt::claim(std::string(is_vault_initialized ? "true" : "false")))
         .sign(jwt::algorithm::hs256{jwt_secret_});
 }
 

@@ -39,6 +39,13 @@ export const routes: Routes = [
           ),
         canActivate: [vaultGuard],
       },
+      {
+        path: 'setup',
+        loadComponent: () =>
+          import('./features/drive/pages/setup/setup.component').then(
+            (m) => m.SetupComponent,
+          ),
+      },
     ],
   },
   {

@@ -1,4 +1,7 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, signal, inject } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { lastValueFrom } from 'rxjs';
+import { environment } from '../../../environments/environment';
 
 /**
  * Cryptographic service using the Web Crypto API (window.crypto.subtle).
@@ -15,6 +18,8 @@ export class CryptoService {
    * Lives strictly in RAM. Wiped on lock/logout.
    */
   private vaultKey: CryptoKey | null = null;
+
+  private readonly http = inject(HttpClient);
 
   /** Reactive signal for vault lock state. */
   private readonly _isUnlocked = signal(false);
@@ -58,6 +63,17 @@ export class CryptoService {
     );
 
     this._isUnlocked.set(true);
+  }
+
+  /**
+   * Initializes a new vault (Onboarding).
+   * Mocks saving the vault key hash to the backend.
+   */
+  async initializeVault(passphrase: string): Promise<void> {
+    await this.deriveVaultKey(passphrase);
+    
+    // API Call para inicializar o cofre no backend
+    await lastValueFrom(this.http.post(`${environment.apiUrl}/api/vault/init`, {}, { withCredentials: true }));
   }
 
   /**

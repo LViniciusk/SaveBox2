@@ -22,6 +22,25 @@ std::string ApiRouter::handle_healthcheck() const {
     return R"({"status":"online"})";
 }
 
+crow::response ApiRouter::handle_init_vault(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        auto conn = pool_->acquire_connection();
+        pqxx::work txn(*conn);
+        txn.exec(
+            "UPDATE users SET is_vault_initialized = TRUE WHERE id = $1",
+            pqxx::params{user_id}
+        );
+        txn.commit();
+        return crow::response(204);
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro ao inicializar cofre"})");
+    }
+}
+
 crow::response ApiRouter::handle_get_quota(const crow::request& req) {
     auto user_id_opt = authenticate_request(req);
     if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
@@ -1997,6 +2016,13 @@ void ApiRouter::setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware
     ([this](const crow::request& req, int account_id) {
         auto res = handle_google_sync_cleanup(req, account_id);
         res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/vault/init").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        auto res = handle_init_vault(req);
+        // Não precisa forçar Content-Type pois é 204 No Content
         return res;
     });
 }

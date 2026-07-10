@@ -309,9 +309,9 @@ export class LoginComponent {
   readonly cardVisible = signal(false);
 
   constructor() {
-    // If already authenticated, skip login and go to vault
+    // If already authenticated, skip login and go to drive
     if (this.appState.isAuthenticated()) {
-      this.router.navigate(['/vault']);
+      this.router.navigate(['/drive']);
       return;
     }
 

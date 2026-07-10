@@ -19,6 +19,7 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 full_name VARCHAR(255) NULL,
                 avatar_url TEXT NULL,
                 is_email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                is_vault_initialized BOOLEAN NOT NULL DEFAULT FALSE,
                 verification_token VARCHAR(128) UNIQUE,
                 token_expires_at TIMESTAMP WITH TIME ZONE,
                 max_storage_bytes BIGINT DEFAULT 5368709120,
@@ -29,6 +30,9 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 token_version INT DEFAULT 1
         );
         )");
+
+        // MIGRATION SECONDA: Garantir que bancos já criados recebam a nova coluna sem drop
+        w.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_vault_initialized BOOLEAN NOT NULL DEFAULT FALSE;");
 
         // TABELA DE SESSÕES
         w.exec(R"(

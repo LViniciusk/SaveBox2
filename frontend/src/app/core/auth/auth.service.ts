@@ -64,7 +64,11 @@ export class AuthService {
           // but for now we decode it from the new JWT if it has it, or use a placeholder.
           // In a real app, /refresh should return user info. We'll use a placeholder.
           const userInfo = this.decodeUserFromIdToken(res.token);
-          this.appState.login(userInfo);
+          
+          // Extrair a flag real do JWT em vez de usar o mock
+          const isVaultInitialized = this.isVaultInitializedFromToken(res.token);
+
+          this.appState.login(userInfo, isVaultInitialized);
           return true;
         }),
         catchError(() => {
@@ -118,10 +122,14 @@ export class AuthService {
         next: (res) => {
           this.jwtToken = res.token;
           const userInfo = this.decodeUserFromIdToken(idToken);
-          this.appState.login(userInfo);
+          
+          // Extrair a flag real do JWT
+          const isVaultInitialized = this.isVaultInitializedFromToken(idToken);
+
+          this.appState.login(userInfo, isVaultInitialized);
 
           this._loading.set(false);
-          this.router.navigate(['/drive/home']);
+          this.router.navigate([isVaultInitialized ? '/drive/home' : '/drive/setup']);
         },
         error: (err) => {
           console.error('[AuthService] Google login failed:', err);
@@ -139,15 +147,30 @@ export class AuthService {
       const payloadSegment = idToken.split('.')[1];
       const decoded = JSON.parse(atob(payloadSegment));
       return {
-        email: decoded.email || '',
-        name: decoded.name || decoded.email || '',
+        email: decoded.email,
+        name: decoded.name || '',
         picture: decoded.picture || '',
       };
-    } catch {
-      return { email: '', name: 'Utilizador', picture: '' };
+    } catch (e) {
+      console.error('Failed to decode id token', e);
+      return { email: '', name: '', picture: '' };
     }
   }
 
+  /**
+   * Helper to extract is_vault_initialized from the JWT
+   */
+  private isVaultInitializedFromToken(token: string): boolean {
+    try {
+      const payloadSegment = token.split('.')[1];
+      const decoded = JSON.parse(atob(payloadSegment));
+      return decoded.is_vault_initialized === true || decoded.is_vault_initialized === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  // --- GETTERS ---
   logout(): void {
     const token = this.jwtToken;
 

@@ -1,9 +1,9 @@
-import { Component, inject, computed } from '@angular/core';
+import { Component, inject, computed, signal } from '@angular/core';
 import { AppStateService, AppStatus } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
 import { DriveStore } from '../../state/drive.store';
 import { FileListComponent } from '../../components/file-list/file-list.component';
-import { LockOverlayComponent } from '../../../../shared/ui/lock-overlay/lock-overlay.component';
+import { TopbarComponent } from '../../components/topbar/topbar.component';
 import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal.component';
 
 /**
@@ -25,44 +25,11 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
  */
 @Component({
   selector: 'app-vault-home',
-  imports: [FileListComponent, LockOverlayComponent, UnlockModalComponent],
+  imports: [FileListComponent, TopbarComponent, UnlockModalComponent],
   template: `
     <div class="vault-layout">
       <!-- ===== TOPBAR ===== -->
-      <header class="topbar">
-        <div class="topbar-logo">
-          <span class="material-symbols-outlined logo-icon">
-            enhanced_encryption
-          </span>
-          <h2 class="logo-text">SaveBox</h2>
-        </div>
-
-        <div class="search-bar">
-          <span class="material-symbols-outlined">search</span>
-          <input
-            type="text"
-            placeholder="Pesquisar no Cofre"
-            id="search-input"
-          />
-        </div>
-
-        <div class="topbar-actions">
-          <button class="icon-btn" title="Configurações" id="settings-btn">
-            <span class="material-symbols-outlined">settings</span>
-          </button>
-          <button class="icon-btn" title="Ajuda" id="help-btn">
-            <span class="material-symbols-outlined">help_outline</span>
-          </button>
-          <button
-            class="avatar-btn"
-            (click)="onLogout()"
-            title="Sair da conta"
-            id="avatar-btn"
-          >
-            {{ userInitial() }}
-          </button>
-        </div>
-      </header>
+      <app-topbar (unlockRequested)="isUnlockModalOpen.set(true)" style="grid-area: topbar; z-index: 10;" />
 
       <!-- ===== SIDEBAR ===== -->
       <nav class="sidebar">
@@ -119,11 +86,9 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
           <!-- File List -->
           <app-file-list [files]="driveStore.files()" />
 
-          <!-- Lock Overlay (visible when Locked) -->
-          @if (appState.status() === AppStatus.Locked) {
-            <app-lock-overlay>
-              <app-unlock-modal />
-            </app-lock-overlay>
+          <!-- Unlock Modal (visible when unlocked requested) -->
+          @if (isUnlockModalOpen()) {
+            <app-unlock-modal (modalClosed)="isUnlockModalOpen.set(false)" />
           }
         </div>
       </main>
@@ -150,126 +115,7 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
         background: #f8f9fa;
       }
 
-      /* === TOPBAR === */
-      .topbar {
-        grid-area: topbar;
-        display: flex;
-        align-items: center;
-        padding: 0 16px;
-        background: white;
-        border-bottom: 1px solid #e0e0e0;
-        gap: 16px;
-        z-index: 10;
-      }
-
-      .topbar-logo {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        min-width: 220px;
-        padding-left: 8px;
-      }
-
-      .logo-icon {
-        font-size: 36px;
-        color: #1a73e8;
-        font-variation-settings: 'FILL' 1;
-      }
-
-      .logo-text {
-        font-size: 22px;
-        font-weight: 500;
-        color: #5f6368;
-        letter-spacing: -0.5px;
-        margin: 0;
-      }
-
-      .search-bar {
-        flex: 1;
-        max-width: 720px;
-        height: 48px;
-        display: flex;
-        align-items: center;
-        background: #f1f3f4;
-        border-radius: 24px;
-        padding: 0 16px;
-        gap: 12px;
-        transition:
-          background 200ms cubic-bezier(0.4, 0, 0.2, 1),
-          box-shadow 200ms cubic-bezier(0.4, 0, 0.2, 1);
-      }
-
-      .search-bar:focus-within {
-        background: white;
-        box-shadow:
-          0 1px 3px rgba(60, 64, 67, 0.3),
-          0 4px 8px rgba(60, 64, 67, 0.15);
-      }
-
-      .search-bar .material-symbols-outlined {
-        color: #5f6368;
-        font-size: 22px;
-      }
-
-      .search-bar input {
-        flex: 1;
-        border: none;
-        background: transparent;
-        font-size: 16px;
-        font-family: 'Roboto', sans-serif;
-        color: #202124;
-        outline: none;
-      }
-
-      .search-bar input::placeholder {
-        color: #5f6368;
-      }
-
-      .topbar-actions {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-      }
-
-      .icon-btn {
-        width: 40px;
-        height: 40px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 50%;
-        border: none;
-        background: transparent;
-        cursor: pointer;
-        color: #5f6368;
-        transition: background 150ms ease;
-      }
-
-      .icon-btn:hover {
-        background: #f1f3f4;
-      }
-
-      .avatar-btn {
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        background: #1a73e8;
-        color: white;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 14px;
-        font-weight: 500;
-        font-family: 'Roboto', sans-serif;
-        cursor: pointer;
-        border: none;
-        margin-left: 8px;
-        transition: box-shadow 200ms ease;
-      }
-
-      .avatar-btn:hover {
-        box-shadow: 0 1px 3px rgba(60, 64, 67, 0.4);
-      }
+      /* Topbar is now a separate component but occupies the same grid area */
 
       /* === SIDEBAR === */
       .sidebar {
@@ -478,6 +324,8 @@ export class VaultHomeComponent {
   protected readonly authService = inject(AuthService);
   protected readonly driveStore = inject(DriveStore);
   protected readonly AppStatus = AppStatus;
+
+  readonly isUnlockModalOpen = signal(false);
 
   /**
    * Computes the first letter of the user's name for the avatar.
