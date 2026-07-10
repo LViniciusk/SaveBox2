@@ -1,0 +1,160 @@
+/* ================================================================
+   SaveBox — Global Design System
+   Replicates Google Drive visual language with CSS custom properties.
+   ================================================================ */
+
+/* === RESET === */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background-color: var(--bg-main);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.5;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* === CSS CUSTOM PROPERTIES — Design Tokens === */
+:root {
+  /* ---- Colors: Google Blue Palette ---- */
+  --blue-50: #e8f0fe;
+  --blue-100: #d2e3fc;
+  --blue-200: #aecbfa;
+  --blue-300: #8ab4f8;
+  --blue-400: #669df6;
+  --blue-500: #4285f4;
+  --blue-600: #1a73e8;
+  --blue-700: #1967d2;
+  --blue-800: #185abc;
+  --blue-900: #174ea6;
+
+  /* ---- Colors: Google Red ---- */
+  --red-500: #ea4335;
+  --red-600: #d93025;
+  --red-50: #fce8e6;
+
+  /* ---- Colors: Google Green ---- */
+  --green-500: #34a853;
+  --green-600: #1e8e3e;
+  --green-50: #e6f4ea;
+
+  /* ---- Colors: Google Yellow ---- */
+  --yellow-500: #fbbc04;
+  --yellow-600: #f9ab00;
+
+  /* ---- Colors: Grays ---- */
+  --gray-50: #f8f9fa;
+  --gray-100: #f1f3f4;
+  --gray-200: #e8eaed;
+  --gray-300: #dadce0;
+  --gray-400: #bdc1c6;
+  --gray-500: #9aa0a6;
+  --gray-600: #5f6368;
+  --gray-700: #3c4043;
+  --gray-800: #202124;
+  --gray-900: #1a1a1a;
+
+  /* ---- Semantic Tokens ---- */
+  --text-primary: var(--gray-800);
+  --text-secondary: var(--gray-600);
+  --text-disabled: var(--gray-400);
+  --bg-main: var(--gray-50);
+  --bg-surface: #ffffff;
+  --bg-hover: var(--gray-100);
+  --bg-selected: var(--blue-50);
+  --border-color: var(--gray-300);
+  --divider-color: var(--gray-200);
+
+  /* ---- Primary Action ---- */
+  --primary: var(--blue-600);
+  --primary-hover: var(--blue-700);
+  --primary-active: var(--blue-800);
+  --primary-light: var(--blue-50);
+
+  /* ---- Elevation (Google Material Shadows) ---- */
+  --shadow-1: 0 1px 2px 0 rgba(60, 64, 67, 0.3),
+    0 1px 3px 1px rgba(60, 64, 67, 0.15);
+  --shadow-2: 0 1px 2px 0 rgba(60, 64, 67, 0.3),
+    0 2px 6px 2px rgba(60, 64, 67, 0.15);
+  --shadow-3: 0 1px 3px 0 rgba(60, 64, 67, 0.3),
+    0 4px 8px 3px rgba(60, 64, 67, 0.15);
+  --shadow-4: 0 2px 4px -1px rgba(60, 64, 67, 0.3),
+    0 8px 16px 4px rgba(60, 64, 67, 0.15);
+
+  /* ---- Layout ---- */
+  --topbar-height: 64px;
+  --sidebar-width: 256px;
+
+  /* ---- Border Radius ---- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+
+  /* ---- Transitions ---- */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* === SCROLLBAR (Webkit) === */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--gray-400);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gray-500);
+}
+
+/* === MATERIAL SYMBOLS DEFAULTS === */
+.material-symbols-outlined {
+  font-variation-settings:
+    'FILL' 0,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
+  user-select: none;
+}

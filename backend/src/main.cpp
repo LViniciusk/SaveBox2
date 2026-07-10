@@ -15,8 +15,7 @@
 #include <sodium.h>
 #include <openssl/provider.h>
 #include <openssl/crypto.h>
-
-
+#include "middlewares/CustomCorsMiddleware.hpp"
 
 int main() {
 
@@ -74,7 +73,7 @@ int main() {
     });
 
     // Configurando Instância do Crow WebServer
-    crow::App<crow::CORSHandler, RateLimitMiddleware> app;
+    crow::App<CustomCorsMiddleware, RateLimitMiddleware> app;
     app.get_middleware<RateLimitMiddleware>().init(pool);
 
     // Configurando Rotaseador com injeção de dependência

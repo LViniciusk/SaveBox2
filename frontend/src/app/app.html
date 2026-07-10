@@ -1,0 +1,13 @@
+@if (appState.status() === AppStatus.Loading) {
+  <div class="loading-screen">
+    <div class="logo">
+      <span class="material-symbols-outlined logo-icon">
+        enhanced_encryption
+      </span>
+      <h1>SaveBox</h1>
+    </div>
+    <div class="spinner"></div>
+  </div>
+} @else {
+  <router-outlet />
+}

@@ -120,8 +120,10 @@ crow::response ApiRouter::handle_login(const crow::request& req) {
         }
         int user_id = auth_->authenticate_user(username, password);
 
-        return crow::response(200,
-            R"({"message":"Login efetuado", "token":")" + auth_->generate_token(user_id) + R"("})");
+        std::string token = auth_->generate_token(user_id);
+        crow::response res(200, R"({"message":"Login efetuado", "token":")" + token + R"("})");
+        res.set_header("Set-Cookie", "jwt=" + token + "; HttpOnly; Path=/; Max-Age=86400; SameSite=Lax");
+        return res;
 
     } catch (const std::runtime_error& e) {
         std::string msg = e.what();
@@ -204,7 +206,9 @@ crow::response ApiRouter::handle_google_login(const crow::request& req) {
         
         crow::json::wvalue res_body;
         res_body["token"] = jwt_token;
-        return crow::response(200, res_body);
+        crow::response res(200, res_body);
+        res.set_header("Set-Cookie", "jwt=" + jwt_token + "; HttpOnly; Path=/; Max-Age=86400; SameSite=Lax");
+        return res;
     } catch (const std::invalid_argument& e) {
         return crow::response(400, R"({"error": "Falha na autenticacao com o provedor."})");
     } catch (const std::runtime_error& e) {
@@ -218,6 +222,38 @@ crow::response ApiRouter::handle_google_login(const crow::request& req) {
         std::cerr << "[Google Login Error] " << err_msg << std::endl;
         return crow::response(500, R"({"error": "Erro interno durante a autenticacao."})");
     }
+}
+
+crow::response ApiRouter::handle_refresh(const crow::request& req) {
+    auto cookie_header = req.get_header_value("Cookie");
+    std::string token_from_cookie;
+    
+    size_t pos = cookie_header.find("jwt=");
+    if (pos != std::string::npos) {
+        size_t end_pos = cookie_header.find(";", pos);
+        if (end_pos == std::string::npos) {
+            token_from_cookie = cookie_header.substr(pos + 4);
+        } else {
+            token_from_cookie = cookie_header.substr(pos + 4, end_pos - pos - 4);
+        }
+    }
+    
+    if (token_from_cookie.empty()) {
+        return crow::response(401, R"({"error": "Sessao invalida ou expirada."})");
+    }
+    
+    auto user_id_opt = auth_->verify_token(token_from_cookie);
+    if (!user_id_opt) {
+        return crow::response(401, R"({"error": "Sessao invalida ou expirada."})");
+    }
+    
+    std::string new_token = auth_->generate_token(*user_id_opt);
+    
+    crow::json::wvalue res_body;
+    res_body["token"] = new_token;
+    crow::response res(200, res_body);
+    res.set_header("Set-Cookie", "jwt=" + new_token + "; HttpOnly; Path=/; Max-Age=86400; SameSite=Lax");
+    return res;
 }
 
 crow::response ApiRouter::handle_verify_email(const crow::request& req) {
@@ -1612,13 +1648,7 @@ crow::response ApiRouter::handle_google_sync_cleanup(const crow::request& req, i
     }
 }
 
-void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app) {
-    const std::string cors_origin = Utils::get().get_var("CORS_ORIGIN", "*");
-    auto& cors = app.get_middleware<crow::CORSHandler>();
-    cors.global()
-        .headers("Origin", "Content-Type", "Accept", "Authorization", "X-Encrypted-Name", "Range", "X-Chunk-Index", "Access-Control-Allow-Origin")
-        .methods("POST"_method, "GET"_method, "PUT"_method, "DELETE"_method, "OPTIONS"_method, "PATCH"_method)
-        .origin(cors_origin);
+void ApiRouter::setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware>& app) {
 
     CROW_ROUTE(app, "/api/docs")
     ([]() {
@@ -1730,6 +1760,13 @@ void ApiRouter::setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& 
     CROW_ROUTE(app, "/api/auth/google").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
         auto res = handle_google_login(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/auth/refresh").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) {
+        auto res = handle_refresh(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });

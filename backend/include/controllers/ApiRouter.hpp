@@ -2,6 +2,7 @@
 
 #include "crow_all.h"
 #include "middlewares/RateLimitMiddleware.hpp"
+#include "middlewares/CustomCorsMiddleware.hpp"
 #include "database/DatabasePool.hpp"
 #include "Services/AuthService.hpp"
 
@@ -27,6 +28,7 @@ public:
     crow::response handle_register(const crow::request& req);
     crow::response handle_login(const crow::request& req);
     crow::response handle_google_login(const crow::request& req);
+    crow::response handle_refresh(const crow::request& req);
     crow::response handle_logout(const crow::request& req);
     crow::response handle_logout_global(const crow::request& req);
     crow::response handle_verify_email(const crow::request& req);
@@ -65,7 +67,7 @@ public:
     crow::response handle_get_google_sync_map(const crow::request& req, int account_id);
     crow::response handle_google_sync_cleanup(const crow::request& req, int account_id);
 
-    void setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app);
+    void setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware>& app);
 
 private:
     DatabasePool* pool_ = nullptr;
