@@ -11,7 +11,7 @@ import { FormsModule } from '@angular/forms';
     <div class="modal-backdrop" (click)="onBackdropClick($event)">
       <div class="modal-content">
         <div class="modal-header">
-          <h2>Desbloquear Cofre</h2>
+          <h2>Desbloquear Drive</h2>
           <button class="close-btn" (click)="close()">
             <span class="material-symbols-outlined">close</span>
           </button>
@@ -211,6 +211,9 @@ export class UnlockModalComponent {
   async onSubmit() {
     this.error.set(null);
     this.loading.set(true);
+
+    // Yield to let the UI update the spinner before blocking the main thread with Argon2id
+    await new Promise(resolve => setTimeout(resolve, 50));
 
     try {
       await this.cryptoService.deriveVaultKey(this.phrase);

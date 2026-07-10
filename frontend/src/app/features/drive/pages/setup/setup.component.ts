@@ -14,7 +14,7 @@ import { FormsModule } from '@angular/forms';
       <div class="setup-card">
         <div class="header">
           <span class="material-symbols-outlined icon">key</span>
-          <h1>Configurar Cofre</h1>
+          <h1>Configurar Drive</h1>
         </div>
 
         <p class="description">
@@ -66,9 +66,9 @@ import { FormsModule } from '@angular/forms';
             [disabled]="setupForm.invalid || loading()"
           >
             @if (loading()) {
-              Criando Cofre...
+              Criando Drive...
             } @else {
-              Inicializar Cofre
+              Inicializar Drive
             }
           </button>
         </form>
@@ -213,6 +213,9 @@ export class SetupComponent {
 
     this.loading.set(true);
 
+    // Yield to let the UI update the spinner before blocking the main thread with Argon2id
+    await new Promise(resolve => setTimeout(resolve, 50));
+
     try {
       await this.cryptoService.initializeVault(this.phrase);
       
@@ -232,7 +235,7 @@ export class SetupComponent {
       });
     } catch (e) {
       console.error(e);
-      this.error.set('Erro ao inicializar o cofre.');
+      this.error.set('Erro ao inicializar o drive.');
       this.loading.set(false);
     }
   }

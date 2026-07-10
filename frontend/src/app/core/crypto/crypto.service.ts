@@ -3,8 +3,10 @@ import { HttpClient } from '@angular/common/http';
 import { lastValueFrom } from 'rxjs';
 import { environment } from '../../../environments/environment';
 
+import { KasumiCryptoService } from './kasumi-crypto.service';
+
 /**
- * Cryptographic service using the Web Crypto API (window.crypto.subtle).
+ * Cryptographic service using Kasumi Crypto (libsodium XChaCha20-Poly1305 and Argon2id).
  *
  * SECURITY — GOLDEN RULE:
  * The Vault Key and the passphrase used to derive it NEVER leave this service.
@@ -14,19 +16,20 @@ import { environment } from '../../../environments/environment';
 @Injectable({ providedIn: 'root' })
 export class CryptoService {
   /**
-   * The decrypted AES-GCM 256-bit Vault Key.
+   * The decrypted 32-byte Vault Key (Argon2id).
    * Lives strictly in RAM. Wiped on lock/logout.
    */
-  private vaultKey: CryptoKey | null = null;
+  private vaultKey: Uint8Array | null = null;
 
   private readonly http = inject(HttpClient);
+  private readonly kasumi = inject(KasumiCryptoService);
 
   /** Reactive signal for vault lock state. */
   private readonly _isUnlocked = signal(false);
   readonly isVaultUnlocked = this._isUnlocked.asReadonly();
 
   /**
-   * Derives an AES-GCM 256-bit Vault Key from a passphrase via PBKDF2.
+   * Derives a 32-byte Vault Key from a passphrase via Argon2id (libsodium).
    *
    * The passphrase is consumed transiently and never stored.
    * In production, the salt should come from the backend (per-user).
@@ -34,34 +37,8 @@ export class CryptoService {
    * @param passphrase — The user's security phrase (plain text).
    */
   async deriveVaultKey(passphrase: string): Promise<void> {
-    const encoder = new TextEncoder();
-
-    // Step 1: Import the passphrase as raw key material for PBKDF2.
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(passphrase),
-      'PBKDF2',
-      false,
-      ['deriveKey'],
-    );
-
-    // Step 2: Define salt. In production, this is a per-user value from the backend.
-    const salt = encoder.encode('savebox-e2ee-salt-v1');
-
-    // Step 3: Derive a non-extractable AES-GCM 256-bit key.
-    this.vaultKey = await crypto.subtle.deriveKey(
-      {
-        name: 'PBKDF2',
-        salt,
-        iterations: 600_000,
-        hash: 'SHA-256',
-      },
-      keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      false, // Non-extractable — cannot be exported from CryptoKey
-      ['encrypt', 'decrypt'],
-    );
-
+    const salt = 'savebox-e2ee-salt-v1';
+    this.vaultKey = await this.kasumi.deriveVaultKey(passphrase, salt);
     this._isUnlocked.set(true);
   }
 
@@ -72,7 +49,7 @@ export class CryptoService {
   async initializeVault(passphrase: string): Promise<void> {
     await this.deriveVaultKey(passphrase);
     
-    // API Call para inicializar o cofre no backend
+    // API Call para inicializar o drive no backend
     await lastValueFrom(this.http.post(`${environment.apiUrl}/api/vault/init`, {}, { withCredentials: true }));
   }
 
@@ -88,7 +65,32 @@ export class CryptoService {
    * Returns the active Vault Key for encrypt/decrypt operations.
    * Returns null if the vault is locked.
    */
-  getVaultKey(): CryptoKey | null {
+  getVaultKey(): Uint8Array | null {
     return this.vaultKey;
+  }
+  /**
+  /**
+   * Decrypts a Kasumi XChaCha20-Poly1305 encrypted base64 string.
+   */
+  async decryptName(base64Ciphertext: string): Promise<string> {
+    if (!this.vaultKey) {
+      return '[Trancado] ' + base64Ciphertext;
+    }
+    return this.kasumi.decryptName(base64Ciphertext, this.vaultKey);
+  }
+
+  /**
+   * Encrypts a plaintext name into a Kasumi XChaCha20-Poly1305 base64 string.
+   */
+  async encryptName(plaintext: string): Promise<string> {
+    if (!this.vaultKey) throw new Error('Vault is locked');
+    return this.kasumi.encryptName(plaintext, this.vaultKey);
+  }
+
+  /**
+   * Hashes a plaintext name into a Blake2b base64 string.
+   */
+  async hashName(plaintext: string): Promise<string> {
+    return this.kasumi.hashName(plaintext);
   }
 }

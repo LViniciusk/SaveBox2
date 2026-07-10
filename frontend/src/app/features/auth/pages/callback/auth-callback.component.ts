@@ -1,5 +1,5 @@
 import { Component, inject, OnInit } from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { AuthService } from '../../../../core/auth/auth.service';
 
 /**
@@ -14,12 +14,23 @@ import { AuthService } from '../../../../core/auth/auth.service';
  */
 @Component({
   selector: 'app-auth-callback',
+  standalone: true,
   template: `
     <div class="callback-page">
       <div class="callback-card">
-        <div class="spinner"></div>
-        <p class="callback-text">Autenticando com Google...</p>
-        <p class="callback-subtext">Aguarde enquanto verificamos sua identidade.</p>
+        @if (authService.loading()) {
+          <div class="spinner"></div>
+          <p class="callback-text">Autenticando com Google...</p>
+          <p class="callback-subtext">Aguarde enquanto verificamos sua identidade.</p>
+        } @else if (authService.error()) {
+          <span class="material-symbols-outlined" style="color: #d93025; font-size: 48px;">error</span>
+          <p class="callback-text">Erro na Autenticação</p>
+          <p class="callback-subtext" style="color: #d93025;">{{ authService.error() }}</p>
+          <button class="retry-btn" (click)="goToLogin()">Voltar ao Login</button>
+        } @else {
+          <div class="spinner"></div>
+          <p class="callback-text">Redirecionando...</p>
+        }
       </div>
     </div>
   `,
@@ -95,12 +106,28 @@ import { AuthService } from '../../../../core/auth/auth.service';
         color: #5f6368;
         margin: 0;
       }
+      .retry-btn {
+        margin-top: 16px;
+        padding: 10px 20px;
+        background: white;
+        border: 1px solid #dadce0;
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        color: #1a73e8;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      .retry-btn:hover {
+        background: #f8f9fa;
+      }
     `,
   ],
 })
 export class AuthCallbackComponent implements OnInit {
-  private readonly authService = inject(AuthService);
+  protected readonly authService = inject(AuthService);
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
 
   ngOnInit() {
     // Angular router can sometimes clear window.location.hash or take time to sync.
@@ -128,5 +155,9 @@ export class AuthCallbackComponent implements OnInit {
         }
       }
     });
+  }
+
+  goToLogin() {
+    this.router.navigate(['/login']);
   }
 }

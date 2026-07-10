@@ -25,7 +25,7 @@ export const authGuard: CanActivateFn = (route, state) => {
     return false;
   }
 
-  // Se o utilizador já tem o cofre criado (Locked/Unlocked) mas tentar aceder a /drive/setup, redireciona para home.
+  // Se o utilizador já tem o drive criado (Locked/Unlocked) mas tentar aceder a /drive/setup, redireciona para home.
   if ((status === AppStatus.Locked || status === AppStatus.Unlocked) && state.url.includes('/drive/setup')) {
     router.navigate(['/drive/home']);
     return false;

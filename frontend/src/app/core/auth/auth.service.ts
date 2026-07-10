@@ -124,7 +124,7 @@ export class AuthService {
           const userInfo = this.decodeUserFromIdToken(idToken);
           
           // Extrair a flag real do JWT
-          const isVaultInitialized = this.isVaultInitializedFromToken(idToken);
+          const isVaultInitialized = this.isVaultInitializedFromToken(res.token);
 
           this.appState.login(userInfo, isVaultInitialized);
 

@@ -1,10 +1,12 @@
-import { Component, inject, computed, signal } from '@angular/core';
+import { Component, inject, computed, signal, OnInit, effect } from '@angular/core';
 import { AppStateService, AppStatus } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
+import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { DriveStore } from '../../state/drive.store';
 import { FileListComponent } from '../../components/file-list/file-list.component';
 import { TopbarComponent } from '../../components/topbar/topbar.component';
 import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal.component';
+import { CommonModule } from '@angular/common';
 
 /**
  * Main vault page — Google Drive clone layout.
@@ -14,8 +16,8 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
  * │  Topbar: Logo | Search Bar | Avatar             │
  * ├──────────┬──────────────────────────────────────┤
  * │ Sidebar  │  Content Area                        │
- * │ [+ Novo] │  Breadcrumb: Meu Cofre               │
- * │ Meu Cofre│  ┌──────────────────────────────┐    │
+ * │ [+ Novo] │  Breadcrumb: Meu Drive               │
+ * │ Meu Drive│  ┌──────────────────────────────┐    │
  * │ Comparti.│  │  File List (with obfuscation) │    │
  * │ Recentes │  │  + Lock Overlay when Locked   │    │
  * │ Lixeira  │  └──────────────────────────────┘    │
@@ -25,7 +27,8 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
  */
 @Component({
   selector: 'app-vault-home',
-  imports: [FileListComponent, TopbarComponent, UnlockModalComponent],
+  standalone: true,
+  imports: [FileListComponent, TopbarComponent, UnlockModalComponent, CommonModule],
   template: `
     <div class="vault-layout">
       <!-- ===== TOPBAR ===== -->
@@ -33,15 +36,32 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
 
       <!-- ===== SIDEBAR ===== -->
       <nav class="sidebar">
-        <button class="new-btn" id="new-btn">
-          <span class="material-symbols-outlined">add</span>
-          Novo
-        </button>
+        <div class="new-dropdown-container">
+          <button class="new-btn" id="new-btn" (click)="toggleNewMenu()" [disabled]="appState.isLocked()">
+            <span class="material-symbols-outlined">add</span>
+            Novo
+          </button>
+          
+          @if (isNewMenuOpen()) {
+            <div class="new-dropdown">
+              <button class="dropdown-item" (click)="createNewFolder()">
+                <span class="material-symbols-outlined">create_new_folder</span>
+                Nova pasta
+              </button>
+              <div class="dropdown-divider"></div>
+              <button class="dropdown-item" (click)="fileInput.click()">
+                <span class="material-symbols-outlined">upload_file</span>
+                Upload de ficheiro
+              </button>
+            </div>
+          }
+          <input type="file" #fileInput style="display: none" (change)="onFileSelected($event)" />
+        </div>
 
         <div class="nav-group">
-          <button class="nav-item active" id="nav-my-vault">
+          <button class="nav-item" [class.active]="currentView() === 'drive'" (click)="currentView.set('drive')" id="nav-my-vault">
             <span class="material-symbols-outlined">folder</span>
-            Meu Cofre
+            Meu Drive
           </button>
           <button class="nav-item" id="nav-shared">
             <span class="material-symbols-outlined">group</span>
@@ -60,16 +80,18 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
         <div class="sidebar-divider"></div>
 
         <!-- Storage Usage -->
-        <div class="storage-widget">
-          <span class="material-symbols-outlined storage-icon">cloud</span>
-          <div class="storage-details">
-            <span class="storage-label">Armazenamento</span>
-            <div class="storage-bar-track">
-              <div class="storage-bar-fill" style="width: 23%"></div>
+        <button class="nav-item" [class.active]="currentView() === 'storage'" (click)="currentView.set('storage')">
+          <div class="storage-widget">
+            <span class="material-symbols-outlined storage-icon">cloud</span>
+            <div class="storage-details">
+              <span class="storage-label">Armazenamento</span>
+              <div class="storage-bar-track">
+                <div class="storage-bar-fill" [style.width.%]="getQuotaPercent()"></div>
+              </div>
+              <span class="storage-used">{{ getQuotaFormatted() }}</span>
             </div>
-            <span class="storage-used">2,3 GB de 10 GB usados</span>
           </div>
-        </div>
+        </button>
       </nav>
 
       <!-- ===== CONTENT AREA ===== -->
@@ -78,13 +100,24 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
           <!-- Breadcrumb -->
           <div class="breadcrumb">
             <span class="material-symbols-outlined breadcrumb-icon">
-              folder
+              {{ currentView() === 'drive' ? 'folder' : 'cloud' }}
             </span>
-            <span class="breadcrumb-text">Meu Cofre</span>
+            <span class="breadcrumb-text">{{ currentView() === 'drive' ? 'Meu Drive' : 'Armazenamento' }}</span>
           </div>
 
           <!-- File List -->
-          <app-file-list [files]="driveStore.files()" />
+          <app-file-list [files]="driveStore.files()" [viewMode]="currentView()" [quota]="driveStore.quota()" />
+
+          <!-- Upload Progress -->
+          @if (driveStore.isUploading()) {
+            <div class="upload-progress-container">
+              <div class="upload-header">
+                <span>Fazendo upload...</span>
+                <span>{{ driveStore.uploadProgress() }}%</span>
+              </div>
+              <progress class="quota-progress-bar upload-progress-bar" [value]="driveStore.uploadProgress()" max="100"></progress>
+            </div>
+          }
 
           <!-- Unlock Modal (visible when unlocked requested) -->
           @if (isUnlockModalOpen()) {
@@ -134,10 +167,8 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
         padding: 14px 24px;
         background: white;
         border: none;
-        border-radius: 28px;
-        box-shadow:
-          0 1px 2px rgba(60, 64, 67, 0.3),
-          0 1px 3px 1px rgba(60, 64, 67, 0.15);
+        border-radius: 16px;
+        box-shadow: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
         cursor: pointer;
         font-size: 14px;
         font-weight: 500;
@@ -151,15 +182,74 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
       }
 
       .new-btn:hover {
-        box-shadow:
-          0 1px 3px rgba(60, 64, 67, 0.3),
-          0 4px 8px 3px rgba(60, 64, 67, 0.15);
-        background: #f8f9ff;
+        box-shadow: 0 1px 3px 0 rgba(60, 64, 67, 0.3), 0 4px 8px 3px rgba(60, 64, 67, 0.15);
+        background: #fdfdfd;
       }
 
       .new-btn .material-symbols-outlined {
         font-size: 26px;
         color: #1a73e8;
+      }
+      .new-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .new-dropdown-container {
+        position: relative;
+        margin-bottom: 16px;
+      }
+
+      .new-dropdown {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        margin-top: 4px;
+        background: #ffffff;
+        border: 1px solid #dadce0;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1), 0 1px 3px rgba(0,0,0,0.08);
+        min-width: 200px;
+        display: flex;
+        flex-direction: column;
+        padding: 8px 0;
+        z-index: 100;
+        animation: fadeIn 0.2s ease;
+      }
+
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(-10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .dropdown-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 16px;
+        border: none;
+        background: transparent;
+        text-align: left;
+        font-size: 14px;
+        color: #3c4043;
+        cursor: pointer;
+        transition: background 0.2s;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .dropdown-item:hover {
+        background: #f1f3f4;
+      }
+
+      .dropdown-item .material-symbols-outlined {
+        font-size: 20px;
+        color: #5f6368;
+      }
+
+      .dropdown-divider {
+        height: 1px;
+        background: #e0e0e0;
+        margin: 4px 0;
       }
 
       .nav-group {
@@ -172,7 +262,7 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
         display: flex;
         align-items: center;
         gap: 14px;
-        padding: 8px 24px;
+        padding: 8px 16px;
         border-radius: 24px;
         border: none;
         background: transparent;
@@ -191,8 +281,8 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
       }
 
       .nav-item.active {
-        background: #e8f0fe;
-        color: #1a73e8;
+        background: #c2e7ff;
+        color: #001d35;
         font-weight: 500;
       }
 
@@ -212,7 +302,8 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
         display: flex;
         align-items: flex-start;
         gap: 14px;
-        padding: 8px 24px;
+        padding: 4px 8px;
+        width: 100%;
       }
 
       .storage-icon {
@@ -257,16 +348,16 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
       /* === CONTENT AREA === */
       .content-area {
         grid-area: content;
-        padding: 16px 24px 16px 8px;
-        overflow-y: auto;
+        padding: 8px 16px 16px 0;
+        overflow-y: hidden;
       }
 
       .content-inner {
-        background: white;
+        background: #ffffff;
         border-radius: 16px;
-        min-height: 100%;
+        height: 100%;
         position: relative;
-        overflow: hidden;
+        overflow-y: auto;
       }
 
       .breadcrumb {
@@ -287,6 +378,46 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
 
       .breadcrumb-text {
         font-size: 18px;
+      }
+
+      /* Upload Progress */
+      .upload-progress-container {
+        position: absolute;
+        bottom: 24px;
+        right: 24px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1), 0 1px 3px rgba(0,0,0,0.08);
+        padding: 16px;
+        width: 320px;
+        z-index: 50;
+        border: 1px solid #dadce0;
+      }
+
+      .upload-header {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        font-size: 14px;
+        color: #202124;
+        font-weight: 500;
+      }
+
+      .upload-progress-bar {
+        width: 100%;
+        height: 6px;
+        border-radius: 3px;
+        appearance: none;
+        -webkit-appearance: none;
+      }
+      .upload-progress-bar::-webkit-progress-bar {
+        background-color: #e0e0e0;
+        border-radius: 3px;
+      }
+      .upload-progress-bar::-webkit-progress-value {
+        background-color: #1a73e8;
+        border-radius: 3px;
+        transition: width 0.2s ease;
       }
 
       /* === RESPONSIVE === */
@@ -319,13 +450,48 @@ import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal
     `,
   ],
 })
-export class VaultHomeComponent {
+export class VaultHomeComponent implements OnInit {
   protected readonly appState = inject(AppStateService);
   protected readonly authService = inject(AuthService);
+  protected readonly cryptoService = inject(CryptoService);
   protected readonly driveStore = inject(DriveStore);
   protected readonly AppStatus = AppStatus;
 
   readonly isUnlockModalOpen = signal(false);
+  readonly currentView = signal<'drive' | 'storage'>('drive');
+
+  constructor() {
+    effect(() => {
+      if (this.cryptoService.isVaultUnlocked()) {
+        this.driveStore.reDecryptAll();
+      }
+    });
+  }
+
+  ngOnInit() {
+    this.driveStore.loadQuota();
+    this.driveStore.loadTree();
+  }
+
+  getQuotaPercent(): number {
+    const q = this.driveStore.quota();
+    if (!q || q.maxBytes === 0) return 0;
+    return (q.usedBytes / q.maxBytes) * 100;
+  }
+
+  getQuotaFormatted(): string {
+    const q = this.driveStore.quota();
+    if (!q) return '0 B usados';
+    return `${this.formatSize(q.usedBytes)} de ${this.formatSize(q.maxBytes)} usados`;
+  }
+
+  private formatSize(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
 
   /**
    * Computes the first letter of the user's name for the avatar.
@@ -336,6 +502,47 @@ export class VaultHomeComponent {
     if (user?.email) return user.email.charAt(0).toUpperCase();
     return 'U';
   });
+
+  readonly isNewMenuOpen = signal(false);
+
+  toggleNewMenu() {
+    this.isNewMenuOpen.set(!this.isNewMenuOpen());
+  }
+
+  async createNewFolder() {
+    this.isNewMenuOpen.set(false);
+    if (this.appState.isLocked()) return;
+    
+    const name = prompt('Nome da nova pasta:');
+    if (!name) return;
+
+    try {
+      await this.driveStore.createFolder(name);
+    } catch (e) {
+      console.error(e);
+      alert('Erro ao criar pasta');
+    }
+  }
+
+  async onFileSelected(event: Event) {
+    this.isNewMenuOpen.set(false);
+    if (this.appState.isLocked()) return;
+
+    const input = event.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0) return;
+
+    const file = input.files[0];
+    
+    try {
+      await this.driveStore.uploadFile(file);
+    } catch (e) {
+      console.error(e);
+      alert('Erro no upload');
+    }
+    
+    // Reset file input
+    input.value = '';
+  }
 
   onLogout(): void {
     this.authService.logout();
