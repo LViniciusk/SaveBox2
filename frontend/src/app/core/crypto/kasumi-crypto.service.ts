@@ -114,29 +114,26 @@ export class KasumiCryptoService {
 
   /**
    * Decrypts a string (e.g. filename) using XChaCha20-Poly1305.
+   * Throws on decryption failure (e.g. wrong key / corrupted ciphertext).
    */
   async decryptName(ciphertextBase64: string, key: Uint8Array): Promise<string> {
     await this.ensureSodium();
     if (key.length !== KEY_SIZE) throw new Error('Key must be 32 bytes');
 
-    try {
-      const data = _sodium.from_base64(ciphertextBase64, _sodium.base64_variants.URLSAFE_NO_PADDING);
-      if (data.length < NONCE_SIZE + MAC_SIZE) throw new Error('Invalid ciphertext length');
+    const data = _sodium.from_base64(ciphertextBase64, _sodium.base64_variants.URLSAFE_NO_PADDING);
+    if (data.length < NONCE_SIZE + MAC_SIZE) throw new Error('Invalid ciphertext length');
 
-      const nonce = data.slice(0, NONCE_SIZE);
-      const mac = data.slice(NONCE_SIZE, NONCE_SIZE + MAC_SIZE);
-      const ciphertext = data.slice(NONCE_SIZE + MAC_SIZE);
+    const nonce = data.slice(0, NONCE_SIZE);
+    const mac = data.slice(NONCE_SIZE, NONCE_SIZE + MAC_SIZE);
+    const ciphertext = data.slice(NONCE_SIZE + MAC_SIZE);
 
-      const plaintext = _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt_detached(
-        null, ciphertext, mac, null, nonce, key
-      );
+    // Throws if MAC verification fails (wrong key or corrupted data)
+    const plaintext = _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt_detached(
+      null, ciphertext, mac, null, nonce, key
+    );
 
-      const decoder = new TextDecoder();
-      return decoder.decode(plaintext);
-    } catch (e) {
-      console.warn('Falha ao desencriptar nome:', e);
-      return '[Erro] Falha ao ler nome';
-    }
+    const decoder = new TextDecoder();
+    return decoder.decode(plaintext);
   }
 
   /**

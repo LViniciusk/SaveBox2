@@ -80,7 +80,7 @@ import { FormsModule } from '@angular/forms';
       :host {
         display: block;
         min-height: 100vh;
-        background: #f8f9fa;
+        background: #F8FAFD;
       }
       .setup-page {
         display: flex;
@@ -218,7 +218,7 @@ export class SetupComponent {
 
     try {
       await this.cryptoService.initializeVault(this.phrase);
-      
+
       this.downloadRecoveryFile();
 
       // Força um refresh para pegar o novo JWT com is_vault_initialized = true
@@ -241,12 +241,12 @@ export class SetupComponent {
   }
 
   private downloadRecoveryFile() {
-    const text = 
+    const text =
       '=== SAVEBOX RECOVERY ===\\n' +
       'Guarde esta frase em um local seguro, preferencialmente offline.\\n\\n' +
       'Sua Frase de Segurança: ' + this.phrase + '\\n\\n' +
       'Aviso: O SaveBox possui arquitetura Zero-Knowledge. Não temos como recuperar esta frase se você a perder.';
-      
+
     const blob = new Blob([text], { type: 'text/plain' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');

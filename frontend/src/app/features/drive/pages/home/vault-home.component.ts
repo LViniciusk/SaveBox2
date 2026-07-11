@@ -1,4 +1,4 @@
-import { Component, inject, computed, signal, OnInit, effect } from '@angular/core';
+import { Component, inject, computed, signal, OnInit, effect, HostListener } from '@angular/core';
 import { AppStateService, AppStatus } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
 import { CryptoService } from '../../../../core/crypto/crypto.service';
@@ -59,7 +59,7 @@ import { CommonModule } from '@angular/common';
         </div>
 
         <div class="nav-group">
-          <button class="nav-item" [class.active]="currentView() === 'drive'" (click)="currentView.set('drive')" id="nav-my-vault">
+          <button class="nav-item" [class.active]="currentView() === 'drive'" (click)="currentView.set('drive'); driveStore.navigateTo(null)" id="nav-my-vault">
             <span class="material-symbols-outlined">folder</span>
             Meu Drive
           </button>
@@ -71,27 +71,25 @@ import { CommonModule } from '@angular/common';
             <span class="material-symbols-outlined">schedule</span>
             Recentes
           </button>
-          <button class="nav-item" id="nav-trash">
+          <button class="nav-item" [class.active]="currentView() === 'trash'" (click)="currentView.set('trash'); driveStore.loadTrash()" id="nav-trash">
             <span class="material-symbols-outlined">delete</span>
             Lixeira
+          </button>
+          <button class="nav-item" [class.active]="currentView() === 'storage'" (click)="currentView.set('storage')">
+            <span class="material-symbols-outlined">cloud</span>
+            Armazenamento
           </button>
         </div>
 
         <div class="sidebar-divider"></div>
 
-        <!-- Storage Usage -->
-        <button class="nav-item" [class.active]="currentView() === 'storage'" (click)="currentView.set('storage')">
-          <div class="storage-widget">
-            <span class="material-symbols-outlined storage-icon">cloud</span>
-            <div class="storage-details">
-              <span class="storage-label">Armazenamento</span>
-              <div class="storage-bar-track">
-                <div class="storage-bar-fill" [style.width.%]="getQuotaPercent()"></div>
-              </div>
-              <span class="storage-used">{{ getQuotaFormatted() }}</span>
-            </div>
+        <!-- Storage Usage Details -->
+        <div class="storage-quota-container">
+          <div class="storage-bar-track">
+            <div class="storage-bar-fill" [style.width.%]="getQuotaPercent()"></div>
           </div>
-        </button>
+          <span class="storage-used">{{ getQuotaFormatted() }}</span>
+        </div>
       </nav>
 
       <!-- ===== CONTENT AREA ===== -->
@@ -100,13 +98,45 @@ import { CommonModule } from '@angular/common';
           <!-- Breadcrumb -->
           <div class="breadcrumb">
             <span class="material-symbols-outlined breadcrumb-icon">
-              {{ currentView() === 'drive' ? 'folder' : 'cloud' }}
+              {{ currentView() === 'drive' ? (driveStore.currentFolderId() ? 'folder_open' : 'folder') : (currentView() === 'trash' ? 'delete' : 'cloud') }}
             </span>
-            <span class="breadcrumb-text">{{ currentView() === 'drive' ? 'Meu Drive' : 'Armazenamento' }}</span>
+            @if (currentView() === 'drive') {
+              <div class="breadcrumb-path">
+                @for (segment of driveStore.currentPath(); track segment.id; let last = $last) {
+                  <button 
+                    class="breadcrumb-link" 
+                    (click)="driveStore.navigateTo(segment.id)"
+                    [disabled]="last">
+                    {{ segment.name }}
+                  </button>
+                  @if (!last) {
+                    <span class="breadcrumb-separator">/</span>
+                  }
+                }
+              </div>
+            } @else if (currentView() === 'storage') {
+              <span class="breadcrumb-text">Armazenamento</span>
+            } @else if (currentView() === 'trash') {
+              <span class="breadcrumb-text">Lixeira</span>
+            }
           </div>
 
+          <!-- Empty Trash Banner -->
+          @if (currentView() === 'trash' && driveStore.trashFiles().length > 0) {
+            <div class="trash-banner">
+              <span class="trash-banner-text">Os itens da lixeira serão excluídos definitivamente após 30 dias</span>
+              <button class="empty-trash-btn" (click)="onEmptyTrash()">
+                Esvaziar lixeira
+              </button>
+            </div>
+          }
+
           <!-- File List -->
-          <app-file-list [files]="driveStore.files()" [viewMode]="currentView()" [quota]="driveStore.quota()" />
+          @if (currentView() === 'trash') {
+            <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" />
+          } @else {
+            <app-file-list [files]="driveStore.currentFolderFiles()" [viewMode]="currentView()" [quota]="driveStore.quota()" />
+          }
 
           <!-- Upload Progress -->
           @if (driveStore.isUploading()) {
@@ -145,7 +175,7 @@ import { CommonModule } from '@angular/common';
           'topbar topbar'
           'sidebar content';
         height: 100%;
-        background: #f8f9fa;
+        background: #F8FAFD;
       }
 
       /* Topbar is now a separate component but occupies the same grid area */
@@ -297,32 +327,13 @@ import { CommonModule } from '@angular/common';
         margin: 12px 16px;
       }
 
-      /* Storage Widget */
-      .storage-widget {
-        display: flex;
-        align-items: flex-start;
-        gap: 14px;
-        padding: 4px 8px;
-        width: 100%;
-      }
-
-      .storage-icon {
-        font-size: 20px;
-        color: #5f6368;
-        margin-top: 2px;
-      }
-
-      .storage-details {
+      /* Storage Quota Container */
+      .storage-quota-container {
+        padding: 8px 24px;
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        flex: 1;
-      }
-
-      .storage-label {
-        font-size: 14px;
-        color: #202124;
-        font-weight: 400;
+        gap: 8px;
+        box-sizing: border-box;
       }
 
       .storage-bar-track {
@@ -341,8 +352,10 @@ import { CommonModule } from '@angular/common';
       }
 
       .storage-used {
-        font-size: 12px;
+        font-size: 13px;
         color: #5f6368;
+        font-weight: 500;
+        font-family: 'Roboto', sans-serif;
       }
 
       /* === CONTENT AREA === */
@@ -378,6 +391,41 @@ import { CommonModule } from '@angular/common';
 
       .breadcrumb-text {
         font-size: 18px;
+      }
+
+      .breadcrumb-path {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 18px;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .breadcrumb-link {
+        background: transparent;
+        border: none;
+        padding: 0;
+        font-size: 18px;
+        font-weight: 400;
+        color: #1a73e8;
+        cursor: pointer;
+        transition: color 0.15s ease;
+      }
+
+      .breadcrumb-link:hover:not(:disabled) {
+        color: #1557b0;
+        text-decoration: underline;
+      }
+
+      .breadcrumb-link:disabled {
+        color: #202124;
+        cursor: default;
+        text-decoration: none;
+      }
+
+      .breadcrumb-separator {
+        color: #5f6368;
+        user-select: none;
       }
 
       /* Upload Progress */
@@ -420,6 +468,44 @@ import { CommonModule } from '@angular/common';
         transition: width 0.2s ease;
       }
 
+      .trash-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #edf2fa;
+        border: none;
+        border-radius: 12px;
+        padding: 14px 24px;
+        margin: 0 24px 16px;
+        box-sizing: border-box;
+      }
+
+      .trash-banner-text {
+        font-size: 14px;
+        color: #3c4043;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .empty-trash-btn {
+        background: #EDF2FA;
+        border: none;
+        border-radius: 20px;
+        padding: 8px 20px;
+        font-size: 14px;
+        font-weight: 500;
+        color: #0b57d0;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 150ms;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .empty-trash-btn:hover {
+        background: #d3e3fd;
+      }
+
       /* === RESPONSIVE === */
       @media (max-width: 900px) {
         .vault-layout {
@@ -458,7 +544,7 @@ export class VaultHomeComponent implements OnInit {
   protected readonly AppStatus = AppStatus;
 
   readonly isUnlockModalOpen = signal(false);
-  readonly currentView = signal<'drive' | 'storage'>('drive');
+  readonly currentView = signal<'drive' | 'storage' | 'trash'>('drive');
 
   constructor() {
     effect(() => {
@@ -509,18 +595,31 @@ export class VaultHomeComponent implements OnInit {
     this.isNewMenuOpen.set(!this.isNewMenuOpen());
   }
 
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    const isClickInside = target.closest('.new-dropdown-container');
+    if (!isClickInside) {
+      this.isNewMenuOpen.set(false);
+    }
+  }
+
   async createNewFolder() {
     this.isNewMenuOpen.set(false);
     if (this.appState.isLocked()) return;
-    
+
     const name = prompt('Nome da nova pasta:');
     if (!name) return;
 
     try {
       await this.driveStore.createFolder(name);
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert('Erro ao criar pasta');
+      if (e?.status === 409) {
+        alert('Uma pasta com este nome já existe nesta localização.');
+      } else {
+        alert('Erro ao criar pasta');
+      }
     }
   }
 
@@ -532,16 +631,26 @@ export class VaultHomeComponent implements OnInit {
     if (!input.files || input.files.length === 0) return;
 
     const file = input.files[0];
-    
+
     try {
       await this.driveStore.uploadFile(file);
     } catch (e) {
       console.error(e);
       alert('Erro no upload');
     }
-    
+
     // Reset file input
     input.value = '';
+  }
+
+  async onEmptyTrash() {
+    const confirmed = confirm('Tem certeza de que deseja esvaziar a lixeira? Todos os itens serão excluídos permanentemente.');
+    if (!confirmed) return;
+    try {
+      await this.driveStore.emptyTrash();
+    } catch (e) {
+      alert('Erro ao esvaziar a lixeira');
+    }
   }
 
   onLogout(): void {

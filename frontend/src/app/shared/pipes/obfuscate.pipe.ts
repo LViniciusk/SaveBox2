@@ -17,7 +17,7 @@ export class ObfuscatePipe implements PipeTransform {
   transform(value: string, isLocked: boolean): string {
     if (isLocked) {
       const truncated = value.length > 15 ? value.substring(0, 15) + '...' : value;
-      return '[Trancado] ' + truncated;
+      return truncated;
     }
     return value;
   }

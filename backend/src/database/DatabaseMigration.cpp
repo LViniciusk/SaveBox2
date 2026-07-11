@@ -33,6 +33,7 @@ bool DatabaseMigration::run(DatabasePool& pool) {
 
         // MIGRATION SECONDA: Garantir que bancos já criados recebam a nova coluna sem drop
         w.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_vault_initialized BOOLEAN NOT NULL DEFAULT FALSE;");
+        w.exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS vault_verification TEXT NULL;");
 
         // TABELA DE SESSÕES
         w.exec(R"(

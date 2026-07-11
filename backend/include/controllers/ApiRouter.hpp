@@ -67,6 +67,7 @@ public:
     crow::response handle_get_google_sync_map(const crow::request& req, int account_id);
     crow::response handle_google_sync_cleanup(const crow::request& req, int account_id);
     crow::response handle_init_vault(const crow::request& req);
+    crow::response handle_get_vault_verification(const crow::request& req);
 
     void setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware>& app);
 

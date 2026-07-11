@@ -54,15 +54,17 @@ export class DriveService {
     });
   }
 
-  initFileUpload(folderId: number | null, encryptedName: string, nameHash: string, encryptedFdk: string, sizeBytes: number): Observable<{file_id: number}> {
+  initFileUpload(folderId: number | null, encryptedName: string, nameHash: string, encryptedFdk: string, sizeBytes: number, totalChunks: number, storageProvider: string = 'local'): Observable<{file_id: number, storage_provider?: string, access_token?: string, root_folder_id?: string}> {
     const body = {
-      folder_id: folderId,
+      folder_id: folderId ?? null,
       encrypted_name: encryptedName,
       name_hash: nameHash,
       encrypted_fdk: encryptedFdk,
-      size_bytes: sizeBytes
+      size_bytes: sizeBytes,
+      total_chunks: totalChunks,
+      storage_provider: storageProvider
     };
-    return this.http.post<{file_id: number}>(`${environment.apiUrl}/files`, body, {
+    return this.http.post<{file_id: number, storage_provider?: string, access_token?: string, root_folder_id?: string}>(`${environment.apiUrl}/files`, body, {
       withCredentials: true,
     });
   }
@@ -79,6 +81,111 @@ export class DriveService {
   downloadFile(fileId: number): Observable<Blob> {
     return this.http.get(`${environment.apiUrl}/files/${fileId}/download`, {
       responseType: 'blob',
+      withCredentials: true,
+    });
+  }
+
+  downloadExternalMetadata(fileId: number): Observable<{ storage_provider: string, external_file_id: string, access_token: string }> {
+    return this.http.get<{ storage_provider: string, external_file_id: string, access_token: string }>(
+      `${environment.apiUrl}/files/${fileId}/download`, {
+        withCredentials: true,
+      }
+    );
+  }
+
+  downloadExternalFile(url: string, token: string): Observable<Blob> {
+    return this.http.get(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      responseType: 'blob'
+    });
+  }
+
+  getLinkedGoogleAccounts(): Observable<any[]> {
+    return this.http.get<any[]>(`${environment.apiUrl}/api/storage/google/accounts`, {
+      withCredentials: true,
+    });
+  }
+
+  unlinkGoogleAccount(accountId: number): Observable<any> {
+    return this.http.delete(`${environment.apiUrl}/api/storage/google/accounts/${accountId}`, {
+      withCredentials: true,
+    });
+  }
+
+  generateGoogleState(): Observable<{ state: string }> {
+    return this.http.get<{ state: string }>(`${environment.apiUrl}/api/storage/google/generate-state`, {
+      withCredentials: true,
+    });
+  }
+
+  finalizeExternalUpload(fileId: number, externalFileId: string): Observable<any> {
+    return this.http.post(`${environment.apiUrl}/files/${fileId}/finalize-external`, {
+      external_file_id: externalFileId
+    }, {
+      withCredentials: true,
+    });
+  }
+
+  /** Soft-delete (trash) a single file by ID */
+  trashFile(fileId: number): Observable<void> {
+    return this.http.delete<void>(`${environment.apiUrl}/files/${fileId}`, {
+      withCredentials: true,
+    });
+  }
+
+  /** Hard-delete (permanent) a single file by ID (must be in trash first) */
+  hardDeleteFile(fileId: number): Observable<void> {
+    return this.http.delete<void>(`${environment.apiUrl}/trash/files/${fileId}`, {
+      withCredentials: true,
+    });
+  }
+
+  updateFile(fileId: number, body: { encrypted_name?: string; name_hash?: string; folder_id?: number | null }): Observable<any> {
+    return this.http.put(`${environment.apiUrl}/files/${fileId}`, body, {
+      withCredentials: true,
+    });
+  }
+
+  updateFolder(folderId: number, body: { encrypted_name?: string; name_hash?: string; parent_id?: number | null }): Observable<any> {
+    return this.http.put(`${environment.apiUrl}/folders/${folderId}`, body, {
+      withCredentials: true,
+    });
+  }
+
+  trashFolder(folderId: number): Observable<void> {
+    return this.http.delete<void>(`${environment.apiUrl}/folders/${folderId}`, {
+      withCredentials: true,
+    });
+  }
+
+  getTrash(): Observable<{ folders: any[]; files: any[] }> {
+    return this.http.get<{ folders: any[]; files: any[] }>(`${environment.apiUrl}/trash`, {
+      withCredentials: true,
+    });
+  }
+
+  restoreFile(fileId: number): Observable<void> {
+    return this.http.post<void>(`${environment.apiUrl}/files/${fileId}/restore`, {}, {
+      withCredentials: true,
+    });
+  }
+
+  restoreFolder(folderId: number): Observable<void> {
+    return this.http.post<void>(`${environment.apiUrl}/folders/${folderId}/restore`, {}, {
+      withCredentials: true,
+    });
+  }
+
+  hardDeleteFolder(folderId: number): Observable<void> {
+    return this.http.delete<void>(`${environment.apiUrl}/trash/folders/${folderId}`, {
+      withCredentials: true,
+    });
+  }
+
+  emptyTrash(): Observable<any> {
+    return this.http.delete(`${environment.apiUrl}/trash/empty`, {
       withCredentials: true,
     });
   }

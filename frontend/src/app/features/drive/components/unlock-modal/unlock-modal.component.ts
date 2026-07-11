@@ -216,12 +216,16 @@ export class UnlockModalComponent {
     await new Promise(resolve => setTimeout(resolve, 50));
 
     try {
-      await this.cryptoService.deriveVaultKey(this.phrase);
+      await this.cryptoService.unlockVault(this.phrase);
       this.appState.unlock();
       this.close();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      this.error.set('Frase incorreta ou falha ao derivar chave.');
+      if (e?.message === 'WRONG_PASSPHRASE') {
+        this.error.set('Frase de segurança incorreta. Tente novamente.');
+      } else {
+        this.error.set('Falha ao verificar a frase de segurança.');
+      }
       this.loading.set(false);
     }
   }

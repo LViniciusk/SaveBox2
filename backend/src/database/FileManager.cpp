@@ -476,7 +476,7 @@ crow::json::wvalue FileManager::get_trash(uint64_t user_id) {
     pqxx::work txn(*conn);
 
     auto file_rows = txn.exec(
-        "SELECT id, encrypted_name, size_bytes FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL",
+        "SELECT id, encrypted_name, size_bytes, folder_id FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL",
         pqxx::params{user_id}
     );
     std::vector<crow::json::wvalue> files;
@@ -485,11 +485,16 @@ crow::json::wvalue FileManager::get_trash(uint64_t user_id) {
         f["id"] = row[0].as<int>();
         f["encrypted_name"] = row[1].as<std::string>();
         f["size_bytes"] = row[2].as<int64_t>();
+        if (!row[3].is_null()) {
+            f["folder_id"] = row[3].as<int>();
+        } else {
+            f["folder_id"] = nullptr;
+        }
         files.push_back(std::move(f));
     }
 
     auto folder_rows = txn.exec(
-        "SELECT id, encrypted_name FROM folders WHERE user_id = $1 AND deleted_at IS NOT NULL",
+        "SELECT id, encrypted_name, parent_id FROM folders WHERE user_id = $1 AND deleted_at IS NOT NULL",
         pqxx::params{user_id}
     );
     std::vector<crow::json::wvalue> folders;
@@ -497,6 +502,11 @@ crow::json::wvalue FileManager::get_trash(uint64_t user_id) {
         crow::json::wvalue d;
         d["id"] = row[0].as<int>();
         d["encrypted_name"] = row[1].as<std::string>();
+        if (!row[2].is_null()) {
+            d["parent_id"] = row[2].as<int>();
+        } else {
+            d["parent_id"] = nullptr;
+        }
         folders.push_back(std::move(d));
     }
 

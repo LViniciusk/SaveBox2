@@ -28,16 +28,52 @@ crow::response ApiRouter::handle_init_vault(const crow::request& req) {
     uint64_t user_id = *user_id_opt;
 
     try {
+        auto body = crow::json::load(req.body);
+        std::string vault_verification;
+        if (body && body.has("vault_verification") && body["vault_verification"].t() == crow::json::type::String) {
+            vault_verification = body["vault_verification"].s();
+        }
+
         auto conn = pool_->acquire_connection();
         pqxx::work txn(*conn);
-        txn.exec(
-            "UPDATE users SET is_vault_initialized = TRUE WHERE id = $1",
-            pqxx::params{user_id}
-        );
+        if (!vault_verification.empty()) {
+            txn.exec(
+                "UPDATE users SET is_vault_initialized = TRUE, vault_verification = $2 WHERE id = $1",
+                pqxx::params{user_id, vault_verification}
+            );
+        } else {
+            txn.exec(
+                "UPDATE users SET is_vault_initialized = TRUE WHERE id = $1",
+                pqxx::params{user_id}
+            );
+        }
         txn.commit();
         return crow::response(204);
     } catch (const std::exception& e) {
         return crow::response(500, R"({"error":"Erro ao inicializar cofre"})");
+    }
+}
+
+crow::response ApiRouter::handle_get_vault_verification(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        auto conn = pool_->acquire_connection();
+        pqxx::nontransaction ntxn(*conn);
+        auto result = ntxn.exec(
+            "SELECT vault_verification FROM users WHERE id = " + ntxn.quote(user_id)
+        );
+        if (result.empty() || result[0][0].is_null()) {
+            return crow::response(404, R"({"error":"Verificacao de cofre nao configurada"})");
+        }
+        std::string verification = result[0][0].as<std::string>();
+        crow::json::wvalue res;
+        res["vault_verification"] = verification;
+        return crow::response(200, res);
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
 
@@ -2022,7 +2058,13 @@ void ApiRouter::setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware
     CROW_ROUTE(app, "/api/vault/init").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
         auto res = handle_init_vault(req);
-        // Não precisa forçar Content-Type pois é 204 No Content
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/vault/verification").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) {
+        auto res = handle_get_vault_verification(req);
+        res.set_header("Content-Type", "application/json");
         return res;
     });
 }

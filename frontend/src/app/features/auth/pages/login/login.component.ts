@@ -7,7 +7,6 @@ import {
 import { Router } from '@angular/router';
 import { AuthService } from '../../../../core/auth/auth.service';
 import { AppStateService } from '../../../../core/state/app-state.service';
-import { KasumiCryptoService } from '../../../../core/crypto/kasumi-crypto.service';
 
 /**
  * Login page styled after Google Sign-In.
@@ -53,16 +52,6 @@ import { KasumiCryptoService } from '../../../../core/crypto/kasumi-crypto.servi
             <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
           </svg>
           Entrar com Google
-        </button>
-        
-        <button
-          class="google-signin-btn"
-          (click)="testCrypto()"
-          id="test-crypto-btn"
-          style="margin-top: 12px; background: #e8f0fe; color: #1a73e8; border-color: #d2e3fc;"
-        >
-          <span class="material-symbols-outlined">bug_report</span>
-          Testar Criptografia
         </button>
 
         <!-- Error Banner -->
@@ -205,7 +194,7 @@ import { KasumiCryptoService } from '../../../../core/crypto/kasumi-crypto.servi
       }
 
       .google-signin-btn:hover:not(:disabled) {
-        background: #f8f9fa;
+        background: #F8FAFD;
         box-shadow: 0 1px 3px rgba(60, 64, 67, 0.3);
         border-color: #c6c9cd;
       }
@@ -334,17 +323,5 @@ export class LoginComponent {
 
   signInWithGoogle(): void {
     this.authService.loginWithGoogle();
-  }
-
-  private readonly kasumi = inject(KasumiCryptoService);
-
-  async testCrypto() {
-    console.log('[TestCrypto] Starting test...');
-    try {
-      const key = await this.kasumi.deriveVaultKey('testpassphrase123', 'test-salt');
-      console.log('[TestCrypto] Success! Derived key (hex):', Array.from(key).map(b => b.toString(16).padStart(2, '0')).join(''));
-    } catch (e: any) {
-      console.error('[TestCrypto] Error during derivation:', e);
-    }
   }
 }

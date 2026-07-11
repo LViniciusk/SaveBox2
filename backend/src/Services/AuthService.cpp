@@ -264,19 +264,24 @@ std::string AuthService::generate_token(uint64_t user_id) const {
     int token_version = 1;
     bool is_vault_initialized = false;
     std::string jti = Base62Generator::generate(7);
+    std::string email;
+    std::string full_name;
+    std::string avatar_url;
 
     if (pool_) {
         try {
             auto conn = pool_->acquire_connection();
             pqxx::work txn(*conn);
-            auto res = txn.exec("SELECT token_version, is_vault_initialized FROM users WHERE id = $1", pqxx::params{user_id});
+            auto res = txn.exec(
+                "SELECT token_version, is_vault_initialized, email, full_name, avatar_url FROM users WHERE id = $1",
+                pqxx::params{user_id}
+            );
             if (!res.empty()) {
-                if (!res[0][0].is_null()) {
-                    token_version = res[0][0].as<int>();
-                }
-                if (!res[0][1].is_null()) {
-                    is_vault_initialized = res[0][1].as<bool>();
-                }
+                if (!res[0][0].is_null()) token_version = res[0][0].as<int>();
+                if (!res[0][1].is_null()) is_vault_initialized = res[0][1].as<bool>();
+                if (!res[0][2].is_null()) email = res[0][2].as<std::string>();
+                if (!res[0][3].is_null()) full_name = res[0][3].as<std::string>();
+                if (!res[0][4].is_null()) avatar_url = res[0][4].as<std::string>();
             }
 
             txn.exec(
@@ -303,6 +308,9 @@ std::string AuthService::generate_token(uint64_t user_id) const {
         .set_payload_claim("tver", jwt::claim(std::to_string(token_version)))
         .set_payload_claim("jti", jwt::claim(jti))
         .set_payload_claim("is_vault_initialized", jwt::claim(std::string(is_vault_initialized ? "true" : "false")))
+        .set_payload_claim("email", jwt::claim(email))
+        .set_payload_claim("name", jwt::claim(full_name))
+        .set_payload_claim("picture", jwt::claim(avatar_url))
         .sign(jwt::algorithm::hs256{jwt_secret_});
 }
 
@@ -318,18 +326,22 @@ std::optional<uint64_t> AuthService::verify_token(const std::string& token) cons
         uint64_t user_id = std::stoull(decoded.get_payload_claim("user_id").as_string());
 
         if (pool_) {
-            auto conn = pool_->acquire_connection();
-            pqxx::work txn(*conn);
-            auto res = txn.exec("SELECT token_version, deleted_at FROM users WHERE id = $1", pqxx::params{user_id});
-            txn.commit();
-            if (res.empty()) {
-                return std::nullopt;
-            }
             int db_token_version = 1;
-            if (!res[0][0].is_null()) {
-                db_token_version = res[0][0].as<int>();
+            bool is_deleted = false;
+            {
+                auto conn = pool_->acquire_connection();
+                pqxx::work txn(*conn);
+                auto res = txn.exec("SELECT token_version, deleted_at FROM users WHERE id = $1", pqxx::params{user_id});
+                txn.commit();
+                if (res.empty()) {
+                    return std::nullopt;
+                }
+                if (!res[0][0].is_null()) {
+                    db_token_version = res[0][0].as<int>();
+                }
+                is_deleted = !res[0][1].is_null();
             }
-            bool is_deleted = !res[0][1].is_null();
+
             if (is_deleted) {
                 return std::nullopt;
             }
@@ -348,10 +360,13 @@ std::optional<uint64_t> AuthService::verify_token(const std::string& token) cons
 
             std::string jti = decoded.get_payload_claim("jti").as_string();
             
-            auto conn2 = pool_->acquire_connection();
-            pqxx::work txn2(*conn2);
-            auto session_res = txn2.exec("SELECT 1 FROM user_sessions WHERE session_id = $1", pqxx::params{jti});
-            txn2.commit();
+            pqxx::result session_res;
+            {
+                auto conn2 = pool_->acquire_connection();
+                pqxx::work txn2(*conn2);
+                session_res = txn2.exec("SELECT 1 FROM user_sessions WHERE session_id = $1", pqxx::params{jti});
+                txn2.commit();
+            }
 
             if (session_res.empty()) {
                 return std::nullopt;

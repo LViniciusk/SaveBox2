@@ -119,7 +119,7 @@ import { AuthService } from '../../../../core/auth/auth.service';
         transition: background 0.2s;
       }
       .retry-btn:hover {
-        background: #f8f9fa;
+        background: #F8FAFD;
       }
     `,
   ],
@@ -130,28 +130,28 @@ export class AuthCallbackComponent implements OnInit {
   private readonly router = inject(Router);
 
   ngOnInit() {
-    // Angular router can sometimes clear window.location.hash or take time to sync.
-    // It's safer to read the fragment and queryParams directly from ActivatedRoute.
-    
-    // Some OAuth providers might return data in queryParams if misconfigured, let's catch that too just for debugging
     const queryParams = this.route.snapshot.queryParams;
-    if (queryParams['error'] || queryParams['code']) {
-        console.error("Recebeu resposta via Query Params ao inves de Fragment! Isso significa que o Google retornou um Authorization Code ao inves de um Implicit Token.", queryParams);
+
+    // Se recebemos 'code' e 'state', estamos no fluxo de vinculação do Google Drive
+    if (queryParams['code'] && queryParams['state']) {
+      console.log("[AuthCallback] Google Drive Auth Code received, linking account...");
+      this.authService.linkGoogleDrive(queryParams['code'], queryParams['state']);
+      return;
     }
 
     this.route.fragment.subscribe((fragment) => {
       console.log("[AuthCallback] Fragment received:", fragment);
-      
+
       if (fragment) {
         this.authService.handleOAuthCallback(fragment);
       } else {
         // Fallback for cases where fragment is empty but data might be in queryParams
         if (Object.keys(queryParams).length > 0) {
-            const simulatedFragment = new URLSearchParams(queryParams).toString();
-            this.authService.handleOAuthCallback(simulatedFragment);
+          const simulatedFragment = new URLSearchParams(queryParams).toString();
+          this.authService.handleOAuthCallback(simulatedFragment);
         } else {
-            console.error("[AuthCallback] Fragment is empty!");
-            this.authService.handleOAuthCallback('');
+          console.error("[AuthCallback] Fragment is empty!");
+          this.authService.handleOAuthCallback('');
         }
       }
     });

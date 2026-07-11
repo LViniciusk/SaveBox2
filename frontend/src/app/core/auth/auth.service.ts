@@ -170,6 +170,26 @@ export class AuthService {
     }
   }
 
+  linkGoogleDrive(code: string, state: string): void {
+    this._loading.set(true);
+    this._error.set(null);
+
+    this.http.post(`${environment.apiUrl}/api/storage/google/link`, {
+      auth_code: code,
+      state: state
+    }, { withCredentials: true }).subscribe({
+      next: () => {
+        this._loading.set(false);
+        this.router.navigate(['/drive/home'], { queryParams: { drive_linked: 'success' } });
+      },
+      error: (err) => {
+        console.error('[AuthService] Google Drive link failed:', err);
+        this._error.set(err.error?.error || 'Falha ao vincular o Google Drive.');
+        this._loading.set(false);
+      }
+    });
+  }
+
   // --- GETTERS ---
   logout(): void {
     const token = this.jwtToken;
@@ -182,6 +202,29 @@ export class AuthService {
       this.http
         .post(
           `${environment.apiUrl}/logout`,
+          {},
+          { 
+            headers: { Authorization: `Bearer ${token}` },
+            withCredentials: true 
+          }
+        )
+        .subscribe({ error: () => {} });
+    }
+
+    this.router.navigate(['/login']);
+  }
+
+  logoutGlobal(): void {
+    const token = this.jwtToken;
+
+    this.jwtToken = null;
+    this.cryptoService.lockVault();
+    this.appState.logout();
+
+    if (token) {
+      this.http
+        .post(
+          `${environment.apiUrl}/logout/global`,
           {},
           { 
             headers: { Authorization: `Bearer ${token}` },

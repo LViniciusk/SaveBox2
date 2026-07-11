@@ -1,6 +1,7 @@
-import { Component, EventEmitter, Output, inject, signal } from '@angular/core';
+import { Component, EventEmitter, Output, inject, signal, HostListener } from '@angular/core';
 import { AppStateService } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
+import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { DriveStore } from '../../state/drive.store';
 import { CommonModule } from '@angular/common';
 
@@ -44,25 +45,210 @@ import { CommonModule } from '@angular/common';
           </button>
 
           @if (isProfileMenuOpen()) {
-            <div class="profile-dropdown">
-              <div class="profile-header">
-                <div class="profile-email">{{ appState.user()?.email || 'user@example.com' }}</div>
+            <div class="profile-dropdown" (click)="$event.stopPropagation()">
+              <!-- Close Button -->
+              <button class="profile-close-btn" (click)="isProfileMenuOpen.set(false)" title="Fechar">
+                <span class="material-symbols-outlined">close</span>
+              </button>
+
+              <!-- User Email Header -->
+              <div class="profile-email-header">
+                {{ appState.user()?.email || 'user@example.com' }}
               </div>
-              <div class="profile-quota-section">
-                <div class="quota-header">
-                  <span class="material-symbols-outlined quota-icon">cloud</span>
-                  <span class="quota-text">Armazenamento</span>
+
+              <!-- Main Avatar Section -->
+              <div class="profile-main-section">
+                <div class="profile-pic-ring">
+                  <div class="profile-pic-wrapper">
+                    @if (appState.user()?.picture) {
+                      <img [src]="appState.user()?.picture" alt="Avatar" class="profile-pic-large" />
+                    } @else {
+                      <div class="profile-pic-fallback-large">{{ appState.user()?.name?.charAt(0) || 'U' }}</div>
+                    }
+                    <button class="profile-pic-camera-badge" title="Mudar foto de perfil">
+                      <span class="material-symbols-outlined">photo_camera</span>
+                    </button>
+                  </div>
                 </div>
-                <progress class="quota-progress-bar" [value]="driveStore.quota().usedBytes" [max]="driveStore.quota().maxBytes || 1"></progress>
-                <div class="quota-text-sub">{{ getQuotaPercent() }}% utilizado</div>
+
+                <div class="profile-greeting">
+                  Olá, {{ appState.user()?.name || 'usuário' }}!
+                </div>
+
+                <button class="profile-manage-account-btn" (click)="openSettings()">
+                  Gerenciar sua Conta SaveBox
+                </button>
               </div>
-              <div class="dropdown-divider"></div>
-              <button class="dropdown-item">Configurações</button>
-              <button class="dropdown-item" (click)="logout()">Sair</button>
+
+              <!-- Cards Section -->
+              <div class="profile-cards-section">
+                <!-- Linked Accounts Expandable -->
+                @if (isAccountsExpanded()) {
+                  <div class="profile-card-expanded-container">
+                    <div class="profile-card-row" (click)="isAccountsExpanded.set(false)">
+                      <span class="card-row-text">Ocultar contas vinculadas</span>
+                      <span class="material-symbols-outlined bubble-chevron">expand_less</span>
+                    </div>
+
+                    @for (acc of driveStore.linkedAccounts(); track acc.id) {
+                      <div class="profile-card-subrow" (click)="$event.stopPropagation()">
+                        <span class="user-bubble {{ getBubbleColorClass(acc.account_email) }}">
+                          {{ acc.account_email.charAt(0).toUpperCase() }}
+                        </span>
+                        <div class="subrow-details">
+                          <span class="subrow-name">{{ getAccountName(acc.account_email) }}</span>
+                          <span class="subrow-email">{{ acc.account_email }}</span>
+                        </div>
+                      </div>
+                    }
+
+                    <div class="profile-card-subrow action-row" (click)="linkGoogleDrive(); $event.stopPropagation()">
+                      <span class="user-bubble bubble-add">
+                        <span class="material-symbols-outlined">add</span>
+                      </span>
+                      <span class="action-row-text">Adicionar outra conta</span>
+                    </div>
+                  </div>
+                } @else {
+                  <div class="profile-card-row" (click)="isAccountsExpanded.set(true)">
+                    <span class="card-row-text">Mostrar contas vinculadas</span>
+                    <div class="card-row-bubbles">
+                      @for (acc of driveStore.linkedAccounts().slice(0, 3); track acc.id) {
+                        <span class="user-bubble {{ getBubbleColorClass(acc.account_email) }}">
+                          {{ acc.account_email.charAt(0).toUpperCase() }}
+                        </span>
+                      }
+                      @if (driveStore.linkedAccounts().length > 3) {
+                        <span class="user-bubble bubble-blue">+{{ driveStore.linkedAccounts().length - 3 }}</span>
+                      }
+                      <span class="material-symbols-outlined bubble-chevron">expand_more</span>
+                    </div>
+                  </div>
+                }
+
+                <!-- Option 2: Actual Quota -->
+                <div class="profile-card-row no-hover">
+                  <div class="quota-card-content">
+                    <span class="material-symbols-outlined quota-card-icon">cloud</span>
+                    <span class="quota-card-text">
+                      Você usou {{ getQuotaPercentFormatted() }}% de {{ getQuotaMaxFormatted() }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Logout Button -->
+              <button class="profile-logout-btn" (click)="logout()">
+                <span class="material-symbols-outlined">logout</span>
+                Sair da conta
+              </button>
+
+              <!-- Footer -->
+              <div class="profile-dropdown-footer">
+                Política de Privacidade • Termos de Serviço
+              </div>
             </div>
           }
         </div>
       </div>
+
+      <!-- Modal de Configurações -->
+      @if (isSettingsOpen()) {
+        <div class="modal-backdrop" (click)="closeSettings()">
+          <div class="modal-content settings-modal" (click)="$event.stopPropagation()">
+            <div class="modal-header">
+              <h3>Configurações do Cofre</h3>
+              <button class="close-btn" (click)="closeSettings()">
+                <span class="material-symbols-outlined">close</span>
+              </button>
+            </div>
+            
+            <div class="modal-body">
+              <div class="settings-section">
+                <h4 class="section-title">Destino de Armazenamento</h4>
+                <p class="section-desc">Escolha onde guardar seus arquivos criptografados de ponta a ponta.</p>
+                
+                <!-- Seletor de Armazenamento -->
+                <div class="storage-switch-container">
+                  <button 
+                    class="switch-option" 
+                    [class.active]="driveStore.storageProvider() === 'local'"
+                    (click)="driveStore.setStorageProvider('local')">
+                    <span class="material-symbols-outlined option-icon">dns</span>
+                    <div class="option-details">
+                      <span class="option-name">Servidor Local</span>
+                      <span class="option-sub">Armazenamento no SaveBox</span>
+                    </div>
+                  </button>
+
+                  <button 
+                    class="switch-option" 
+                    [class.active]="driveStore.storageProvider() === 'google_drive'"
+                    (click)="driveStore.setStorageProvider('google_drive')">
+                    <span class="material-symbols-outlined option-icon">cloud_queue</span>
+                    <div class="option-details">
+                      <span class="option-name">Google Drive</span>
+                      <span class="option-sub">Criptografado na sua nuvem</span>
+                    </div>
+                  </button>
+                </div>
+
+                <!-- Contas Vinculadas do Google Drive -->
+                @if (driveStore.storageProvider() === 'google_drive') {
+                  <div class="gdrive-section fade-in">
+                    <h4 class="section-title">Contas Google Drive vinculadas</h4>
+                    
+                    @if (driveStore.linkedAccounts().length === 0) {
+                      <div class="warning-box">
+                        <span class="material-symbols-outlined warning-icon">warning</span>
+                        <p>Nenhuma conta vinculada. Para carregar arquivos via Google Drive, você precisa vincular sua conta do Google.</p>
+                      </div>
+                      
+                      <button class="google-link-btn" (click)="linkGoogleDrive()">
+                        <span class="material-symbols-outlined">link</span>
+                        Vincular nova conta Google
+                      </button>
+                    } @else {
+                      <div class="accounts-list">
+                        @for (acc of driveStore.linkedAccounts(); track acc.id) {
+                          <div class="account-item">
+                            <div class="account-info">
+                              <span class="material-symbols-outlined account-avatar-icon">account_circle</span>
+                              <span class="account-email">{{ acc.account_email }}</span>
+                            </div>
+                            <button class="unlink-btn-item" (click)="unlinkAccount(acc.id)" title="Desvincular conta">
+                              <span class="material-symbols-outlined text-danger">delete</span>
+                            </button>
+                          </div>
+                        }
+                      </div>
+
+                      <button class="google-link-btn outline-btn" (click)="linkGoogleDrive()">
+                        <span class="material-symbols-outlined">add</span>
+                        Vincular outra conta Google
+                      </button>
+                    }
+                  </div>
+                }
+              </div>
+
+              <!-- Segurança da Conta: Logout Global -->
+              <div class="settings-section" style="margin-top: 24px; border-top: 1px solid #e2e8f0; padding-top: 16px;">
+                <h4 class="section-title" style="color: #dc2626; margin-bottom: 4px;">Segurança da Conta</h4>
+                <p class="section-desc" style="margin-bottom: 12px;">Encerre todas as sessões ativas e deslogue em todos os outros dispositivos conectados.</p>
+                <button class="logout-global-btn" (click)="logoutGlobal()">
+                  <span class="material-symbols-outlined">devices</span>
+                  Sair de todos os dispositivos
+                </button>
+              </div>
+            </div>
+            
+            <div class="modal-footer">
+              <button class="btn-primary" (click)="closeSettings()">Salvar e Fechar</button>
+            </div>
+          </div>
+        </div>
+      }
     </header>
   `,
   styles: [
@@ -73,7 +259,7 @@ import { CommonModule } from '@angular/common';
         justify-content: space-between;
         padding: 8px 16px;
         height: 64px;
-        background-color: #f8f9fa;
+        background-color: #F8FAFD;
         border-bottom: none;
         box-sizing: border-box;
       }
@@ -102,7 +288,7 @@ import { CommonModule } from '@angular/common';
         flex: 1;
         max-width: 720px;
         height: 48px;
-        background: #e9eef6;
+        background: #E9EEF6;
         border-radius: 24px;
         display: flex;
         align-items: center;
@@ -199,86 +385,665 @@ import { CommonModule } from '@angular/common';
         right: 0;
         top: 100%;
         margin-top: 8px;
-        background: #ffffff;
-        border: 1px solid #dadce0;
-        border-radius: 16px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1), 0 1px 3px rgba(0,0,0,0.08);
-        min-width: 280px;
+        background: #e9eef6;
+        border: none;
+        border-radius: 28px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.15), 0 1px 5px rgba(0,0,0,0.1);
+        width: 360px;
         display: flex;
         flex-direction: column;
-        overflow: hidden;
-        z-index: 100;
-        padding: 8px 0;
+        z-index: 1000;
+        padding: 24px;
+        box-sizing: border-box;
       }
-      .profile-header {
-        padding: 16px 20px;
-        text-align: center;
-      }
-      .profile-email {
-        font-size: 14px;
-        color: #5f6368;
-      }
-      .profile-quota-section {
-        padding: 16px 20px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        background: #f8f9fa;
-        margin: 0 12px;
-        border-radius: 12px;
-      }
-      .quota-header {
+
+      .profile-close-btn {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        background: transparent;
+        border: none;
+        color: #1f1f1f;
+        cursor: pointer;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
         display: flex;
         align-items: center;
-        gap: 8px;
-        color: #202124;
+        justify-content: center;
+        transition: background 150ms;
       }
-      .quota-icon {
+
+      .profile-close-btn:hover {
+        background: rgba(0,0,0,0.06);
+      }
+
+      .profile-close-btn .material-symbols-outlined {
+        font-size: 20px;
+      }
+
+      .profile-email-header {
+        font-family: 'Roboto', sans-serif;
+        font-size: 14px;
+        font-weight: 500;
+        color: #3c4043;
+        text-align: center;
+        margin-bottom: 20px;
+        word-break: break-all;
+      }
+
+      .profile-main-section {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 100%;
+      }
+
+      .profile-pic-ring {
+        background: transparent;
+        padding: 0;
+        border-radius: 50%;
+        display: inline-block;
+      }
+
+      .profile-pic-wrapper {
+        position: relative;
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background: white;
+        padding: 3px;
+        box-sizing: border-box;
+      }
+
+      .profile-pic-large {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        object-fit: cover;
+      }
+
+      .profile-pic-fallback-large {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: #1a73e8;
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 32px;
+        font-weight: 500;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .profile-pic-camera-badge {
+        position: absolute;
+        bottom: -2px;
+        right: -2px;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        background: #ffffff;
+        border: 1px solid #dadce0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+        color: #1f1f1f;
+      }
+
+      .profile-pic-camera-badge .material-symbols-outlined {
+        font-size: 15px;
+      }
+
+      .profile-greeting {
+        font-size: 20px;
+        color: #1f1f1f;
+        font-family: 'Roboto', sans-serif;
+        margin-top: 14px;
+        text-align: center;
+      }
+
+      .profile-manage-account-btn {
+        background: transparent;
+        border: 1px solid #747775;
+        border-radius: 20px;
+        padding: 8px 24px;
+        font-size: 14px;
+        font-weight: 500;
+        color: #0b57d0;
+        cursor: pointer;
+        margin-top: 14px;
+        transition: background 150ms;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .profile-manage-account-btn:hover {
+        background: rgba(11, 87, 208, 0.06);
+      }
+
+      .profile-cards-section {
+        width: 100%;
+        margin-top: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .profile-card-row {
+        background: #ffffff;
+        border-radius: 20px;
+        padding: 14px 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        box-sizing: border-box;
+        cursor: pointer;
+        transition: background 150ms;
+        width: 100%;
+      }
+
+      .profile-card-row:hover:not(.no-hover) {
+        background: #f8fafc;
+      }
+
+      .profile-card-row.no-hover {
+        cursor: default;
+      }
+
+      .card-row-text {
+        font-size: 14px;
+        font-weight: 500;
+        color: #1f1f1f;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .card-row-bubbles {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .user-bubble {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: bold;
+        color: white;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .bubble-green { background: #137333; }
+      .bubble-orange { background: #c93300; }
+      .bubble-blue { background: #e8f0fe; color: #1a73e8; }
+
+      .bubble-chevron {
+        font-size: 18px;
+        color: #5f6368;
+        margin-left: 2px;
+      }
+
+      .quota-card-content {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+      }
+
+      .quota-card-icon {
         font-size: 20px;
         color: #5f6368;
       }
-      .quota-text {
+
+      .quota-card-text {
+        font-size: 13px;
+        color: #3c4043;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .profile-logout-btn {
+        background: #ffffff;
+        border: 1px solid #dadce0;
+        border-radius: 20px;
+        padding: 10px 24px;
         font-size: 14px;
         font-weight: 500;
-      }
-      .quota-progress-bar {
-        width: 100%;
-        height: 8px;
-        border-radius: 4px;
-        appearance: none;
-        -webkit-appearance: none;
-      }
-      .quota-progress-bar::-webkit-progress-bar {
-        background-color: #e0e0e0;
-        border-radius: 4px;
-      }
-      .quota-progress-bar::-webkit-progress-value {
-        background-color: #1a73e8;
-        border-radius: 4px;
-      }
-      .quota-text-sub {
-        font-size: 12px;
-        color: #5f6368;
-        text-align: right;
-      }
-      .dropdown-divider {
-        height: 1px;
-        background: #e0e0e0;
-        margin: 8px 0;
-      }
-      .dropdown-item {
-        padding: 12px 24px;
-        border: none;
-        background: transparent;
-        text-align: left;
-        font-size: 14px;
         color: #3c4043;
         cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        margin: 20px auto 0;
+        width: fit-content;
+        transition: background 150ms;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .profile-logout-btn:hover {
+        background: #f8f9fa;
+      }
+
+      .profile-logout-btn .material-symbols-outlined {
+        font-size: 18px;
+      }
+
+      .profile-dropdown-footer {
+        font-size: 11px;
+        color: #5f6368;
+        text-align: center;
+        margin-top: 20px;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .profile-card-expanded-container {
+        background: #ffffff;
+        border-radius: 20px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .profile-card-expanded-container .profile-card-row {
+        border-radius: 0;
+      }
+
+      .profile-card-subrow {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 20px;
+        background: #ffffff;
+        cursor: pointer;
+        transition: background 150ms;
+        box-sizing: border-box;
+      }
+
+      .profile-card-subrow:hover {
+        background: #f8fafc;
+      }
+
+      .subrow-details {
+        display: flex;
+        flex-direction: column;
+        font-family: 'Roboto', sans-serif;
+        min-width: 0;
+        text-align: left;
+      }
+
+      .subrow-name {
+        font-size: 14px;
+        font-weight: 500;
+        color: #1f1f1f;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .subrow-email {
+        font-size: 12px;
+        color: #5f6368;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .bubble-add {
+        background: #e8f0fe;
+        color: #0b57d0;
+      }
+
+      .bubble-add .material-symbols-outlined {
+        font-size: 18px;
+      }
+
+      .action-row-text {
+        font-size: 14px;
+        font-weight: 500;
+        color: #0b57d0;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .bubble-purple { background: #8e24aa; }
+      .bubble-teal { background: #00897b; }
+
+      .logout-global-btn {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: #fdf2f2;
+        border: 1px solid #fde8e8;
+        border-radius: 8px;
+        padding: 10px 16px;
+        font-size: 14px;
+        font-weight: 500;
+        color: #de350b;
+        cursor: pointer;
+        transition: background 150ms, border-color 150ms;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .logout-global-btn:hover {
+        background: #fde8e8;
+        border-color: #fbd5d5;
+      }
+
+      .logout-global-btn .material-symbols-outlined {
+        font-size: 20px;
+      }
+
+      /* Modal de Configurações & Backdrop */
+      .modal-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(15, 23, 42, 0.4);
+        backdrop-filter: blur(8px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+        animation: fadeInBackdrop 250ms ease-out;
+      }
+      
+      @keyframes fadeInBackdrop {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+
+      .settings-modal {
+        background: #ffffff;
+        border-radius: 20px;
+        width: 520px;
+        max-width: 90%;
+        box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+        overflow: hidden;
+        animation: slideUpModal 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
+        display: flex;
+        flex-direction: column;
+      }
+
+      @keyframes slideUpModal {
+        from { transform: translateY(40px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+      }
+
+      .modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px 24px;
+        border-bottom: 1px solid #f1f5f9;
+      }
+
+      .modal-header h3 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 600;
+        color: #0f172a;
+      }
+
+      .close-btn {
+        background: transparent;
+        border: none;
+        color: #64748b;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px;
+        border-radius: 50%;
+        transition: background-color 0.2s;
+      }
+
+      .close-btn:hover {
+        background-color: #f1f5f9;
+        color: #0f172a;
+      }
+
+      .modal-body {
+        padding: 24px;
+        flex: 1;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+      }
+
+      .settings-section {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .section-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: #1e293b;
+        margin: 0;
+      }
+
+      .section-desc {
+        font-size: 13px;
+        color: #64748b;
+        margin: 0;
+      }
+
+      .storage-switch-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-top: 8px;
+      }
+
+      .switch-option {
+        background: #f8fafc;
+        border: 2px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 16px;
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        cursor: pointer;
+        text-align: left;
+        transition: all 0.2s ease;
+      }
+
+      .switch-option:hover {
+        border-color: #cbd5e1;
+        background: #f1f5f9;
+      }
+
+      .switch-option.active {
+        border-color: #2563eb;
+        background: #eff6ff;
+      }
+
+      .option-icon {
+        font-size: 24px;
+        color: #64748b;
+        margin-top: 2px;
+      }
+
+      .switch-option.active .option-icon {
+        color: #2563eb;
+      }
+
+      .option-details {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .option-name {
+        font-size: 14px;
+        font-weight: 600;
+        color: #0f172a;
+      }
+
+      .option-sub {
+        font-size: 11px;
+        color: #64748b;
+      }
+
+      .gdrive-section {
+        border-top: 1px solid #f1f5f9;
+        margin-top: 16px;
+        padding-top: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .fade-in {
+        animation: fadeIn 0.2s ease-out;
+      }
+
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .warning-box {
+        background: #fffbeb;
+        border: 1px solid #fde68a;
+        border-radius: 8px;
+        padding: 12px;
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+      }
+
+      .warning-icon {
+        color: #d97706;
+        font-size: 20px;
+      }
+
+      .warning-box p {
+        margin: 0;
+        font-size: 12px;
+        color: #92400e;
+        line-height: 1.5;
+      }
+
+      .google-link-btn {
+        background: #2563eb;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 16px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
         transition: background 0.2s;
+      }
+
+      .google-link-btn:hover {
+        background: #1d4ed8;
+      }
+
+      .google-link-btn.outline-btn {
+        background: transparent;
+        color: #2563eb;
+        border: 1px solid #dbeafe;
+        margin-top: 8px;
+      }
+
+      .google-link-btn.outline-btn:hover {
+        background: #f0f5ff;
+        border-color: #bfdbfe;
+      }
+
+      .accounts-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .account-item {
+        background: #f8fafc;
+        border: 1px solid #f1f5f9;
+        border-radius: 8px;
+        padding: 10px 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .account-info {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .account-avatar-icon {
+        color: #94a3b8;
+        font-size: 20px;
+      }
+
+      .account-email {
+        font-size: 13px;
+        color: #334155;
         font-weight: 500;
       }
-      .dropdown-item:hover {
-        background: #f1f3f4;
+
+      .unlink-btn-item {
+        background: transparent;
+        border: none;
+        color: #94a3b8;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px;
+        border-radius: 4px;
+        transition: all 0.2s;
+      }
+
+      .unlink-btn-item:hover {
+        background: #fee2e2;
+        color: #ef4444;
+      }
+      
+      .text-danger {
+        color: inherit;
+        font-size: 20px;
+      }
+
+      .modal-footer {
+        padding: 16px 24px;
+        border-top: 1px solid #f1f5f9;
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .btn-primary {
+        background: #0f172a;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 10px 20px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+
+      .btn-primary:hover {
+        background: #1e293b;
       }
     `,
   ],
@@ -287,13 +1052,34 @@ export class TopbarComponent {
   protected readonly appState = inject(AppStateService);
   protected readonly driveStore = inject(DriveStore);
   private readonly authService = inject(AuthService);
+  private readonly cryptoService = inject(CryptoService);
 
   isProfileMenuOpen = signal(false);
+  isSettingsOpen = signal(false);
+  isAccountsExpanded = signal(false);
 
   @Output() unlockRequested = new EventEmitter<void>();
 
   toggleProfileMenu() {
-    this.isProfileMenuOpen.set(!this.isProfileMenuOpen());
+    const nextState = !this.isProfileMenuOpen();
+    this.isProfileMenuOpen.set(nextState);
+    if (nextState) {
+      this.isAccountsExpanded.set(false);
+      this.driveStore.loadLinkedAccounts();
+    }
+  }
+
+  getAccountName(email: string): string {
+    const parts = email.split('@');
+    if (parts.length === 0) return 'Conta Vinculada';
+    return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+  }
+
+  getBubbleColorClass(email: string): string {
+    const char = email.charAt(0).toLowerCase();
+    const index = char.charCodeAt(0) % 5;
+    const colors = ['bubble-green', 'bubble-orange', 'bubble-blue', 'bubble-purple', 'bubble-teal'];
+    return colors[index];
   }
 
   onUnlockClick() {
@@ -301,16 +1087,90 @@ export class TopbarComponent {
   }
 
   lockVault() {
+    // Wipe the key from RAM first
+    this.cryptoService.lockVault();
+    // Clear decrypted file names so they are not visible while locked
+    this.driveStore.clearDecryptedNames();
+    // Reset folder navigation to root
+    this.driveStore.navigateTo(null);
+    // Update app state
     this.appState.lock();
+  }
+
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    const isClickInside = target.closest('.avatar-container');
+    if (!isClickInside) {
+      this.isProfileMenuOpen.set(false);
+    }
   }
 
   logout() {
     this.authService.logout();
   }
 
+  logoutGlobal() {
+    this.closeSettings();
+    this.authService.logoutGlobal();
+  }
+
+  getQuotaPercentFormatted(): string {
+    const q = this.driveStore.quota();
+    if (!q || q.maxBytes === 0) return '0';
+    return ((q.usedBytes / q.maxBytes) * 100).toFixed(0);
+  }
+
+  getQuotaMaxFormatted(): string {
+    const q = this.driveStore.quota();
+    if (!q) return '5 TB';
+    return this.formatSize(q.maxBytes);
+  }
+
+  private formatSize(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(0)) + ' ' + sizes[i];
+  }
+
   getQuotaPercent(): string {
     const q = this.driveStore.quota();
     if (!q || q.maxBytes === 0) return '0';
     return ((q.usedBytes / q.maxBytes) * 100).toFixed(1);
+  }
+
+  getQuotaFormatted(): string {
+    const q = this.driveStore.quota();
+    return this.formatBytes(q.usedBytes) + ' de ' + this.formatBytes(q.maxBytes);
+  }
+
+  private formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  }
+
+  openSettings() {
+    this.isProfileMenuOpen.set(false);
+    this.isSettingsOpen.set(true);
+    this.driveStore.loadLinkedAccounts();
+  }
+
+  closeSettings() {
+    this.isSettingsOpen.set(false);
+  }
+
+  linkGoogleDrive() {
+    this.driveStore.linkGoogleDrive();
+  }
+
+  async unlinkAccount(id: number) {
+    if (confirm('Deseja realmente desvincular esta conta do Google Drive? Todos os arquivos associados a ela deixarão de estar acessíveis.')) {
+      await this.driveStore.unlinkGoogleAccount(id);
+    }
   }
 }

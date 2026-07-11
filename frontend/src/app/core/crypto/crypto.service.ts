@@ -5,6 +5,9 @@ import { environment } from '../../../environments/environment';
 
 import { KasumiCryptoService } from './kasumi-crypto.service';
 
+/** Fixed plaintext we encrypt to create a verifiable "known-plaintext" token. */
+const VAULT_CANARY = 'savebox-vault-canary-v1';
+
 /**
  * Cryptographic service using Kasumi Crypto (libsodium XChaCha20-Poly1305 and Argon2id).
  *
@@ -43,14 +46,77 @@ export class CryptoService {
   }
 
   /**
+   * Unlocks the vault by deriving the key from the passphrase and verifying
+   * it against the stored verification token from the backend.
+   * Throws if passphrase is incorrect.
+   *
+   * @param passphrase — The user's security phrase (plain text).
+   */
+  async unlockVault(passphrase: string): Promise<void> {
+    // Step 1: Derive candidate key
+    const salt = 'savebox-e2ee-salt-v1';
+    const candidateKey = await this.kasumi.deriveVaultKey(passphrase, salt);
+
+    // Step 2: Fetch stored verification ciphertext from backend
+    let vaultVerification: string | null = null;
+    try {
+      const res: any = await lastValueFrom(
+        this.http.get(`${environment.apiUrl}/api/vault/verification`, { withCredentials: true })
+      );
+      vaultVerification = res?.vault_verification ?? null;
+    } catch (e: any) {
+      // If no verification token exists yet (404), accept any passphrase (legacy vault)
+      // and silently store a verification token for future use
+      if (e?.status === 404) {
+        this.vaultKey = candidateKey;
+        this._isUnlocked.set(true);
+        await this._storeVerificationToken(candidateKey);
+        return;
+      }
+      throw e;
+    }
+
+    if (!vaultVerification) {
+      // No token stored; accept and migrate
+      this.vaultKey = candidateKey;
+      this._isUnlocked.set(true);
+      await this._storeVerificationToken(candidateKey);
+      return;
+    }
+
+    // Step 3: Attempt to decrypt the canary. If wrong key → decryptName throws/returns error marker
+    let decrypted: string;
+    try {
+      decrypted = await this.kasumi.decryptName(vaultVerification, candidateKey);
+    } catch {
+      throw new Error('WRONG_PASSPHRASE');
+    }
+
+    if (decrypted !== VAULT_CANARY) {
+      throw new Error('WRONG_PASSPHRASE');
+    }
+
+    // Step 4: Key is correct, store it
+    this.vaultKey = candidateKey;
+    this._isUnlocked.set(true);
+  }
+
+  /**
    * Initializes a new vault (Onboarding).
-   * Mocks saving the vault key hash to the backend.
+   * Encrypts a canary plaintext with the derived key and stores it on the backend.
    */
   async initializeVault(passphrase: string): Promise<void> {
     await this.deriveVaultKey(passphrase);
-    
-    // API Call para inicializar o drive no backend
-    await lastValueFrom(this.http.post(`${environment.apiUrl}/api/vault/init`, {}, { withCredentials: true }));
+
+    // Create vault verification token: encrypt the known canary with our vault key
+    const vaultVerification = await this.kasumi.encryptName(VAULT_CANARY, this.vaultKey!);
+
+    // API Call para inicializar o drive no backend, sending verification token
+    await lastValueFrom(this.http.post(
+      `${environment.apiUrl}/api/vault/init`,
+      { vault_verification: vaultVerification },
+      { withCredentials: true }
+    ));
   }
 
   /**
@@ -68,15 +134,20 @@ export class CryptoService {
   getVaultKey(): Uint8Array | null {
     return this.vaultKey;
   }
-  /**
+
   /**
    * Decrypts a Kasumi XChaCha20-Poly1305 encrypted base64 string.
+   * Returns a placeholder string on error (for file name display).
    */
   async decryptName(base64Ciphertext: string): Promise<string> {
     if (!this.vaultKey) {
-      return '[Trancado] ' + base64Ciphertext;
+      return base64Ciphertext;
     }
-    return this.kasumi.decryptName(base64Ciphertext, this.vaultKey);
+    try {
+      return await this.kasumi.decryptName(base64Ciphertext, this.vaultKey);
+    } catch {
+      return '[Erro] Nome ilegível';
+    }
   }
 
   /**
@@ -92,5 +163,22 @@ export class CryptoService {
    */
   async hashName(plaintext: string): Promise<string> {
     return this.kasumi.hashName(plaintext);
+  }
+
+  /**
+   * Silently stores a vault verification token for legacy vaults.
+   * Fires-and-forgets; errors are non-fatal.
+   */
+  private async _storeVerificationToken(key: Uint8Array): Promise<void> {
+    try {
+      const vaultVerification = await this.kasumi.encryptName(VAULT_CANARY, key);
+      await lastValueFrom(this.http.post(
+        `${environment.apiUrl}/api/vault/init`,
+        { vault_verification: vaultVerification },
+        { withCredentials: true }
+      ));
+    } catch {
+      // Non-fatal: will be retried next unlock
+    }
   }
 }

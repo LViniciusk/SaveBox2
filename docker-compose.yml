@@ -21,6 +21,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: savebox_api
+    user: "root"
     restart: unless-stopped
     depends_on:
       - postgres-db
@@ -39,6 +40,7 @@ services:
       EMAIL_VALIDATION_API_KEY: ${EMAIL_VALIDATION_API_KEY}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
       SAVEBOX_STORAGE_PATH: /app/savebox_storage/
     volumes:
       - ./savebox_storage:/app/savebox_storage
