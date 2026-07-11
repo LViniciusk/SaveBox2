@@ -1,15 +1,19 @@
-import { Component, input, inject, signal, computed, HostListener } from '@angular/core';
+import { Component, input, inject, signal, computed, Output, EventEmitter, OnInit, OnDestroy, NgZone, Renderer2 } from '@angular/core';
 import { DriveFile, QuotaState, DriveStore } from '../../state/drive.store';
 import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.component';
 import { AppStateService } from '../../../../core/state/app-state.service';
 import { CommonModule } from '@angular/common';
+import { DialogService } from '../../../../core/dialog/dialog.service';
 
 @Component({
   selector: 'app-file-list',
   standalone: true,
   imports: [FileIconComponent, CommonModule],
+  host: {
+    style: 'display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%;'
+  },
   template: `
-    <div class="file-list-container">
+    <div class="file-list-container" (contextmenu)="onContainerContextMenu($event)" (click)="selectedFileId.set(null)">
       <div class="file-list-header" [class.storage-view]="viewMode() === 'storage'" [class.unlocked]="!isLocked()">
         <button class="col col-name sortable-header" (click)="setSort('name')">
           Nome
@@ -50,7 +54,23 @@ import { CommonModule } from '@angular/common';
 
       <div class="file-list-body">
         @for (file of sortedFiles(); track file.id) {
-          <div class="file-row" tabindex="0" role="row" [class.storage-view]="viewMode() === 'storage'" [class.unlocked]="!isLocked()" (click)="onFileClick(file)" (contextmenu)="onContextMenu(file, $event)">
+          <div class="file-row" 
+               tabindex="0" 
+               role="row" 
+               [class.storage-view]="viewMode() === 'storage'" 
+               [class.unlocked]="!isLocked()" 
+               [class.selected]="selectedFileId() === file.id"
+               [class.dragging]="draggedFile()?.id === file.id"
+               [class.drag-over]="dragOverFolderId() === file.id"
+               [attr.draggable]="(!isLocked() && file.id !== -9999) ? 'true' : null"
+               (dragstart)="onDragStart($event, file, dragPreview)"
+               (dragover)="onDragOver($event, file)"
+               (dragleave)="onDragLeave($event, file)"
+               (dragend)="onDragEnd()"
+               (drop)="onDrop($event, file)"
+               (click)="onFileClick(file, $event)" 
+               (dblclick)="onFileDblClick(file, $event)"
+               (contextmenu)="onContextMenu(file, $event)">
             <div class="col col-name">
               <app-file-icon [fileType]="file.type" [locked]="isLocked()" />
               <span class="file-name">{{ getDisplayName(file) }}</span>
@@ -110,10 +130,6 @@ import { CommonModule } from '@angular/common';
                       <span class="material-symbols-outlined">edit</span>
                       Renomear
                     </button>
-                    <button class="menu-item" (click)="onMove(file, $event)">
-                      <span class="material-symbols-outlined">drive_file_move</span>
-                      Mover
-                    </button>
                     <div style="height: 1px; background: #e8eaed; margin: 4px 0;"></div>
                     <button class="menu-item" (click)="onDelete(file, $event)" style="color: #d93025;">
                       <span class="material-symbols-outlined" style="color: #d93025;">delete</span>
@@ -126,12 +142,42 @@ import { CommonModule } from '@angular/common';
           </div>
         }
       </div>
+
+      @if (isContainerMenuOpen() && contextMenuPosition()) {
+        <div class="action-menu"
+             [style.position]="'fixed'"
+             [style.top]="contextMenuPosition()?.y + 'px'"
+             [style.left]="contextMenuPosition()?.x + 'px'"
+             [style.right]="'auto'"
+             [style.margin]="'0'"
+             (click)="$event.stopPropagation()">
+          <button class="menu-item" (click)="onCreateFolder($event)">
+            <span class="material-symbols-outlined">create_new_folder</span>
+            Nova pasta
+          </button>
+          <div style="height: 1px; background: #e8eaed; margin: 4px 0;"></div>
+          <button class="menu-item" (click)="onUploadFile($event)">
+            <span class="material-symbols-outlined">upload_file</span>
+            Upload arquivo
+          </button>
+        </div>
+      }
+
+      <!-- Drag Image Custom Preview (hidden offscreen) -->
+      <div #dragPreview class="drag-custom-preview" style="position: absolute; left: -9999px; top: -9999px;">
+        <span class="material-symbols-outlined drag-icon">folder</span>
+        <span class="drag-name"></span>
+      </div>
     </div>
   `,
   styles: [
     `
       .file-list-container {
         width: 100%;
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 100%;
         overflow: visible;
       }
 
@@ -179,6 +225,8 @@ import { CommonModule } from '@angular/common';
       }
 
       .file-list-body {
+        flex: 1;
+        overflow-y: auto;
         min-height: 200px;
       }
 
@@ -209,8 +257,29 @@ import { CommonModule } from '@angular/common';
         background: #EDEDED;
       }
 
+      .file-row.dragging {
+        opacity: 0.4;
+        background: #f1f3f4;
+      }
+
+      .file-row.drag-over {
+        background-color: #c2e7ff !important;
+        outline: 2px solid #1a73e8 !important;
+        outline-offset: -2px;
+      }
+
       .file-row:focus-visible {
         background: #e8f0fe;
+      }
+
+      .file-row.selected {
+        background-color: #e8f0fe !important;
+      }
+      .file-row.selected .file-name,
+      .file-row.selected .col-owner,
+      .file-row.selected .col-modified,
+      .file-row.selected .col-size {
+        color: #1a73e8;
       }
 
       .file-row:active {
@@ -355,6 +424,7 @@ import { CommonModule } from '@angular/common';
         width: 100%;
       }
 
+
       .menu-item:hover {
         background: #f1f3f4;
         color: #202124;
@@ -364,35 +434,107 @@ import { CommonModule } from '@angular/common';
         font-size: 20px;
         color: #5f6368;
       }
+
+      .drag-custom-preview {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 8px 16px;
+        box-shadow: 0 4px 12px 0 rgba(60,64,67,0.3);
+        border: 1px solid #dadce0;
+        pointer-events: none;
+        white-space: nowrap;
+        font-family: 'Roboto', sans-serif;
+        font-size: 14px;
+        color: #202124;
+        z-index: 9999;
+      }
+
+      .drag-custom-preview .drag-icon {
+        font-size: 24px;
+        user-select: none;
+      }
+      
+      .drag-custom-preview .drag-name {
+        font-weight: 400;
+        max-width: 150px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
     `
   ],
 })
-export class FileListComponent {
+export class FileListComponent implements OnInit, OnDestroy {
   private readonly appState = inject(AppStateService);
   private readonly driveStore = inject(DriveStore);
+  private readonly ngZone = inject(NgZone);
+  private readonly renderer = inject(Renderer2);
+  private readonly dialogService = inject(DialogService);
+
+  private clickUnsub: (() => void) | null = null;
+  private resizeUnsub: (() => void) | null = null;
+  private scrollUnsub: (() => void) | null = null;
+
+  ngOnInit() {
+    this.ngZone.runOutsideAngular(() => {
+      this.clickUnsub = this.renderer.listen('document', 'click', () => {
+        if (this.activeMenuFileId() !== null || this.isContainerMenuOpen()) {
+          this.ngZone.run(() => this.closeMenu());
+        }
+      });
+
+      this.resizeUnsub = this.renderer.listen('window', 'resize', () => {
+        if (this.activeMenuFileId() !== null || this.isContainerMenuOpen()) {
+          this.ngZone.run(() => this.closeMenu());
+        }
+      });
+
+      this.scrollUnsub = this.renderer.listen('window', 'scroll', () => {
+        if (this.activeMenuFileId() !== null || this.isContainerMenuOpen()) {
+          this.ngZone.run(() => this.closeMenu());
+        }
+      });
+    });
+  }
+
+  ngOnDestroy() {
+    if (this.clickUnsub) this.clickUnsub();
+    if (this.resizeUnsub) this.resizeUnsub();
+    if (this.scrollUnsub) this.scrollUnsub();
+  }
 
   readonly files = input.required<DriveFile[]>();
   readonly viewMode = input<'drive' | 'storage' | 'trash'>('drive');
   readonly quota = input<QuotaState | null>(null);
 
+  @Output() createFolderRequested = new EventEmitter<void>();
+  @Output() uploadFileRequested = new EventEmitter<void>();
+  @Output() videoSelected = new EventEmitter<DriveFile>();
+
   readonly isLocked = this.appState.isLocked;
   readonly activeMenuFileId = signal<number | null>(null);
   readonly contextMenuPosition = signal<{ x: number, y: number } | null>(null);
+  readonly isContainerMenuOpen = signal(false);
+  readonly selectedFileId = signal<number | null>(null);
+
+  readonly draggedFile = signal<DriveFile | null>(null);
+  readonly dragOverFolderId = signal<number | null>(null);
 
   sortColumn = signal<string>('name');
   sortDirection = signal<'asc' | 'desc'>('asc');
 
-  @HostListener('document:click')
-  @HostListener('window:resize')
-  @HostListener('window:scroll')
   closeMenu() {
     this.activeMenuFileId.set(null);
     this.contextMenuPosition.set(null);
+    this.isContainerMenuOpen.set(false);
   }
 
   toggleMenu(file: DriveFile, event: Event) {
     event.stopPropagation();
     this.contextMenuPosition.set(null);
+    this.isContainerMenuOpen.set(false);
     if (this.activeMenuFileId() === file.id) {
       this.activeMenuFileId.set(null);
     } else {
@@ -420,6 +562,165 @@ export class FileListComponent {
 
     this.contextMenuPosition.set({ x, y });
     this.activeMenuFileId.set(file.id);
+    this.isContainerMenuOpen.set(false);
+  }
+
+  onContainerContextMenu(event: MouseEvent) {
+    if (this.isLocked() || this.viewMode() !== 'drive') return;
+    
+    // Do not show menu when right clicking header
+    const target = event.target as HTMLElement;
+    if (target.closest('.file-list-header')) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const menuWidth = 200;
+    const menuHeight = 100;
+
+    let x = event.clientX;
+    let y = event.clientY;
+
+    if (x + menuWidth > window.innerWidth) {
+      x = window.innerWidth - menuWidth - 10;
+    }
+    if (y + menuHeight > window.innerHeight) {
+      y = window.innerHeight - menuHeight - 10;
+    }
+
+    this.contextMenuPosition.set({ x, y });
+    this.isContainerMenuOpen.set(true);
+    this.activeMenuFileId.set(null);
+  }
+
+  onCreateFolder(event: Event) {
+    event.stopPropagation();
+    this.closeMenu();
+    this.createFolderRequested.emit();
+  }
+
+  onUploadFile(event: Event) {
+    event.stopPropagation();
+    this.closeMenu();
+    this.uploadFileRequested.emit();
+  }
+
+  onDragStart(event: DragEvent, file: DriveFile, previewEl: HTMLElement) {
+    if (this.isLocked() || file.id === -9999) {
+      event.preventDefault();
+      return;
+    }
+    this.draggedFile.set(file);
+    
+    // Synchronously update drag preview card element in DOM
+    const iconEl = previewEl.querySelector('.drag-icon') as HTMLElement;
+    const nameEl = previewEl.querySelector('.drag-name') as HTMLElement;
+    
+    if (iconEl) {
+      iconEl.textContent = this.getFileIcon(file);
+      iconEl.style.color = this.getFileIconColor(file);
+      
+      // If it's a folder, fill it
+      if (file.type === 'folder') {
+        iconEl.style.fontVariationSettings = "'FILL' 1";
+      } else {
+        iconEl.style.fontVariationSettings = "'FILL' 0";
+      }
+    }
+    if (nameEl) {
+      nameEl.textContent = this.getDisplayName(file);
+    }
+    
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', file.id.toString());
+      // Adjust offset so mouse cursor centers on preview card
+      event.dataTransfer.setDragImage(previewEl, 20, 20);
+    }
+  }
+
+  onDragOver(event: DragEvent, targetFile: DriveFile) {
+    if (this.isLocked()) return;
+    const dragged = this.draggedFile();
+    if (!dragged) return;
+
+    // Only folders can receive items
+    if (!targetFile.isFolder) return;
+
+    if (targetFile.id === -9999) {
+      // Cannot drop back to parent if already in root or already in that parent
+      if (dragged.parentId === targetFile.parentId || dragged.folderId === targetFile.parentId) return;
+    } else {
+      // Cannot drop an item into itself
+      if (dragged.id === targetFile.id) return;
+      
+      // Cannot drop into its own parent folder
+      if (dragged.parentId === targetFile.id || dragged.folderId === targetFile.id) return;
+    }
+
+    // Prevent default to allow drop
+    event.preventDefault();
+    this.dragOverFolderId.set(targetFile.id);
+  }
+
+  onDragLeave(event: DragEvent, file: DriveFile) {
+    if (this.dragOverFolderId() === file.id) {
+      this.dragOverFolderId.set(null);
+    }
+  }
+
+  onDragEnd() {
+    this.draggedFile.set(null);
+    this.dragOverFolderId.set(null);
+  }
+
+  async onDrop(event: DragEvent, targetFile: DriveFile) {
+    if (this.isLocked()) return;
+    event.preventDefault();
+    this.dragOverFolderId.set(null);
+    
+    const dragged = this.draggedFile();
+    if (!dragged) return;
+    
+    const targetFolderId = (targetFile.id === -9999 ? targetFile.parentId : targetFile.id) ?? null;
+    
+    try {
+      await this.driveStore.moveItem(dragged, targetFolderId);
+    } catch (e: any) {
+      alert(e?.message || 'Erro ao mover item');
+    }
+    
+    this.draggedFile.set(null);
+  }
+
+  getFileIcon(file: DriveFile): string {
+    if (this.isLocked()) return 'lock';
+    const typeMap: Record<string, string> = {
+      folder: 'folder',
+      pdf: 'picture_as_pdf',
+      image: 'image',
+      doc: 'description',
+      spreadsheet: 'table_chart',
+      video: 'videocam',
+      audio: 'audio_file',
+    };
+    return typeMap[file.type] ?? 'insert_drive_file';
+  }
+
+  getFileIconColor(file: DriveFile): string {
+    if (this.isLocked()) return '#9aa0a6';
+    const colorMap: Record<string, string> = {
+      folder: '#5f6368',
+      pdf: '#ea4335',
+      image: '#ea4335',
+      doc: '#4285f4',
+      spreadsheet: '#34a853',
+      video: '#ea4335',
+      audio: '#ff6d00',
+    };
+    return colorMap[file.type] ?? '#5f6368';
   }
 
   async onRestore(file: DriveFile, event: Event) {
@@ -435,7 +736,12 @@ export class FileListComponent {
   async onPermanentDelete(file: DriveFile, event: Event) {
     event.stopPropagation();
     this.activeMenuFileId.set(null);
-    const confirmed = confirm(`Tem certeza de que deseja apagar permanentemente "${file.decryptedName || file.encryptedName}"? Esta ação não pode ser desfeita.`);
+    const confirmed = await this.dialogService.confirm(
+      'Excluir definitivamente?',
+      `O item "${file.decryptedName || file.encryptedName}" será excluído definitivamente. Não é possível desfazer essa ação.`,
+      'Excluir definitivamente',
+      true
+    );
     if (!confirmed) return;
     try {
       await this.driveStore.permanentDeleteItem(file);
@@ -458,7 +764,7 @@ export class FileListComponent {
   async onRename(file: DriveFile, event: Event) {
     event.stopPropagation();
     this.activeMenuFileId.set(null);
-    const newName = prompt('Novo nome:', file.decryptedName || file.encryptedName);
+    const newName = await this.dialogService.prompt('Renomear', file.decryptedName || file.encryptedName, 'Nome do item', 'OK');
     if (!newName || newName === (file.decryptedName || file.encryptedName)) return;
 
     try {
@@ -512,7 +818,11 @@ export class FileListComponent {
     event.stopPropagation();
     this.activeMenuFileId.set(null);
 
-    const confirmed = confirm(`Tem certeza de que deseja mover "${file.decryptedName || file.encryptedName}" para a lixeira?`);
+    const confirmed = await this.dialogService.confirm(
+      'Mover para a lixeira?',
+      `Tem certeza de que deseja mover "${file.decryptedName || file.encryptedName}" para a lixeira?`,
+      'Mover para a lixeira'
+    );
     if (!confirmed) return;
 
     try {
@@ -625,7 +935,14 @@ export class FileListComponent {
     return pct.toFixed(2) + '%';
   }
 
-  async onFileClick(file: DriveFile) {
+  onFileClick(file: DriveFile, event: Event) {
+    event.stopPropagation();
+    if (this.isLocked()) return;
+    this.selectedFileId.set(file.id);
+  }
+
+  onFileDblClick(file: DriveFile, event: Event) {
+    event.stopPropagation();
     if (this.isLocked()) return;
     if (file.id === -9999) {
       this.driveStore.navigateTo(file.parentId ?? null);
@@ -633,13 +950,10 @@ export class FileListComponent {
     }
     if (file.isFolder) {
       this.driveStore.navigateTo(file.id);
+    } else if (file.type === 'video') {
+      this.videoSelected.emit(file);
     } else {
-      try {
-        await this.driveStore.downloadFile(file);
-      } catch (e: any) {
-        console.error('Erro no download', e);
-        alert('Falha ao transferir ficheiro. Pode estar corrompido ou encriptado com outra chave.');
-      }
+      this.selectedFileId.set(null);
     }
   }
 }

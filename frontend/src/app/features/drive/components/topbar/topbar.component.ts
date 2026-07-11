@@ -4,6 +4,7 @@ import { AuthService } from '../../../../core/auth/auth.service';
 import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { DriveStore } from '../../state/drive.store';
 import { CommonModule } from '@angular/common';
+import { DialogService } from '../../../../core/dialog/dialog.service';
 
 @Component({
   selector: 'app-topbar',
@@ -154,10 +155,10 @@ import { CommonModule } from '@angular/common';
 
       <!-- Modal de Configurações -->
       @if (isSettingsOpen()) {
-        <div class="modal-backdrop" (click)="closeSettings()">
-          <div class="modal-content settings-modal" (click)="$event.stopPropagation()">
+        <div class="modal-backdrop" [class.closing]="isSettingsClosing()" (click)="closeSettings()">
+          <div class="modal-content settings-modal" [class.closing]="isSettingsClosing()" (click)="$event.stopPropagation()">
             <div class="modal-header">
-              <h3>Configurações do Cofre</h3>
+              <h3>Configurações do Drive</h3>
               <button class="close-btn" (click)="closeSettings()">
                 <span class="material-symbols-outlined">close</span>
               </button>
@@ -230,6 +231,68 @@ import { CommonModule } from '@angular/common';
                     }
                   </div>
                 }
+              </div>
+
+              <!-- Alterar Frase de Segurança -->
+              <div class="settings-section" style="margin-top: 24px; border-top: 1px solid #e2e8f0; padding-top: 16px;">
+                <h4 class="section-title" style="margin-bottom: 4px;">Alterar Frase de Segurança</h4>
+                <p class="section-desc" style="margin-bottom: 12px;">Atualize a frase utilizada para proteger seu drive.</p>
+                
+                <div class="phrase-form" style="display: flex; flex-direction: column; gap: 8px;">
+                  <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                    <label style="font-size: 12px; font-weight: 500; color: #5f6368;">Frase Atual</label>
+                    <input 
+                      type="password" 
+                      [value]="oldPhrase()" 
+                      (input)="oldPhrase.set($any($event.target).value)"
+                      style="padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px;"
+                      placeholder="Introduza a frase atual"
+                    />
+                  </div>
+                  
+                  <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                    <label style="font-size: 12px; font-weight: 500; color: #5f6368;">Nova Frase</label>
+                    <input 
+                      type="password" 
+                      [value]="newPhrase()" 
+                      (input)="newPhrase.set($any($event.target).value)"
+                      style="padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px;"
+                      placeholder="Minimo 8 caracteres"
+                    />
+                  </div>
+                  
+                  <div class="form-group" style="display: flex; flex-direction: column; gap: 4px;">
+                    <label style="font-size: 12px; font-weight: 500; color: #5f6368;">Confirmar Nova Frase</label>
+                    <input 
+                      type="password" 
+                      [value]="confirmPhrase()" 
+                      (input)="confirmPhrase.set($any($event.target).value)"
+                      style="padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px;"
+                      placeholder="Repita a nova frase"
+                    />
+                  </div>
+
+                  @if (changePhraseError()) {
+                    <div style="font-size: 12px; color: #d93025; font-weight: 500; margin-top: 4px;">
+                      {{ changePhraseError() }}
+                    </div>
+                  }
+
+                  @if (changePhraseSuccess()) {
+                    <div style="font-size: 12px; color: #137333; font-weight: 500; margin-top: 4px;">
+                      {{ changePhraseSuccess() }}
+                    </div>
+                  }
+
+                  <button 
+                    class="btn-primary" 
+                    [disabled]="isChangingPhrase() || !cryptoService.isVaultUnlocked()"
+                    (click)="changeSecurityPhrase()"
+                    style="margin-top: 8px; align-self: flex-start; padding: 8px 16px; background-color: #1a73e8; color: white; border: none; border-radius: 4px; font-size: 13px; font-weight: 500; cursor: pointer;"
+                  >
+                    {{ isChangingPhrase() ? 'A processar...' : 'Atualizar Frase' }}
+                  </button>
+                </div>
               </div>
 
               <!-- Segurança da Conta: Logout Global -->
@@ -747,12 +810,18 @@ import { CommonModule } from '@angular/common';
         width: 100vw;
         height: 100vh;
         background: rgba(15, 23, 42, 0.4);
-        backdrop-filter: blur(8px);
         display: flex;
         align-items: center;
         justify-content: center;
         z-index: 2000;
-        animation: fadeInBackdrop 250ms ease-out;
+        animation: fadeInBackdrop 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        transition: opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
+        transform: translate3d(0, 0, 0);
+        will-change: opacity;
+      }
+      .modal-backdrop.closing {
+        opacity: 0;
+        pointer-events: none;
       }
       
       @keyframes fadeInBackdrop {
@@ -765,15 +834,36 @@ import { CommonModule } from '@angular/common';
         border-radius: 20px;
         width: 520px;
         max-width: 90%;
+        max-height: 85vh;
         box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
         overflow: hidden;
-        animation: slideUpModal 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
+        animation: slideUpModal 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
         display: flex;
         flex-direction: column;
+        transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1), opacity 200ms cubic-bezier(0.16, 1, 0.3, 1);
+        transform: translate3d(0, 0, 0);
+        will-change: transform, opacity;
+      }
+      .settings-modal.closing {
+        transform: translate3d(0, 20px, 0);
+        opacity: 0;
+      }
+
+      @media (max-width: 576px) {
+        .settings-modal {
+          width: 95%;
+          max-width: 95%;
+          max-height: 90vh;
+          border-radius: 12px;
+        }
+        .modal-body {
+          padding: 16px !important;
+          gap: 16px !important;
+        }
       }
 
       @keyframes slideUpModal {
-        from { transform: translateY(40px); opacity: 0; }
+        from { transform: translateY(20px); opacity: 0; }
         to { transform: translateY(0); opacity: 1; }
       }
 
@@ -817,6 +907,7 @@ import { CommonModule } from '@angular/common';
         display: flex;
         flex-direction: column;
         gap: 24px;
+        scroll-behavior: auto !important;
       }
 
       .settings-section {
@@ -1052,11 +1143,20 @@ export class TopbarComponent {
   protected readonly appState = inject(AppStateService);
   protected readonly driveStore = inject(DriveStore);
   private readonly authService = inject(AuthService);
-  private readonly cryptoService = inject(CryptoService);
+  protected readonly cryptoService = inject(CryptoService);
+  protected readonly dialogService = inject(DialogService);
 
   isProfileMenuOpen = signal(false);
   isSettingsOpen = signal(false);
+  isSettingsClosing = signal(false);
   isAccountsExpanded = signal(false);
+
+  oldPhrase = signal('');
+  newPhrase = signal('');
+  confirmPhrase = signal('');
+  changePhraseError = signal('');
+  changePhraseSuccess = signal('');
+  isChangingPhrase = signal(false);
 
   @Output() unlockRequested = new EventEmitter<void>();
 
@@ -1161,7 +1261,57 @@ export class TopbarComponent {
   }
 
   closeSettings() {
-    this.isSettingsOpen.set(false);
+    this.isSettingsClosing.set(true);
+    setTimeout(() => {
+      this.isSettingsOpen.set(false);
+      this.isSettingsClosing.set(false);
+      this.oldPhrase.set('');
+      this.newPhrase.set('');
+      this.confirmPhrase.set('');
+      this.changePhraseError.set('');
+      this.changePhraseSuccess.set('');
+    }, 200);
+  }
+
+  async changeSecurityPhrase() {
+    this.changePhraseError.set('');
+    this.changePhraseSuccess.set('');
+
+    const oldVal = this.oldPhrase();
+    const newVal = this.newPhrase();
+    const confVal = this.confirmPhrase();
+
+    if (!oldVal || !newVal || !confVal) {
+      this.changePhraseError.set('Todos os campos sao obrigatorios.');
+      return;
+    }
+
+    if (newVal !== confVal) {
+      this.changePhraseError.set('A nova frase e a confirmacao nao coincidem.');
+      return;
+    }
+
+    if (newVal.length < 8) {
+      this.changePhraseError.set('A nova frase deve ter no minimo 8 caracteres.');
+      return;
+    }
+
+    this.isChangingPhrase.set(true);
+    try {
+      await this.cryptoService.changeSecurityPhrase(oldVal, newVal);
+      this.changePhraseSuccess.set('Frase de seguranca alterada com sucesso! O arquivo nanika-recovery.txt foi baixado.');
+      this.oldPhrase.set('');
+      this.newPhrase.set('');
+      this.confirmPhrase.set('');
+    } catch (e: any) {
+      if (e?.message === 'WRONG_PASSPHRASE') {
+        this.changePhraseError.set('A frase de seguranca atual esta incorreta.');
+      } else {
+        this.changePhraseError.set(e?.message || 'Erro ao alterar a frase de seguranca.');
+      }
+    } finally {
+      this.isChangingPhrase.set(false);
+    }
   }
 
   linkGoogleDrive() {
@@ -1169,7 +1319,13 @@ export class TopbarComponent {
   }
 
   async unlinkAccount(id: number) {
-    if (confirm('Deseja realmente desvincular esta conta do Google Drive? Todos os arquivos associados a ela deixarão de estar acessíveis.')) {
+    const confirmed = await this.dialogService.confirm(
+      'Desvincular conta?',
+      'Deseja realmente desvincular esta conta do Google Drive? Todos os arquivos associados a ela deixarão de estar acessíveis.',
+      'Desvincular',
+      true
+    );
+    if (confirmed) {
       await this.driveStore.unlinkGoogleAccount(id);
     }
   }

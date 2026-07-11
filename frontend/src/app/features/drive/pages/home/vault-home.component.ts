@@ -1,11 +1,13 @@
 import { Component, inject, computed, signal, OnInit, effect, HostListener } from '@angular/core';
+import { DialogService } from '../../../../core/dialog/dialog.service';
 import { AppStateService, AppStatus } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
 import { CryptoService } from '../../../../core/crypto/crypto.service';
-import { DriveStore } from '../../state/drive.store';
+import { DriveStore, DriveFile } from '../../state/drive.store';
 import { FileListComponent } from '../../components/file-list/file-list.component';
 import { TopbarComponent } from '../../components/topbar/topbar.component';
 import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal.component';
+import { VideoPlayerComponent } from '../../components/video-player/video-player.component';
 import { CommonModule } from '@angular/common';
 
 /**
@@ -28,7 +30,7 @@ import { CommonModule } from '@angular/common';
 @Component({
   selector: 'app-vault-home',
   standalone: true,
-  imports: [FileListComponent, TopbarComponent, UnlockModalComponent, CommonModule],
+  imports: [FileListComponent, TopbarComponent, UnlockModalComponent, VideoPlayerComponent, CommonModule],
   template: `
     <div class="vault-layout">
       <!-- ===== TOPBAR ===== -->
@@ -151,7 +153,7 @@ import { CommonModule } from '@angular/common';
 
           <!-- File List / Transfers View -->
           @if (currentView() === 'trash') {
-            <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" />
+            <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" (videoSelected)="activeVideoFile.set($event)" />
           } @else if (currentView() === 'transfers') {
             <div class="transfers-container">
               <div class="transfers-header">
@@ -172,7 +174,7 @@ import { CommonModule } from '@angular/common';
               } @else {
                 <div class="transfers-list">
                   @for (t of driveStore.transfers(); track t.id) {
-                    <div class="transfer-card" [class.error]="t.status === 'error'" [class.success]="t.status === 'success'">
+                    <div class="transfer-card" [class.error]="t.status === 'error'" [class.success]="t.status === 'success'" [class.paused]="t.status === 'paused'">
                       <div class="transfer-icon-area">
                         @if (t.type === 'upload') {
                           <span class="material-symbols-outlined transfer-type-icon upload">upload</span>
@@ -186,10 +188,25 @@ import { CommonModule } from '@angular/common';
                         <div class="transfer-meta">
                           <span class="transfer-type-badge">{{ t.type === 'upload' ? 'Upload' : 'Download' }}</span>
                           <span class="transfer-time">{{ t.timestamp | date:'shortTime' }}</span>
+                          @if (t.status === 'processing') {
+                            <span class="transfer-speed" style="margin-left: 8px; color: #1a73e8; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;">
+                              <span class="material-symbols-outlined" style="font-size: 14px;">speed</span>
+                              {{ t.speed || 'Calculando...' }}
+                            </span>
+                            <span class="transfer-eta" style="margin-left: 8px; color: #5f6368; display: inline-flex; align-items: center; gap: 4px;">
+                              <span class="material-symbols-outlined" style="font-size: 14px;">schedule</span>
+                              {{ t.eta }}
+                            </span>
+                          } @else if (t.status === 'paused') {
+                            <span class="transfer-speed" style="margin-left: 8px; color: #d97706; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;">
+                              <span class="material-symbols-outlined" style="font-size: 14px;">pause</span>
+                              Pausado
+                            </span>
+                          }
                         </div>
-                        @if (t.status === 'processing') {
+                        @if (t.status === 'processing' || t.status === 'paused') {
                           <div class="transfer-progress-bar-container">
-                            <div class="transfer-progress-bar-fill" [style.width.%]="t.progress"></div>
+                            <div class="transfer-progress-bar-fill" [style.width.%]="t.progress" [style.background-color]="t.status === 'paused' ? '#d97706' : '#1a73e8'"></div>
                           </div>
                         }
                         @if (t.status === 'error' && t.errorMsg) {
@@ -197,16 +214,26 @@ import { CommonModule } from '@angular/common';
                         }
                       </div>
 
-                      <div class="transfer-status-area">
+                      <div class="transfer-status-area" style="display: flex; align-items: center; gap: 8px;">
                         @if (t.status === 'processing') {
                           <div class="status-indicator processing">
                             <div class="spinner"></div>
                             <span>{{ t.progress }}%</span>
                           </div>
+                          <button class="transfer-control-btn pause" (click)="driveStore.pauseTransfer(t.id)" title="Pausar">
+                            <span class="material-symbols-outlined">pause</span>
+                          </button>
+                        } @else if (t.status === 'paused') {
+                          <div class="status-indicator paused" style="color: #d97706; font-weight: 500; font-size: 13px;">
+                            <span>{{ t.progress }}%</span>
+                          </div>
+                          <button class="transfer-control-btn resume" (click)="t.type === 'upload' ? driveStore.resumeUpload(t.id) : driveStore.resumeDownload(t.id)" title="Retomar">
+                            <span class="material-symbols-outlined">play_arrow</span>
+                          </button>
                         } @else if (t.status === 'success') {
                           <div class="status-indicator success">
                             <span class="material-symbols-outlined">check_circle</span>
-                            <span>Concluído</span>
+                            <span>Concluido</span>
                           </div>
                         } @else if (t.status === 'error') {
                           <div class="status-indicator error">
@@ -221,7 +248,13 @@ import { CommonModule } from '@angular/common';
               }
             </div>
           } @else {
-            <app-file-list [files]="driveStore.currentFolderFiles()" [viewMode]="currentView() === 'storage' ? 'storage' : 'drive'" [quota]="driveStore.quota()" />
+            <app-file-list 
+              [files]="driveStore.currentFolderFiles()" 
+              [viewMode]="currentView() === 'storage' ? 'storage' : 'drive'" 
+              [quota]="driveStore.quota()"
+              (createFolderRequested)="createNewFolder()"
+              (uploadFileRequested)="fileInput.click()"
+              (videoSelected)="activeVideoFile.set($event)" />
           }
 
           <!-- Transfers Progress (Uploads / Downloads) -->
@@ -250,6 +283,51 @@ import { CommonModule } from '@angular/common';
           <!-- Unlock Modal (visible when unlocked requested) -->
           @if (isUnlockModalOpen()) {
             <app-unlock-modal (modalClosed)="isUnlockModalOpen.set(false)" />
+          }
+
+          <!-- Dialog (Prompt / Confirm) -->
+          @if (dialogService.activeDialog(); as dialog) {
+            <div class="dialog-backdrop" (click)="onDialogCancel(dialog)">
+              <div class="dialog-card" [class.danger-card]="dialog.options.isDanger" (click)="$event.stopPropagation()">
+                <h3 class="dialog-title">{{ dialog.options.title }}</h3>
+                
+                @if (dialog.options.message) {
+                  <p class="dialog-message">{{ dialog.options.message }}</p>
+                }
+                
+                @if (dialog.options.showInput) {
+                  <div class="dialog-input-wrapper">
+                    <input 
+                      #dialogInput
+                      type="text" 
+                      class="dialog-input"
+                      [value]="dialogService.dialogValue()" 
+                      (input)="dialogService.dialogValue.set(dialogInput.value)"
+                      (keydown.enter)="onDialogConfirm(dialog)"
+                      (keydown.escape)="onDialogCancel(dialog)"
+                      [placeholder]="dialog.options.placeholder || ''"
+                      autofocus
+                    />
+                  </div>
+                }
+                
+                <div class="dialog-actions">
+                  <button class="dialog-btn cancel-btn" (click)="onDialogCancel(dialog)">
+                    {{ dialog.options.cancelText || 'Cancelar' }}
+                  </button>
+                  <button 
+                    [class]="dialog.options.isDanger ? 'dialog-btn confirm-pill-btn' : 'dialog-btn confirm-btn'" 
+                    (click)="onDialogConfirm(dialog)">
+                    {{ dialog.options.confirmText }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          }
+
+          <!-- Video Player Modal -->
+          @if (activeVideoFile()) {
+            <app-video-player [file]="activeVideoFile()!" (close)="activeVideoFile.set(null)" />
           }
         </div>
       </main>
@@ -486,7 +564,9 @@ import { CommonModule } from '@angular/common';
         border-radius: 16px;
         height: 100%;
         position: relative;
-        overflow-y: auto;
+        overflow-y: hidden;
+        display: flex;
+        flex-direction: column;
       }
 
       .breadcrumb {
@@ -856,11 +936,55 @@ import { CommonModule } from '@angular/common';
         transition: width 150ms ease-out;
       }
 
-      .transfer-error-msg {
+       .transfer-error-msg {
         font-size: 11px;
         color: #dc2626;
         margin-top: 4px;
         font-weight: 500;
+      }
+
+      .transfer-card.paused {
+        background: #fffbeb;
+        border-color: #fde68a;
+      }
+      .transfer-card.paused .transfer-icon-area {
+        background: #fef3c7;
+      }
+      .transfer-card.paused .transfer-type-icon {
+        color: #d97706;
+      }
+      .transfer-card.paused .transfer-type-badge {
+        background: #fef3c7;
+        color: #b45309;
+      }
+
+      .transfer-control-btn {
+        background: transparent;
+        border: none;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        color: #5f6368;
+        transition: background 150ms;
+      }
+
+      .transfer-control-btn:hover {
+        background: rgba(60, 64, 67, 0.08);
+        color: #202124;
+      }
+
+      .transfer-control-btn.pause:hover {
+        background: #fee2e2;
+        color: #dc2626;
+      }
+
+      .transfer-control-btn.resume:hover {
+        background: #dcfce7;
+        color: #166534;
       }
 
       .transfer-status-area {
@@ -901,10 +1025,136 @@ import { CommonModule } from '@angular/common';
         border-radius: 50%;
         animation: spin 1s linear infinite;
       }
-
       @keyframes spin {
         0% { transform: rotate(0deg); }
         100% { transform: rotate(360deg); }
+      }
+
+      /* === CUSTOM DIALOGS === */
+      .dialog-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(15, 23, 42, 0.32);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 3000;
+        animation: dialogFadeIn 150ms ease-out forwards;
+      }
+
+      .dialog-card {
+        background: #ffffff;
+        border-radius: 28px;
+        padding: 24px;
+        width: 360px;
+        max-width: 90%;
+        box-shadow: 0 12px 32px 4px rgba(0,0,0,0.1), 0 4px 20px 0 rgba(0,0,0,0.08);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        animation: dialogScaleIn 200ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      }
+
+      .dialog-card.danger-card {
+        width: 440px;
+      }
+
+      .dialog-title {
+        font-size: 22px;
+        font-weight: 400;
+        color: #1f1f1f;
+        margin: 0;
+        line-height: 28px;
+        font-family: 'Roboto', 'Google Sans', sans-serif;
+      }
+
+      .dialog-message {
+        font-size: 14px;
+        line-height: 20px;
+        color: #444746;
+        margin: 0;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .dialog-input-wrapper {
+        width: 100%;
+        margin-top: 8px;
+        margin-bottom: 8px;
+      }
+
+      .dialog-input {
+        width: 100%;
+        height: 56px;
+        padding: 0 16px;
+        border: 2px solid #0b57d0;
+        border-radius: 4px;
+        font-size: 16px;
+        color: #1f1f1f;
+        outline: none;
+        box-sizing: border-box;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .dialog-actions {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .dialog-btn {
+        background: transparent;
+        border: none;
+        font-size: 14px;
+        font-weight: 500;
+        padding: 10px 16px;
+        cursor: pointer;
+        border-radius: 100px;
+        font-family: 'Roboto', 'Google Sans', sans-serif;
+        transition: background-color 150ms;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .cancel-btn {
+        color: #0b57d0;
+      }
+
+      .cancel-btn:hover {
+        background-color: rgba(11, 87, 208, 0.08);
+      }
+
+      .confirm-btn {
+        color: #0b57d0;
+      }
+
+      .confirm-btn:hover {
+        background-color: rgba(11, 87, 208, 0.08);
+      }
+
+      .confirm-pill-btn {
+        background-color: #b3261e;
+        color: #ffffff;
+        padding: 10px 24px;
+      }
+
+      .confirm-pill-btn:hover {
+        background-color: #8c1d18;
+      }
+
+      @keyframes dialogFadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+
+      @keyframes dialogScaleIn {
+        from { transform: scale(0.95); opacity: 0; }
+        to { transform: scale(1); opacity: 1; }
       }
     `,
   ],
@@ -914,6 +1164,7 @@ export class VaultHomeComponent implements OnInit {
   protected readonly authService = inject(AuthService);
   protected readonly cryptoService = inject(CryptoService);
   protected readonly driveStore = inject(DriveStore);
+  protected readonly dialogService = inject(DialogService);
   protected readonly AppStatus = AppStatus;
 
   readonly isUnlockModalOpen = signal(false);
@@ -975,6 +1226,7 @@ export class VaultHomeComponent implements OnInit {
   });
 
   readonly isNewMenuOpen = signal(false);
+  readonly activeVideoFile = signal<DriveFile | null>(null);
 
   toggleNewMenu() {
     this.isNewMenuOpen.set(!this.isNewMenuOpen());
@@ -989,11 +1241,16 @@ export class VaultHomeComponent implements OnInit {
     }
   }
 
+  @HostListener('document:contextmenu', ['$event'])
+  onDocumentContextMenu(event: MouseEvent) {
+    event.preventDefault();
+  }
+
   async createNewFolder() {
     this.isNewMenuOpen.set(false);
     if (this.appState.isLocked()) return;
 
-    const name = prompt('Nome da nova pasta:');
+    const name = await this.dialogService.prompt('Nova pasta', '', 'Nome da pasta', 'Criar');
     if (!name) return;
 
     try {
@@ -1029,13 +1286,32 @@ export class VaultHomeComponent implements OnInit {
   }
 
   async onEmptyTrash() {
-    const confirmed = confirm('Tem certeza de que deseja esvaziar a lixeira? Todos os itens serão excluídos permanentemente.');
+    const confirmed = await this.dialogService.confirm(
+      'Excluir definitivamente?',
+      'Todos os itens na lixeira serão excluídos definitivamente. Não é possível desfazer essa ação.',
+      'Excluir definitivamente',
+      true
+    );
     if (!confirmed) return;
     try {
       await this.driveStore.emptyTrash();
     } catch (e) {
       alert('Erro ao esvaziar a lixeira');
     }
+  }
+
+  onDialogConfirm(dialog: any) {
+    if (dialog.options.showInput) {
+      dialog.resolve(this.dialogService.dialogValue());
+    } else {
+      dialog.resolve(true);
+    }
+    this.dialogService.activeDialog.set(null);
+  }
+
+  onDialogCancel(dialog: any) {
+    dialog.resolve(dialog.options.showInput ? null : false);
+    this.dialogService.activeDialog.set(null);
   }
 
   onLogout(): void {

@@ -1,18 +1,23 @@
 import { Injectable, signal, computed, inject, untracked } from '@angular/core';
 import { DriveService } from '../services/drive.service';
 import { CryptoService } from '../../../core/crypto/crypto.service';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, Subscription } from 'rxjs';
 import { KasumiCryptoService } from '../../../core/crypto/kasumi-crypto.service';
 import { HttpClient, HttpEventType } from '@angular/common/http';
+import { DialogService } from '../../../core/dialog/dialog.service';
 
 export interface TransferItem {
   id: string;
   fileName: string;
   type: 'upload' | 'download';
-  status: 'pending' | 'processing' | 'success' | 'error';
+  status: 'pending' | 'processing' | 'paused' | 'success' | 'error';
   progress: number;
   errorMsg?: string;
   timestamp: Date;
+  speed?: string;
+  eta?: string;
+  bytesTransferred?: number;
+  totalBytes?: number;
 }
 
 export interface DriveFile {
@@ -43,6 +48,7 @@ export class DriveStore {
   private readonly driveService = inject(DriveService);
   private readonly cryptoService = inject(CryptoService);
   private readonly http = inject(HttpClient);
+  private readonly dialogService = inject(DialogService);
 
   readonly files = signal<DriveFile[]>([]);
   readonly quota = signal<QuotaState>({ usedBytes: 0, maxBytes: 10 * 1024 * 1024 * 1024 });
@@ -61,13 +67,35 @@ export class DriveStore {
 
   readonly currentFolderId = signal<number | null>(null);
 
+  // States to persist active/paused uploads and downloads in RAM
+  private activeUploads = new Map<string, {
+    file: File;
+    fileId: number;
+    fdk: Uint8Array;
+    encryptedBlob: Blob;
+    totalChunks: number;
+    folderId: number | null;
+  }>();
+
+  private activeDownloads = new Map<string, {
+    file: DriveFile;
+    fdk: Uint8Array;
+    baseNonce: Uint8Array;
+    expectedSize: number;
+    plaintextChunks: Blob[];
+    decryptedBytes: number;
+    currentOffset: number;
+    chunkIndex: number;
+  }>();
+
+  private pausedTransfers = new Set<string>();
+  private activeSubscriptions = new Map<string, Subscription>();
+  private transferHistory = new Map<string, { bytes: number, time: number }[]>();
+
   readonly currentTrashFolderFiles = computed(() => {
     const currentId = this.currentFolderId();
     const trash = this.trashFiles();
 
-    // If currentId is null (the root of the trash):
-    // we only want to show files/folders that either have parentId/folderId as null,
-    // OR whose parent folder is NOT in the trash (meaning they are explicitly deleted).
     if (currentId === null) {
       const trashFolderIds = new Set(trash.filter(f => f.isFolder).map(f => f.id));
       return trash.filter(f => {
@@ -79,8 +107,6 @@ export class DriveStore {
       });
     }
 
-    // If currentId is NOT null (inside a deleted folder in the trash):
-    // we show items that are inside this folder
     return trash.filter(f => {
       if (f.isFolder) {
         return f.parentId === currentId;
@@ -144,7 +170,6 @@ export class DriveStore {
   async loadLinkedAccounts(): Promise<void> {
     try {
       const res: any = await firstValueFrom(this.driveService.getLinkedGoogleAccounts());
-      // Backend returns { accounts: [...] }, extract the array
       const accounts = Array.isArray(res) ? res : (res?.accounts ?? []);
       this.linkedAccounts.set(accounts);
     } catch (e) {
@@ -184,7 +209,6 @@ export class DriveStore {
     }
   }
 
-  /** Clears all decrypted names in the files list when the vault is locked. */
   clearDecryptedNames(): void {
     this.files.update(current =>
       current.map(f => ({ ...f, decryptedName: null }))
@@ -217,7 +241,6 @@ export class DriveStore {
     this.isLoading.set(true);
     try {
       const res = await firstValueFrom(this.driveService.getTree());
-      
       const parsedFiles: DriveFile[] = [];
       
       for (const folder of res.folders) {
@@ -247,10 +270,13 @@ export class DriveStore {
         
         let type = 'unknown';
         if (decName) {
-           if (decName.endsWith('.pdf')) type = 'pdf';
-           else if (decName.match(/\.(jpg|jpeg|png)$/i)) type = 'image';
-           else if (decName.match(/\.(doc|docx)$/i)) type = 'doc';
-           else if (decName.match(/\.(xls|xlsx)$/i)) type = 'spreadsheet';
+           const lower = decName.toLowerCase();
+           if (lower.endsWith('.pdf')) type = 'pdf';
+           else if (lower.match(/\.(jpg|jpeg|png|gif|webp)$/i)) type = 'image';
+           else if (lower.match(/\.(doc|docx)$/i)) type = 'doc';
+           else if (lower.match(/\.(xls|xlsx)$/i)) type = 'spreadsheet';
+           else if (lower.match(/\.(mp4|webm|mkv|avi|mov)$/i)) type = 'video';
+           else if (lower.match(/\.(mp3|wav|ogg|aac|flac)$/i)) type = 'audio';
         }
 
         parsedFiles.push({
@@ -288,10 +314,13 @@ export class DriveStore {
       
       let type = f.isFolder ? 'folder' : 'unknown';
       if (!f.isFolder && decName) {
-         if (decName.endsWith('.pdf')) type = 'pdf';
-         else if (decName.match(/\.(jpg|jpeg|png)$/i)) type = 'image';
-         else if (decName.match(/\.(doc|docx)$/i)) type = 'doc';
-         else if (decName.match(/\.(xls|xlsx)$/i)) type = 'spreadsheet';
+         const lower = decName.toLowerCase();
+         if (lower.endsWith('.pdf')) type = 'pdf';
+         else if (lower.match(/\.(jpg|jpeg|png|gif|webp)$/i)) type = 'image';
+         else if (lower.match(/\.(doc|docx)$/i)) type = 'doc';
+         else if (lower.match(/\.(xls|xlsx)$/i)) type = 'spreadsheet';
+         else if (lower.match(/\.(mp4|webm|mkv|avi|mov)$/i)) type = 'video';
+         else if (lower.match(/\.(mp3|wav|ogg|aac|flac)$/i)) type = 'audio';
       }
       
       updated.push({
@@ -304,7 +333,7 @@ export class DriveStore {
   }
 
   async createFolder(name: string, parentId: number | null = this.currentFolderId()): Promise<void> {
-    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Cofre trancado');
+    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
     const encName = await this.cryptoService.encryptName(name);
     const hash = await this.cryptoService.hashName(name);
     
@@ -324,23 +353,73 @@ export class DriveStore {
     this.transfers.update(list => list.filter(item => item.status !== 'success' && item.status !== 'error'));
   }
 
+  updateTransferProgress(id: string, progress: number, bytesTransferred: number, totalBytes: number) {
+    const now = Date.now();
+    let history = this.transferHistory.get(id) || [];
+    
+    history.push({ bytes: bytesTransferred, time: now });
+    history = history.filter(p => now - p.time <= 2000);
+    this.transferHistory.set(id, history);
+
+    let speedStr = 'Calculando...';
+    let etaStr = '--:-- restante';
+
+    if (history.length >= 2) {
+      const oldest = history[0];
+      const latest = history[history.length - 1];
+      const timeDeltaSec = (latest.time - oldest.time) / 1000;
+      const bytesDelta = latest.bytes - oldest.bytes;
+
+      if (timeDeltaSec > 0 && bytesDelta >= 0) {
+        const speedBytesPerSec = bytesDelta / timeDeltaSec;
+        
+        if (speedBytesPerSec < 1024) {
+          speedStr = `${speedBytesPerSec.toFixed(1)} B/s`;
+        } else if (speedBytesPerSec < 1024 * 1024) {
+          speedStr = `${(speedBytesPerSec / 1024).toFixed(1)} KB/s`;
+        } else {
+          speedStr = `${(speedBytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+        }
+
+        const remainingBytes = totalBytes - bytesTransferred;
+        if (speedBytesPerSec > 0) {
+          const etaSeconds = Math.max(0, Math.ceil(remainingBytes / speedBytesPerSec));
+          const mins = Math.floor(etaSeconds / 60);
+          const secs = etaSeconds % 60;
+          etaStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')} restantes`;
+        } else {
+          etaStr = 'Pausado';
+        }
+      }
+    }
+
+    this.updateTransfer(id, { 
+      progress, 
+      speed: speedStr, 
+      eta: etaStr,
+      bytesTransferred,
+      totalBytes
+    });
+  }
+
   async uploadFile(file: File, folderId: number | null = this.currentFolderId()): Promise<void> {
-    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Cofre trancado');
+    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
     this.isUploading.set(true);
     this.uploadProgress.set(0);
 
     try {
       await this._doUpload(file, folderId);
     } catch (e: any) {
-      // 409 = file with same name already exists → ask user to overwrite
       if (e?.status === 409) {
-        const confirmed = window.confirm(
-          `Já existe um arquivo chamado "${file.name}" nesta pasta.\n\nDeseja substituir o arquivo existente?`
+        const confirmed = await this.dialogService.confirm(
+          'Substituir arquivo?',
+          `Já existe um arquivo chamado "${file.name}" nesta pasta. Deseja substituir o arquivo existente?`,
+          'Substituir',
+          true
         );
         if (!confirmed) {
           return;
         }
-        // Find the existing file and permanently delete it, then retry
         const existing = this.files().find(f =>
           !f.isFolder && (f.folderId === folderId) && (f.decryptedName === file.name)
         );
@@ -348,7 +427,6 @@ export class DriveStore {
           await firstValueFrom(this.driveService.trashFile(existing.id));
           await firstValueFrom(this.driveService.hardDeleteFile(existing.id));
         }
-        // Retry upload
         await this._doUpload(file, folderId);
       } else {
         console.error('Falha no upload', e);
@@ -374,121 +452,168 @@ export class DriveStore {
       const encName = await this.cryptoService.encryptName(file.name);
       const hash = await this.cryptoService.hashName(file.name);
       
-      // Generate 32-byte FDK
       const fdk = new Uint8Array(32);
       crypto.getRandomValues(fdk);
 
-      // Encrypt FDK (encode to base64, then encrypt as string)
       const fdkBase64 = btoa(String.fromCharCode(...fdk));
       const encryptedFdk = await this.cryptoService.encryptName(fdkBase64);
 
-      // Encrypt file into Kasumi blob first to get the exact encrypted size
       const encryptedBlob = await this.kasumi.encryptFile(file, fdk);
       
-      // Upload chunks (4MB each max)
       const CHUNK_SIZE = 4 * 1024 * 1024;
       const totalChunks = Math.ceil(encryptedBlob.size / CHUNK_SIZE);
 
       const activeProvider = this.storageProvider();
 
-      // Init upload with the ENCRYPTED size, total chunks, and active provider
       const initRes = await firstValueFrom(this.driveService.initFileUpload(
         folderId, encName, hash, encryptedFdk, encryptedBlob.size, totalChunks, activeProvider
       ));
       const fileId = initRes.file_id;
 
-      if (activeProvider === 'google_drive') {
-        const metadata = {
-          name: hash,
-          parents: [initRes.root_folder_id]
-        };
+      // Save upload context in activeUploads to allow Pause & Resume
+      this.activeUploads.set(transferId, {
+        file,
+        fileId,
+        fdk,
+        encryptedBlob,
+        totalChunks,
+        folderId
+      });
 
-        const boundary = '-------314159265358979323846';
-        const firstDelimiter = `--${boundary}\r\n`;
-        const delimiter = `\r\n--${boundary}\r\n`;
-        const closeDelim = `\r\n--${boundary}--\r\n`;
-
-        const metadataPart = JSON.stringify(metadata);
-        const arrayBuffer = await encryptedBlob.arrayBuffer();
-
-        const chunks: any[] = [];
-        chunks.push(new TextEncoder().encode(
-          firstDelimiter + 
-          'Content-Type: application/json; charset=UTF-8\r\n\r\n' + 
-          metadataPart + 
-          delimiter + 
-          'Content-Type: application/octet-stream\r\n\r\n'
-        ));
-        chunks.push(new Uint8Array(arrayBuffer));
-        chunks.push(new TextEncoder().encode(closeDelim));
-
-        const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
-        const bodyUint8 = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const chunk of chunks) {
-          bodyUint8.set(chunk, offset);
-          offset += chunk.length;
-        }
-
-        const uploadRes = await new Promise<any>((resolve, reject) => {
-          this.http.post<any>(
-            'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
-            new Blob([bodyUint8]),
-            {
-              headers: {
-                'Authorization': `Bearer ${initRes.access_token}`,
-                'Content-Type': `multipart/related; boundary=${boundary}`
-              },
-              reportProgress: true,
-              observe: 'events'
-            }
-          ).subscribe({
-            next: (event: any) => {
-              if (event.type === HttpEventType.UploadProgress) {
-                const percent = Math.round((event.loaded / event.total) * 100);
-                this.uploadProgress.set(percent);
-                this.updateTransfer(transferId, { progress: percent });
-              } else if (event.type === HttpEventType.Response) {
-                resolve(event.body);
-              }
-            },
-            error: (err) => reject(err)
-          });
-        });
-
-        if (!uploadRes || !uploadRes.id) {
-          throw new Error('Google Drive upload failed: ID missing from response');
-        }
-
-        // Finalize upload on backend
-        await firstValueFrom(this.driveService.finalizeExternalUpload(fileId, uploadRes.id));
-      } else {
-        // Local upload
-        for (let i = 0; i < totalChunks; i++) {
-          const start = i * CHUNK_SIZE;
-          const end = Math.min(start + CHUNK_SIZE, encryptedBlob.size);
-          const chunk = encryptedBlob.slice(start, end);
-          
-          await firstValueFrom(this.driveService.uploadChunk(fileId, i, chunk));
-          
-          // Update progress
-          const percent = Math.round(((i + 1) / totalChunks) * 100);
-          this.uploadProgress.set(percent);
-          this.updateTransfer(transferId, { progress: percent });
-        }
-      }
-
-      this.updateTransfer(transferId, { status: 'success', progress: 100 });
-      await this.loadTree();
-      await this.loadQuota();
+      await this.runUploadLoop(transferId, fileId, encryptedBlob, totalChunks, activeProvider, initRes);
     } catch (e: any) {
       this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no upload' });
+      this.activeUploads.delete(transferId);
       throw e;
     }
   }
 
+  private async runUploadLoop(
+    transferId: string,
+    fileId: number,
+    encryptedBlob: Blob,
+    totalChunks: number,
+    activeProvider: 'local' | 'google_drive',
+    initRes: any
+  ): Promise<void> {
+    const CHUNK_SIZE = 4 * 1024 * 1024;
+
+    if (activeProvider === 'google_drive') {
+      const metadata = {
+        name: initRes.name_hash || 'file',
+        parents: [initRes.root_folder_id]
+      };
+
+      const boundary = '-------314159265358979323846';
+      const firstDelimiter = `--${boundary}\r\n`;
+      const delimiter = `\r\n--${boundary}\r\n`;
+      const closeDelim = `\r\n--${boundary}--\r\n`;
+
+      const metadataPart = JSON.stringify(metadata);
+      const arrayBuffer = await encryptedBlob.arrayBuffer();
+
+      const chunks: any[] = [];
+      chunks.push(new TextEncoder().encode(
+        firstDelimiter + 
+        'Content-Type: application/json; charset=UTF-8\r\n\r\n' + 
+        metadataPart + 
+        delimiter + 
+        'Content-Type: application/octet-stream\r\n\r\n'
+      ));
+      chunks.push(new Uint8Array(arrayBuffer));
+      chunks.push(new TextEncoder().encode(closeDelim));
+
+      const totalLength = chunks.reduce((acc, c) => acc + c.length, 0);
+      const bodyUint8 = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bodyUint8.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      const uploadResPromise = new Promise<any>((resolve, reject) => {
+        const sub = this.http.post<any>(
+          'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+          new Blob([bodyUint8]),
+          {
+            headers: {
+              'Authorization': `Bearer ${initRes.access_token}`,
+              'Content-Type': `multipart/related; boundary=${boundary}`
+            },
+            reportProgress: true,
+            observe: 'events'
+          }
+        ).subscribe({
+          next: (event: any) => {
+            if (event.type === HttpEventType.UploadProgress) {
+              const percent = Math.round((event.loaded / event.total) * 100);
+              this.uploadProgress.set(percent);
+              this.updateTransferProgress(transferId, percent, event.loaded, event.total);
+            } else if (event.type === HttpEventType.Response) {
+              resolve(event.body);
+            }
+          },
+          error: (err) => reject(err)
+        });
+        this.activeSubscriptions.set(transferId, sub);
+      });
+
+      const uploadRes = await uploadResPromise;
+      this.activeSubscriptions.delete(transferId);
+
+      if (this.pausedTransfers.has(transferId)) {
+        this.updateTransfer(transferId, { status: 'paused' });
+        return;
+      }
+
+      if (!uploadRes || !uploadRes.id) {
+        throw new Error('Google Drive upload failed: ID missing from response');
+      }
+
+      await firstValueFrom(this.driveService.finalizeExternalUpload(fileId, uploadRes.id));
+    } else {
+      // Local chunked upload
+      let uploadedChunks = new Set<number>();
+      try {
+        const res = await firstValueFrom(this.driveService.getUploadedChunks(fileId));
+        uploadedChunks = new Set(res.uploaded_chunks);
+      } catch {
+        // Fallback
+      }
+
+      for (let i = 0; i < totalChunks; i++) {
+        if (this.pausedTransfers.has(transferId)) {
+          this.updateTransfer(transferId, { status: 'paused' });
+          return;
+        }
+
+        if (uploadedChunks.has(i)) {
+          const percent = Math.round(((i + 1) / totalChunks) * 100);
+          const bytesTransferred = Math.min((i + 1) * CHUNK_SIZE, encryptedBlob.size);
+          this.updateTransferProgress(transferId, percent, bytesTransferred, encryptedBlob.size);
+          continue;
+        }
+
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, encryptedBlob.size);
+        const chunk = encryptedBlob.slice(start, end);
+        
+        await firstValueFrom(this.driveService.uploadChunk(fileId, i, chunk));
+        
+        const percent = Math.round(((i + 1) / totalChunks) * 100);
+        const bytesTransferred = Math.min((i + 1) * CHUNK_SIZE, encryptedBlob.size);
+        this.updateTransferProgress(transferId, percent, bytesTransferred, encryptedBlob.size);
+      }
+    }
+
+    this.updateTransfer(transferId, { status: 'success', progress: 100 });
+    this.activeUploads.delete(transferId);
+    await this.loadTree();
+    await this.loadQuota();
+  }
+
   async downloadFile(file: DriveFile): Promise<void> {
-    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Cofre trancado');
+    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
     if (file.isFolder || !file.encryptedFdk) return;
 
     this.isDownloading.set(true);
@@ -503,42 +628,63 @@ export class DriveStore {
       progress: 0
     });
 
-    const setProgress = (prog: number) => {
+    const setProgress = (prog: number, bytes: number, total: number) => {
       this.downloadProgress.set(prog);
-      this.updateTransfer(transferId, { progress: prog });
+      this.updateTransferProgress(transferId, prog, bytes, total);
     };
 
     try {
-      setProgress(10);
-      // Decrypt FDK string using Vault Key
+      setProgress(5, 0, file.sizeBytes);
       const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
       
-      // Decode base64 to Uint8Array
       const fdkString = atob(fdkBase64);
       const fdk = new Uint8Array(fdkString.length);
       for (let i = 0; i < fdkString.length; i++) {
         fdk[i] = fdkString.charCodeAt(i);
       }
 
-      let decryptedBlob: Blob;
+      setProgress(10, 0, file.sizeBytes);
 
-      setProgress(20);
       if (file.storageProvider === 'google_drive') {
         const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
-        setProgress(40);
-        const encryptedBlob = await firstValueFrom(this.driveService.downloadExternalFile(
-          `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`,
-          meta.access_token
-        ));
-        console.log('Google Drive Downloaded Blob Size:', encryptedBlob.size);
-        console.log('Expected File Size in Database:', file.sizeBytes);
-        setProgress(85);
-        decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk);
+        setProgress(30, 0, file.sizeBytes);
+
+        const dlPromise = new Promise<Blob>((resolve, reject) => {
+          const sub = this.driveService.downloadExternalFile(
+            `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`,
+            meta.access_token
+          ).subscribe({
+            next: (blob) => resolve(blob),
+            error: (err) => reject(err)
+          });
+          this.activeSubscriptions.set(transferId, sub);
+        });
+
+        const encryptedBlob = await dlPromise;
+        this.activeSubscriptions.delete(transferId);
+
+        if (this.pausedTransfers.has(transferId)) {
+          this.updateTransfer(transferId, { status: 'paused' });
+          return;
+        }
+
+        setProgress(70, encryptedBlob.size / 2, encryptedBlob.size);
+        const decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk);
+        setProgress(95, encryptedBlob.size, encryptedBlob.size);
+
+        const url = URL.createObjectURL(decryptedBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.decryptedName || 'arquivo_desconhecido';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        this.updateTransfer(transferId, { status: 'success', progress: 100 });
       } else {
-        // Local file - chunk-by-chunk download and decrypt!
-        
-        // 1. Download Header (first 32 bytes)
-        setProgress(25);
+        // Local file chunked download
+        setProgress(15, 0, file.sizeBytes);
         const headerBlob = await firstValueFrom(this.driveService.downloadFileRange(file.id, 0, 31));
         const headerBuffer = await headerBlob.arrayBuffer();
         const baseNonce = new Uint8Array(headerBuffer, 0, 24);
@@ -546,75 +692,138 @@ export class DriveStore {
         const expectedSize = Number(headerView.getBigUint64(24, true));
 
         const plaintextChunks: Blob[] = [];
-        let decryptedBytes = 0;
-        let currentOffset = 32;
-        let chunkIndex = 0;
-        const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
+        const state = {
+          file,
+          fdk,
+          baseNonce,
+          expectedSize,
+          plaintextChunks,
+          decryptedBytes: 0,
+          currentOffset: 32,
+          chunkIndex: 0
+        };
+        this.activeDownloads.set(transferId, state);
 
-        while (decryptedBytes < expectedSize) {
-          const plaintextSize = Math.min(CHUNK_SIZE, expectedSize - decryptedBytes);
-          const encryptedSize = 16 + plaintextSize; // MAC_SIZE (16) + plaintextSize
-
-          const start = currentOffset;
-          const end = currentOffset + encryptedSize - 1;
-
-          // Update progress
-          setProgress(Math.floor(30 + (decryptedBytes / expectedSize) * 60));
-
-          // Download chunk
-          const chunkBlob = await firstValueFrom(this.driveService.downloadFileRange(file.id, start, end));
-          const chunkBuffer = await chunkBlob.arrayBuffer();
-          const chunkUint8 = new Uint8Array(chunkBuffer);
-
-          if (chunkUint8.length < encryptedSize) {
-            throw new Error('File corrupted or truncated');
-          }
-
-          const mac = chunkUint8.slice(0, 16);
-          const ciphertext = chunkUint8.slice(16);
-
-          // Decrypt chunk on the fly
-          const plaintext = await this.kasumi.decryptFileChunk(
-            ciphertext,
-            mac,
-            baseNonce,
-            chunkIndex,
-            fdk
-          );
-
-          plaintextChunks.push(new Blob([plaintext as any]));
-
-          decryptedBytes += plaintextSize;
-          currentOffset += encryptedSize;
-          chunkIndex++;
-        }
-
-        decryptedBlob = new Blob(plaintextChunks, { type: 'application/octet-stream' });
+        await this.runDownloadLoop(transferId, state);
       }
-
-      setProgress(95);
-      // Create object URL and trigger download
-      const url = URL.createObjectURL(decryptedBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = file.decryptedName || 'arquivo_desconhecido';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      this.updateTransfer(transferId, { status: 'success', progress: 100 });
-      this.isDownloading.set(false);
     } catch (e: any) {
       console.error('Falha no download', e);
       this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no download' });
+      this.activeDownloads.delete(transferId);
+    } finally {
       this.isDownloading.set(false);
-      throw e;
+    }
+  }
+
+  private async runDownloadLoop(transferId: string, state: any): Promise<void> {
+    const CHUNK_SIZE = 4 * 1024 * 1024;
+    const { file, fdk, baseNonce, expectedSize, plaintextChunks } = state;
+
+    while (state.decryptedBytes < expectedSize) {
+      if (this.pausedTransfers.has(transferId)) {
+        this.updateTransfer(transferId, { status: 'paused' });
+        return;
+      }
+
+      const plaintextSize = Math.min(CHUNK_SIZE, expectedSize - state.decryptedBytes);
+      const encryptedSize = 16 + plaintextSize;
+
+      const start = state.currentOffset;
+      const end = state.currentOffset + encryptedSize - 1;
+
+      const percent = Math.round((state.decryptedBytes / expectedSize) * 100);
+      this.updateTransferProgress(transferId, percent, state.decryptedBytes, expectedSize);
+
+      const chunkBlob = await firstValueFrom(this.driveService.downloadFileRange(file.id, start, end));
+      const chunkBuffer = await chunkBlob.arrayBuffer();
+      const chunkUint8 = new Uint8Array(chunkBuffer);
+
+      if (chunkUint8.length < encryptedSize) {
+        throw new Error('File corrupted or truncated');
+      }
+
+      const mac = chunkUint8.slice(0, 16);
+      const ciphertext = chunkUint8.slice(16);
+
+      const plaintext = await this.kasumi.decryptFileChunk(
+        ciphertext,
+        mac,
+        baseNonce,
+        state.chunkIndex,
+        fdk
+      );
+
+      plaintextChunks.push(new Blob([plaintext as any]));
+
+      state.decryptedBytes += plaintextSize;
+      state.currentOffset += encryptedSize;
+      state.chunkIndex++;
+    }
+
+    const decryptedBlob = new Blob(plaintextChunks, { type: 'application/octet-stream' });
+    this.updateTransferProgress(transferId, 95, expectedSize, expectedSize);
+
+    const url = URL.createObjectURL(decryptedBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.decryptedName || 'arquivo_desconhecido';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    this.updateTransfer(transferId, { status: 'success', progress: 100 });
+    this.activeDownloads.delete(transferId);
+  }
+
+  pauseTransfer(id: string) {
+    this.pausedTransfers.add(id);
+    this.updateTransfer(id, { status: 'paused', speed: 'Pausado', eta: '--:--' });
+
+    // Cancel active Google Drive HTTP request if applicable
+    const sub = this.activeSubscriptions.get(id);
+    if (sub) {
+      sub.unsubscribe();
+      this.activeSubscriptions.delete(id);
+    }
+  }
+
+  async resumeUpload(id: string) {
+    const data = this.activeUploads.get(id);
+    if (!data) return;
+
+    this.pausedTransfers.delete(id);
+    this.updateTransfer(id, { status: 'processing', speed: 'Calculando...', eta: '--:--' });
+
+    try {
+      const activeProvider = this.storageProvider();
+      // Google drive simple uploads are restarted, local ones are resumed from last chunk
+      const initRes = { access_token: '', root_folder_id: '' };
+      await this.runUploadLoop(id, data.fileId, data.encryptedBlob, data.totalChunks, activeProvider, initRes);
+    } catch (e: any) {
+      this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha no upload' });
+    }
+  }
+
+  async resumeDownload(id: string) {
+    const state = this.activeDownloads.get(id);
+    if (!state) return;
+
+    this.pausedTransfers.delete(id);
+    this.updateTransfer(id, { status: 'processing', speed: 'Calculando...', eta: '--:--' });
+
+    try {
+      this.isDownloading.set(true);
+      await this.runDownloadLoop(id, state);
+    } catch (e: any) {
+      this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha no download' });
+    } finally {
+      this.isDownloading.set(false);
     }
   }
 
   async renameItem(file: DriveFile, newName: string): Promise<void> {
-    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Cofre trancado');
+    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
     const encName = await this.cryptoService.encryptName(newName);
     const hash = await this.cryptoService.hashName(newName);
 
@@ -627,7 +836,7 @@ export class DriveStore {
   }
 
   async moveItem(file: DriveFile, targetFolderId: number | null): Promise<void> {
-    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Cofre trancado');
+    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
 
     if (file.isFolder) {
       if (file.id === targetFolderId) throw new Error('Não é possível mover uma pasta para dentro de si mesma');
@@ -680,10 +889,13 @@ export class DriveStore {
         }
         let type = 'unknown';
         if (decName) {
-           if (decName.endsWith('.pdf')) type = 'pdf';
-           else if (decName.match(/\.(jpg|jpeg|png)$/i)) type = 'image';
-           else if (decName.match(/\.(doc|docx)$/i)) type = 'doc';
-           else if (decName.match(/\.(xls|xlsx)$/i)) type = 'spreadsheet';
+           const lower = decName.toLowerCase();
+           if (lower.endsWith('.pdf')) type = 'pdf';
+           else if (lower.match(/\.(jpg|jpeg|png|gif|webp)$/i)) type = 'image';
+           else if (lower.match(/\.(doc|docx)$/i)) type = 'doc';
+           else if (lower.match(/\.(xls|xlsx)$/i)) type = 'spreadsheet';
+           else if (lower.match(/\.(mp4|webm|mkv|avi|mov)$/i)) type = 'video';
+           else if (lower.match(/\.(mp3|wav|ogg|aac|flac)$/i)) type = 'audio';
         }
         parsedFiles.push({
           id: file.id,

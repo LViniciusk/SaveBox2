@@ -104,7 +104,7 @@ GoogleDriveService::LinkResult GoogleDriveService::link_account(uint64_t user_id
         }
     }
 
-    std::string root_folder_id = create_savebox_folder(tokens.access_token);
+    std::string root_folder_id = create_nanika_folder(tokens.access_token);
 
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
@@ -312,7 +312,7 @@ GoogleDriveService::TokenResponse GoogleDriveService::exchange_code(const std::s
     return tokens;
 }
 
-std::string GoogleDriveService::create_savebox_folder(const std::string& access_token) {
+std::string GoogleDriveService::create_nanika_folder(const std::string& access_token) {
     cpr::Response search_r = make_get_request(
         "https://www.googleapis.com/drive/v3/files?q=name%20=%20'Nanika'%20and%20mimeType%20=%20'application/vnd.google-apps.folder'%20and%20trashed%20=%20false&fields=files(id,name)&spaces=drive",
         cpr::Header{{"Authorization", "Bearer " + access_token}}
@@ -349,7 +349,7 @@ std::string GoogleDriveService::create_savebox_folder(const std::string& access_
     );
 
     if (create_r.status_code != 200) {
-        std::cerr << "[GoogleDrive] create_savebox_folder falhou. Status=" << create_r.status_code << std::endl;
+        std::cerr << "[GoogleDrive] create_nanika_folder falhou. Status=" << create_r.status_code << std::endl;
         throw std::runtime_error("GOOGLE_FOLDER_CREATION_FAILED");
     }
 
@@ -563,7 +563,7 @@ std::pair<uint64_t, uint64_t> GoogleDriveService::get_total_quota(uint64_t user_
                 
                 uint64_t available = (limit > usage) ? (limit - usage) : 0;
 
-                // Query files size inside SaveBox for this storage
+                // Query files size inside Nanika for this storage
                 auto size_res = txn.exec(
                     "SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE external_storage_id = $1 AND is_upload_complete = TRUE AND deleted_at IS NULL",
                     pqxx::params{storage.id}

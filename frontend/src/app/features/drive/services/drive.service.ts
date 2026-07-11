@@ -80,6 +80,12 @@ export class DriveService {
     });
   }
 
+  getUploadedChunks(fileId: number): Observable<{ uploaded_chunks: number[] }> {
+    return this.http.get<{ uploaded_chunks: number[] }>(`${environment.apiUrl}/files/${fileId}/uploaded-chunks`, {
+      withCredentials: true,
+    });
+  }
+
   downloadFile(fileId: number): Observable<Blob> {
     return this.http.get(`${environment.apiUrl}/files/${fileId}/download`, {
       responseType: 'blob',
@@ -109,6 +115,16 @@ export class DriveService {
     return this.http.get(url, {
       headers: {
         'Authorization': `Bearer ${token}`
+      },
+      responseType: 'blob'
+    });
+  }
+
+  downloadExternalFileRange(url: string, token: string, start: number, end: number): Observable<Blob> {
+    return this.http.get(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Range': `bytes=${start}-${end}`
       },
       responseType: 'blob'
     });

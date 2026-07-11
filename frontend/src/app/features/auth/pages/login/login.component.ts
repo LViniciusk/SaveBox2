@@ -11,7 +11,7 @@ import { AppStateService } from '../../../../core/state/app-state.service';
 /**
  * Login page styled after Google Sign-In.
  *
- * Features a centered card with SaveBox branding and a custom
+ * Features a centered card with Nanika branding and a custom
  * "Entrar com Google" button that initiates the OAuth 2.0 Implicit Flow.
  *
  * Flow: Click → redirect to Google → authenticate → redirect back to /auth/callback

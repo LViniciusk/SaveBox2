@@ -98,11 +98,11 @@ cpr::Response EmailService::make_get_request(const std::string& url) const {
 
 bool EmailService::send_verification_email(const std::string& to_email, const std::string& token) const {
     nlohmann::json payload;
-    payload["from"] = "SaveBox@verify.lvinik.app";
+    payload["from"] = "Nanika@verify.lvinik.app";
     payload["to"] = to_email;
-    payload["subject"] = "SaveBox - Verifique sua conta";
+    payload["subject"] = "Nanika - Verifique sua conta";
     payload["html"] = "<p>Para verificar sua conta, clique no link: "
-                      "<a href='https://savebox.lvinik.app/verify?token=" + token + "'>"
+                      "<a href='https://nanika.lvinik.app/verify?token=" + token + "'>"
                       "Verificar conta</a></p>";
 
     auto response = make_post_request(

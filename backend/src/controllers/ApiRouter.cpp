@@ -4,11 +4,13 @@
 #include "database/UsersManager.hpp"
 #include "storage/FileChunker.hpp"
 #include "Services/GoogleDriveService.hpp"
+#include "storage/GarbageCollector.hpp"
 #include "utils.hpp"
 
 #include <optional>
 #include <fstream>
 #include <sstream>
+#include <thread>
 
 ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr,
                      FileManager* file_mgr, FileChunker* chunker,
@@ -20,6 +22,19 @@ ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folde
 
 std::string ApiRouter::handle_healthcheck() const {
     return R"({"status":"online"})";
+}
+
+void ApiRouter::trigger_async_gc_cleanup() {
+    if (gdrive_ && pool_) {
+        std::thread([this]() {
+            try {
+                GarbageCollector gc(*pool_, chunker_, gdrive_);
+                gc.run_cleanup();
+            } catch (const std::exception& e) {
+                std::cerr << "[GC Async Trigger] Erro ao executar limpeza: " << e.what() << std::endl;
+            }
+        }).detach();
+    }
 }
 
 crow::response ApiRouter::handle_init_vault(const crow::request& req) {
@@ -50,7 +65,7 @@ crow::response ApiRouter::handle_init_vault(const crow::request& req) {
         txn.commit();
         return crow::response(204);
     } catch (const std::exception& e) {
-        return crow::response(500, R"({"error":"Erro ao inicializar cofre"})");
+        return crow::response(500, R"({"error":"Erro ao inicializar drive"})");
     }
 }
 
@@ -66,7 +81,7 @@ crow::response ApiRouter::handle_get_vault_verification(const crow::request& req
             "SELECT vault_verification FROM users WHERE id = " + ntxn.quote(user_id)
         );
         if (result.empty() || result[0][0].is_null()) {
-            return crow::response(404, R"({"error":"Verificacao de cofre nao configurada"})");
+            return crow::response(404, R"({"error":"Verificacao de drive nao configurada"})");
         }
         std::string verification = result[0][0].as<std::string>();
         crow::json::wvalue res;
@@ -463,6 +478,7 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
             res_body["storage_provider"] = "google_drive";
             res_body["access_token"] = access_token;
             res_body["root_folder_id"] = root_folder_id;
+            res_body["name_hash"] = name_hash;
             return crow::response(201, res_body);
         }
 
@@ -838,8 +854,8 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
         }
 
         size_t length = end - start + 1;
-        if (length > MAX_FULL_DOWNLOAD_SIZE) {
-            return crow::response(400, R"({"error":"Range solicitado excede o limite de 5MB por requisicao."})");
+        if (length > 4194320) {
+            return crow::response(400, R"({"error":"Range solicitado excede o limite de 4.194.320 bytes por requisicao."})");
         }
         std::string data = chunker_->read_file_portion(file_id, start, length);
 
@@ -1152,6 +1168,7 @@ crow::response ApiRouter::handle_empty_trash(const crow::request& req) {
 
     try {
         std::vector<std::string> ext_files = file_mgr_->empty_trash(user_id, chunker_);
+        trigger_async_gc_cleanup();
         crow::json::wvalue res;
         res["message"] = "Lixeira esvaziada com sucesso";
         res["external_files"] = ext_files;
@@ -1168,6 +1185,7 @@ crow::response ApiRouter::handle_hard_delete_file(const crow::request& req, int 
 
     try {
         auto ext_file = file_mgr_->hard_delete_file(static_cast<uint64_t>(file_id), user_id, chunker_);
+        trigger_async_gc_cleanup();
         crow::json::wvalue res;
         res["message"] = "Arquivo deletado permanentemente";
         std::vector<std::string> ext_files;
@@ -1203,6 +1221,7 @@ crow::response ApiRouter::handle_batch_hard_delete(const crow::request& req) {
 
     try {
         auto result = file_mgr_->batch_hard_delete_files(user_id, file_ids, chunker_);
+        trigger_async_gc_cleanup();
         crow::json::wvalue res;
         res["message"] = "Arquivos deletados permanentemente";
         res["deleted_count"] = result.deleted_count;
@@ -1267,6 +1286,7 @@ crow::response ApiRouter::handle_batch_hard_delete_folders(const crow::request& 
 
     try {
         auto result = folder_mgr_->batch_hard_delete_folders(user_id, folder_ids, chunker_);
+        trigger_async_gc_cleanup();
         crow::json::wvalue res;
         res["message"] = "Pastas deletadas permanentemente";
         res["deleted_count"] = result.deleted_count;
@@ -1285,6 +1305,7 @@ crow::response ApiRouter::handle_hard_delete_folder(const crow::request& req, in
 
     try {
         std::vector<std::string> ext_files = folder_mgr_->hard_delete_folder(static_cast<uint64_t>(folder_id), user_id, chunker_);
+        trigger_async_gc_cleanup();
         crow::json::wvalue res;
         res["message"] = "Pasta deletada permanentemente";
         res["external_files"] = ext_files;
@@ -1499,8 +1520,8 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
         }
 
         size_t length = end - start + 1;
-        if (length > MAX_FULL_DOWNLOAD_SIZE) {
-            return crow::response(400, R"({"error":"Range solicitado excede o limite de 5MB por requisicao."})");
+        if (length > 4194320) {
+            return crow::response(400, R"({"error":"Range solicitado excede o limite de 4.194.320 bytes por requisicao."})");
         }
         std::string data = chunker_->read_file_portion(file_id, start, length);
 
@@ -1618,6 +1639,7 @@ crow::response ApiRouter::handle_unlink_google_account(const crow::request& req,
 
     try {
         gdrive_->unlink_account(user_id, account_id);
+        trigger_async_gc_cleanup();
         
         crow::json::wvalue res;
         res["message"] = "Conta desvinculada com sucesso";

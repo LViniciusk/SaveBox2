@@ -3,7 +3,7 @@ version: '3.8'
 services:
   postgres-db:
     image: postgres:15-alpine
-    container_name: savebox_postgres
+    container_name: nanika_postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER}
@@ -14,13 +14,13 @@ services:
     ports:
       - "5433:5432"
     networks:
-      - savebox_network
+      - nanika_network
 
   backend:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: savebox_api
+    container_name: nanika_api
     user: "root"
     restart: unless-stopped
     depends_on:
@@ -35,20 +35,20 @@ services:
       DB_NAME: ${DB_NAME}
       
       PASS_PEPPER: ${PASS_PEPPER}
-      SAVEBOX_JWT_SECRET: ${SAVEBOX_JWT_SECRET}
+      NANIKA_JWT_SECRET: ${NANIKA_JWT_SECRET}
       RESEND_API_KEY: ${RESEND_API_KEY}
       EMAIL_VALIDATION_API_KEY: ${EMAIL_VALIDATION_API_KEY}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
-      SAVEBOX_STORAGE_PATH: /app/savebox_storage/
+      NANIKA_STORAGE_PATH: /app/nanika_storage/
     volumes:
-      - ./savebox_storage:/app/savebox_storage
+      - ./nanika_storage:/app/nanika_storage
     networks:
-      - savebox_network
+      - nanika_network
 
 networks:
-  savebox_network:
+  nanika_network:
     driver: bridge
 
 volumes:

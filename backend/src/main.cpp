@@ -85,7 +85,7 @@ int main() {
     uint16_t port = DotEnv::get_port();
 
     std::cout << "====================================================\n";
-    std::cout << "             SaveBox Backend Iniciado\n             ";
+    std::cout << "             Nanika Backend Iniciado\n             ";
     std::cout << "Servidor escutando na porta: http://localhost:" << port << "\n";
     std::cout << "====================================================\n";
 

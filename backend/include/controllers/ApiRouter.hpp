@@ -80,4 +80,5 @@ private:
     GoogleDriveService* gdrive_ = nullptr;
 
     std::optional<uint64_t> authenticate_request(const crow::request& req) const;
+    void trigger_async_gc_cleanup();
 };

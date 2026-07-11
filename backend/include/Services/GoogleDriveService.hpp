@@ -70,7 +70,7 @@ private:
     bool validate_and_consume_state(uint64_t user_id, const std::string& state);
 
     TokenResponse exchange_code(const std::string& auth_code);
-    std::string create_savebox_folder(const std::string& access_token);
+    std::string create_nanika_folder(const std::string& access_token);
     std::string refresh_access_token(const std::string& refresh_token);
 
 protected:

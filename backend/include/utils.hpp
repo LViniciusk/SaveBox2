@@ -108,12 +108,12 @@ namespace DotEnv{
 
     inline std::string get_jwt_secret() {
         auto& cfg = Utils::get();
-        return cfg.get_required_var("SAVEBOX_JWT_SECRET");
+        return cfg.get_required_var("NANIKA_JWT_SECRET");
     }
 
     inline std::string get_storage_path() {
         auto& cfg = Utils::get();
-        return cfg.get_required_var("SAVEBOX_STORAGE_PATH");
+        return cfg.get_required_var("NANIKA_STORAGE_PATH");
     }
 
     inline std::string get_resend_api_key() {

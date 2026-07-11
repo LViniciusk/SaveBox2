@@ -7,7 +7,7 @@
 #include "test_helpers.hpp"
 #include <crow_all.h>
 
-TEST_CASE("API Tree - Sincronização do Cofre", "[api][tree]") {
+TEST_CASE("API Tree - Sincronização do Drive", "[api][tree]") {
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);
     MockEmailService mock_email;

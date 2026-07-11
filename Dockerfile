@@ -36,9 +36,9 @@ WORKDIR /app
 COPY --from=builder /src/backend/build/savebox_server /app/savebox_server
 COPY --from=builder /src/docs /app/docs
 
-RUN mkdir -p /app/savebox_storage
-RUN useradd -m savebox && chown -R savebox:savebox /app
-USER savebox
+RUN mkdir -p /app/nanika_storage
+RUN useradd -m nanika && chown -R nanika:nanika /app
+USER nanika
 EXPOSE 8080
 
 CMD ["./savebox_server"]
