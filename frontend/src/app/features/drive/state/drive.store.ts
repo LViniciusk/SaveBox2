@@ -50,6 +50,8 @@ export class DriveStore {
   
   readonly isUploading = signal(false);
   readonly uploadProgress = signal(0);
+  readonly isDownloading = signal(false);
+  readonly downloadProgress = signal(0);
   private readonly kasumi = inject(KasumiCryptoService);
 
   readonly storageProvider = signal<'local' | 'google_drive'>((localStorage.getItem('preferred_storage_provider') as 'local' | 'google_drive') || 'local');
@@ -396,24 +398,27 @@ export class DriveStore {
       const fileId = initRes.file_id;
 
       if (activeProvider === 'google_drive') {
-        // Upload via Google Drive using access token
         const metadata = {
           name: hash,
           parents: [initRes.root_folder_id]
         };
 
         const boundary = '-------314159265358979323846';
+        const firstDelimiter = `--${boundary}\r\n`;
         const delimiter = `\r\n--${boundary}\r\n`;
-        const closeDelim = `\r\n--${boundary}--`;
+        const closeDelim = `\r\n--${boundary}--\r\n`;
 
         const metadataPart = JSON.stringify(metadata);
-        
-        // Convert to ArrayBuffer
         const arrayBuffer = await encryptedBlob.arrayBuffer();
-        
-        // Build multipart/related body
+
         const chunks: any[] = [];
-        chunks.push(new TextEncoder().encode(delimiter + 'Content-Type: application/json; charset=UTF-8\r\n\r\n' + metadataPart + delimiter + 'Content-Type: application/octet-stream\r\n\r\n'));
+        chunks.push(new TextEncoder().encode(
+          firstDelimiter + 
+          'Content-Type: application/json; charset=UTF-8\r\n\r\n' + 
+          metadataPart + 
+          delimiter + 
+          'Content-Type: application/octet-stream\r\n\r\n'
+        ));
         chunks.push(new Uint8Array(arrayBuffer));
         chunks.push(new TextEncoder().encode(closeDelim));
 
@@ -486,6 +491,9 @@ export class DriveStore {
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Cofre trancado');
     if (file.isFolder || !file.encryptedFdk) return;
 
+    this.isDownloading.set(true);
+    this.downloadProgress.set(0);
+
     const transferId = 'dl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
     this.addTransfer({
       id: transferId,
@@ -495,22 +503,13 @@ export class DriveStore {
       progress: 0
     });
 
+    const setProgress = (prog: number) => {
+      this.downloadProgress.set(prog);
+      this.updateTransfer(transferId, { progress: prog });
+    };
+
     try {
-      let encryptedBlob: Blob;
-
-      this.updateTransfer(transferId, { progress: 20 });
-      if (file.storageProvider === 'google_drive') {
-        const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
-        this.updateTransfer(transferId, { progress: 40 });
-        encryptedBlob = await firstValueFrom(this.driveService.downloadExternalFile(
-          `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`,
-          meta.access_token
-        ));
-      } else {
-        encryptedBlob = await firstValueFrom(this.driveService.downloadFile(file.id));
-      }
-
-      this.updateTransfer(transferId, { progress: 70 });
+      setProgress(10);
       // Decrypt FDK string using Vault Key
       const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
       
@@ -521,11 +520,79 @@ export class DriveStore {
         fdk[i] = fdkString.charCodeAt(i);
       }
 
-      this.updateTransfer(transferId, { progress: 85 });
-      // Decrypt the blob using Kasumi XChaCha20
-      const decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk);
+      let decryptedBlob: Blob;
 
-      this.updateTransfer(transferId, { progress: 95 });
+      setProgress(20);
+      if (file.storageProvider === 'google_drive') {
+        const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
+        setProgress(40);
+        const encryptedBlob = await firstValueFrom(this.driveService.downloadExternalFile(
+          `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`,
+          meta.access_token
+        ));
+        console.log('Google Drive Downloaded Blob Size:', encryptedBlob.size);
+        console.log('Expected File Size in Database:', file.sizeBytes);
+        setProgress(85);
+        decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk);
+      } else {
+        // Local file - chunk-by-chunk download and decrypt!
+        
+        // 1. Download Header (first 32 bytes)
+        setProgress(25);
+        const headerBlob = await firstValueFrom(this.driveService.downloadFileRange(file.id, 0, 31));
+        const headerBuffer = await headerBlob.arrayBuffer();
+        const baseNonce = new Uint8Array(headerBuffer, 0, 24);
+        const headerView = new DataView(headerBuffer);
+        const expectedSize = Number(headerView.getBigUint64(24, true));
+
+        const plaintextChunks: Blob[] = [];
+        let decryptedBytes = 0;
+        let currentOffset = 32;
+        let chunkIndex = 0;
+        const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
+
+        while (decryptedBytes < expectedSize) {
+          const plaintextSize = Math.min(CHUNK_SIZE, expectedSize - decryptedBytes);
+          const encryptedSize = 16 + plaintextSize; // MAC_SIZE (16) + plaintextSize
+
+          const start = currentOffset;
+          const end = currentOffset + encryptedSize - 1;
+
+          // Update progress
+          setProgress(Math.floor(30 + (decryptedBytes / expectedSize) * 60));
+
+          // Download chunk
+          const chunkBlob = await firstValueFrom(this.driveService.downloadFileRange(file.id, start, end));
+          const chunkBuffer = await chunkBlob.arrayBuffer();
+          const chunkUint8 = new Uint8Array(chunkBuffer);
+
+          if (chunkUint8.length < encryptedSize) {
+            throw new Error('File corrupted or truncated');
+          }
+
+          const mac = chunkUint8.slice(0, 16);
+          const ciphertext = chunkUint8.slice(16);
+
+          // Decrypt chunk on the fly
+          const plaintext = await this.kasumi.decryptFileChunk(
+            ciphertext,
+            mac,
+            baseNonce,
+            chunkIndex,
+            fdk
+          );
+
+          plaintextChunks.push(new Blob([plaintext as any]));
+
+          decryptedBytes += plaintextSize;
+          currentOffset += encryptedSize;
+          chunkIndex++;
+        }
+
+        decryptedBlob = new Blob(plaintextChunks, { type: 'application/octet-stream' });
+      }
+
+      setProgress(95);
       // Create object URL and trigger download
       const url = URL.createObjectURL(decryptedBlob);
       const a = document.createElement('a');
@@ -537,9 +604,11 @@ export class DriveStore {
       URL.revokeObjectURL(url);
 
       this.updateTransfer(transferId, { status: 'success', progress: 100 });
+      this.isDownloading.set(false);
     } catch (e: any) {
       console.error('Falha no download', e);
       this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no download' });
+      this.isDownloading.set(false);
       throw e;
     }
   }

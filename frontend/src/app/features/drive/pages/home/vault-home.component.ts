@@ -224,16 +224,28 @@ import { CommonModule } from '@angular/common';
             <app-file-list [files]="driveStore.currentFolderFiles()" [viewMode]="currentView() === 'storage' ? 'storage' : 'drive'" [quota]="driveStore.quota()" />
           }
 
-          <!-- Upload Progress -->
-          @if (driveStore.isUploading()) {
-            <div class="upload-progress-container">
-              <div class="upload-header">
-                <span>Fazendo upload...</span>
-                <span>{{ driveStore.uploadProgress() }}%</span>
+          <!-- Transfers Progress (Uploads / Downloads) -->
+          <div class="transfers-progress-wrapper">
+            @if (driveStore.isUploading()) {
+              <div class="upload-progress-container">
+                <div class="upload-header">
+                  <span>Fazendo upload...</span>
+                  <span>{{ driveStore.uploadProgress() }}%</span>
+                </div>
+                <progress class="quota-progress-bar upload-progress-bar" [value]="driveStore.uploadProgress()" max="100"></progress>
               </div>
-              <progress class="quota-progress-bar upload-progress-bar" [value]="driveStore.uploadProgress()" max="100"></progress>
-            </div>
-          }
+            }
+
+            @if (driveStore.isDownloading()) {
+              <div class="upload-progress-container">
+                <div class="upload-header">
+                  <span>Baixando arquivo...</span>
+                  <span>{{ driveStore.downloadProgress() }}%</span>
+                </div>
+                <progress class="quota-progress-bar download-progress-bar" [value]="driveStore.downloadProgress()" max="100"></progress>
+              </div>
+            }
+          </div>
 
           <!-- Unlock Modal (visible when unlocked requested) -->
           @if (isUnlockModalOpen()) {
@@ -532,17 +544,28 @@ import { CommonModule } from '@angular/common';
         user-select: none;
       }
 
-      /* Upload Progress */
-      .upload-progress-container {
+      /* Transfers Progress Wrapper */
+      .transfers-progress-wrapper {
         position: absolute;
         bottom: 24px;
         right: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        z-index: 50;
+        pointer-events: none;
+      }
+      .transfers-progress-wrapper > * {
+        pointer-events: auto;
+      }
+
+      /* Upload / Download Progress Panel */
+      .upload-progress-container {
         background: white;
         border-radius: 8px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1), 0 1px 3px rgba(0,0,0,0.08);
         padding: 16px;
         width: 320px;
-        z-index: 50;
         border: 1px solid #dadce0;
       }
 
@@ -555,19 +578,26 @@ import { CommonModule } from '@angular/common';
         font-weight: 500;
       }
 
-      .upload-progress-bar {
+      .upload-progress-bar,
+      .download-progress-bar {
         width: 100%;
         height: 6px;
         border-radius: 3px;
         appearance: none;
         -webkit-appearance: none;
       }
-      .upload-progress-bar::-webkit-progress-bar {
+      .upload-progress-bar::-webkit-progress-bar,
+      .download-progress-bar::-webkit-progress-bar {
         background-color: #e0e0e0;
         border-radius: 3px;
       }
       .upload-progress-bar::-webkit-progress-value {
         background-color: #1a73e8;
+        border-radius: 3px;
+        transition: width 0.2s ease;
+      }
+      .download-progress-bar::-webkit-progress-value {
+        background-color: #34a853;
         border-radius: 3px;
         transition: width 0.2s ease;
       }

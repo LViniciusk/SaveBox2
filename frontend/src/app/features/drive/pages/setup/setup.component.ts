@@ -18,7 +18,7 @@ import { FormsModule } from '@angular/forms';
         </div>
 
         <p class="description">
-          Bem-vindo ao SaveBox. Para garantir a arquitetura <strong>Zero-Knowledge</strong>,
+          Bem-vindo ao Nanika. Para garantir a arquitetura <strong>Zero-Knowledge</strong>,
           precisamos criar a sua Frase de Segurança. Ela será usada para gerar a sua chave de criptografia.
         </p>
 
@@ -242,16 +242,16 @@ export class SetupComponent {
 
   private downloadRecoveryFile() {
     const text =
-      '=== SAVEBOX RECOVERY ===\\n' +
+      '=== NANIKA RECOVERY ===\\n' +
       'Guarde esta frase em um local seguro, preferencialmente offline.\\n\\n' +
       'Sua Frase de Segurança: ' + this.phrase + '\\n\\n' +
-      'Aviso: O SaveBox possui arquitetura Zero-Knowledge. Não temos como recuperar esta frase se você a perder.';
+      'Aviso: O Nanika possui arquitetura Zero-Knowledge. Não temos como recuperar esta frase se você a perder.';
 
     const blob = new Blob([text], { type: 'text/plain' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'savebox-recovery.txt';
+    a.download = 'nanika-recovery.txt';
     a.click();
     window.URL.revokeObjectURL(url);
   }

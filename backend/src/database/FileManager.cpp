@@ -163,7 +163,7 @@ std::vector<crow::json::wvalue> FileManager::get_user_files_paginated(uint64_t u
     pqxx::work txn(*conn);
 
     auto result = txn.exec(
-        "SELECT id, folder_id, encrypted_name, size_bytes, encrypted_fdk FROM files "
+        "SELECT id, folder_id, encrypted_name, size_bytes, encrypted_fdk, storage_provider FROM files "
         "WHERE user_id = $1 AND is_upload_complete = true AND deleted_at IS NULL "
         "ORDER BY id ASC LIMIT $2 OFFSET $3",
         pqxx::params{user_id, limit, offset}
@@ -183,6 +183,7 @@ std::vector<crow::json::wvalue> FileManager::get_user_files_paginated(uint64_t u
         item["encrypted_name"] = row[2].as<std::string>();
         item["size_bytes"] = row[3].as<int64_t>();
         item["encrypted_fdk"] = row[4].as<std::string>();
+        item["storage_provider"] = row[5].as<std::string>();
         files.push_back(std::move(item));
     }
 
@@ -499,7 +500,7 @@ crow::json::wvalue FileManager::get_trash(uint64_t user_id) {
     pqxx::work txn(*conn);
 
     auto file_rows = txn.exec(
-        "SELECT id, encrypted_name, size_bytes, folder_id FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL",
+        "SELECT id, encrypted_name, size_bytes, folder_id, storage_provider FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL",
         pqxx::params{user_id}
     );
     std::vector<crow::json::wvalue> files;
@@ -513,6 +514,7 @@ crow::json::wvalue FileManager::get_trash(uint64_t user_id) {
         } else {
             f["folder_id"] = nullptr;
         }
+        f["storage_provider"] = row[4].as<std::string>();
         files.push_back(std::move(f));
     }
 

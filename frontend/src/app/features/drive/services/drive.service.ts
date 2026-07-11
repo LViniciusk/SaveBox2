@@ -87,6 +87,16 @@ export class DriveService {
     });
   }
 
+  downloadFileRange(fileId: number, start: number, end: number): Observable<Blob> {
+    return this.http.get(`${environment.apiUrl}/files/${fileId}/download`, {
+      headers: {
+        'Range': `bytes=${start}-${end}`
+      },
+      responseType: 'blob',
+      withCredentials: true,
+    });
+  }
+
   downloadExternalMetadata(fileId: number): Observable<{ storage_provider: string, external_file_id: string, access_token: string }> {
     return this.http.get<{ storage_provider: string, external_file_id: string, access_token: string }>(
       `${environment.apiUrl}/files/${fileId}/download`, {

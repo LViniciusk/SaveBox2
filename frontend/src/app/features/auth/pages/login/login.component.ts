@@ -27,7 +27,7 @@ import { AppStateService } from '../../../../core/state/app-state.service';
           <span class="material-symbols-outlined logo-icon">
             enhanced_encryption
           </span>
-          <h1>SaveBox</h1>
+          <h1>Nanika</h1>
         </div>
 
         <p class="subtitle">

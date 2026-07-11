@@ -83,7 +83,12 @@ import { CommonModule } from '@angular/common';
               </button>
               
               @if (activeMenuFileId() === file.id) {
-                <div class="action-menu">
+                <div class="action-menu"
+                     [style.position]="contextMenuPosition() ? 'fixed' : 'absolute'"
+                     [style.top]="contextMenuPosition() ? (contextMenuPosition()?.y + 'px') : '40px'"
+                     [style.left]="contextMenuPosition() ? (contextMenuPosition()?.x + 'px') : 'auto'"
+                     [style.right]="contextMenuPosition() ? 'auto' : '20px'"
+                     [style.margin]="'0'">
                   @if (viewMode() === 'trash') {
                     <button class="menu-item" (click)="onRestore(file, $event)">
                       <span class="material-symbols-outlined">restore</span>
@@ -372,17 +377,22 @@ export class FileListComponent {
 
   readonly isLocked = this.appState.isLocked;
   readonly activeMenuFileId = signal<number | null>(null);
+  readonly contextMenuPosition = signal<{ x: number, y: number } | null>(null);
 
   sortColumn = signal<string>('name');
   sortDirection = signal<'asc' | 'desc'>('asc');
 
   @HostListener('document:click')
+  @HostListener('window:resize')
+  @HostListener('window:scroll')
   closeMenu() {
     this.activeMenuFileId.set(null);
+    this.contextMenuPosition.set(null);
   }
 
   toggleMenu(file: DriveFile, event: Event) {
     event.stopPropagation();
+    this.contextMenuPosition.set(null);
     if (this.activeMenuFileId() === file.id) {
       this.activeMenuFileId.set(null);
     } else {
@@ -394,6 +404,21 @@ export class FileListComponent {
     if (this.isLocked()) return;
     event.preventDefault();
     event.stopPropagation();
+
+    const menuWidth = 200;
+    const menuHeight = 220;
+
+    let x = event.clientX;
+    let y = event.clientY;
+
+    if (x + menuWidth > window.innerWidth) {
+      x = window.innerWidth - menuWidth - 10;
+    }
+    if (y + menuHeight > window.innerHeight) {
+      y = window.innerHeight - menuHeight - 10;
+    }
+
+    this.contextMenuPosition.set({ x, y });
     this.activeMenuFileId.set(file.id);
   }
 

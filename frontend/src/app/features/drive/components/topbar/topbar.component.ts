@@ -14,7 +14,7 @@ import { CommonModule } from '@angular/common';
       <div class="left-section">
         <div class="logo-area">
           <span class="material-symbols-outlined logo-icon">enhanced_encryption</span>
-          <span class="logo-text">SaveBox</span>
+          <span class="logo-text">Nanika</span>
         </div>
 
         <div class="search-bar">
@@ -76,7 +76,7 @@ import { CommonModule } from '@angular/common';
                 </div>
 
                 <button class="profile-manage-account-btn" (click)="openSettings()">
-                  Gerenciar sua Conta SaveBox
+                  Gerenciar sua Conta Nanika
                 </button>
               </div>
 
@@ -177,7 +177,7 @@ import { CommonModule } from '@angular/common';
                     <span class="material-symbols-outlined option-icon">dns</span>
                     <div class="option-details">
                       <span class="option-name">Servidor Local</span>
-                      <span class="option-sub">Armazenamento no SaveBox</span>
+                      <span class="option-sub">Armazenamento no Nanika</span>
                     </div>
                   </button>
 

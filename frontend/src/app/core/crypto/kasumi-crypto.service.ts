@@ -276,4 +276,28 @@ export class KasumiCryptoService {
 
     return new Blob(decryptedChunks);
   }
+
+  async decryptFileChunk(
+    ciphertext: Uint8Array,
+    mac: Uint8Array,
+    baseNonce: Uint8Array,
+    chunkIndex: number,
+    key: Uint8Array
+  ): Promise<Uint8Array> {
+    await this.ensureSodium();
+    const chunkNonce = this.deriveChunkNonce(baseNonce, chunkIndex);
+    try {
+      const plaintext = _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt_detached(
+        null, // nsec
+        ciphertext,
+        mac,
+        null, // ad
+        chunkNonce,
+        key
+      );
+      return new Uint8Array(plaintext);
+    } catch (e) {
+      throw new Error(`Authentication failed at chunk ${chunkIndex}.`);
+    }
+  }
 }
