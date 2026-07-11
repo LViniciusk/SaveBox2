@@ -33,6 +33,8 @@ public:
     std::string get_access_token_for_storage(uint64_t storage_id);
 
     bool is_linked(uint64_t user_id);
+    
+    std::pair<uint64_t, uint64_t> get_total_quota(uint64_t user_id);
 
     void unlink_account(uint64_t user_id, std::optional<uint64_t> storage_id = std::nullopt); // Se storage_id for nullopt, remove todos
 

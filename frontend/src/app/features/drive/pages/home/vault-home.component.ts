@@ -89,10 +89,22 @@ import { CommonModule } from '@angular/common';
 
         <!-- Storage Usage Details -->
         <div class="storage-quota-container">
+          <!-- Local Storage -->
+          <div class="storage-section-title">Nanika</div>
           <div class="storage-bar-track">
             <div class="storage-bar-fill" [style.width.%]="getQuotaPercent()"></div>
           </div>
           <span class="storage-used">{{ getQuotaFormatted() }}</span>
+
+          <!-- Google Drive Storage -->
+          @if (driveStore.quota().gdriveMaxBytes && driveStore.quota().gdriveMaxBytes! > 0) {
+            <div class="storage-divider" style="margin: 8px 0 4px; height: 1px; background: #dadce0;"></div>
+            <div class="storage-section-title">Google Drive</div>
+            <div class="storage-bar-track gdrive">
+              <div class="storage-bar-fill gdrive-fill" [style.width.%]="getGDriveQuotaPercent()"></div>
+            </div>
+            <span class="storage-used">{{ getGDriveQuotaFormatted() }}</span>
+          }
         </div>
       </nav>
 
@@ -410,12 +422,25 @@ import { CommonModule } from '@angular/common';
         box-sizing: border-box;
       }
 
+      .storage-section-title {
+        font-size: 10px;
+        font-weight: 700;
+        color: #5f6368;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        margin-bottom: 2px;
+      }
+
       .storage-bar-track {
         width: 100%;
         height: 4px;
         background: #e0e0e0;
         border-radius: 2px;
         overflow: hidden;
+      }
+
+      .storage-bar-track.gdrive {
+        background: #e2e8f0;
       }
 
       .storage-bar-fill {
@@ -425,11 +450,16 @@ import { CommonModule } from '@angular/common';
         transition: width 500ms cubic-bezier(0.4, 0, 0.2, 1);
       }
 
+      .storage-bar-fill.gdrive-fill {
+        background: #34a853;
+      }
+
       .storage-used {
         font-size: 13px;
         color: #5f6368;
         font-weight: 500;
         font-family: 'Roboto', sans-serif;
+        margin-bottom: 4px;
       }
 
       /* === CONTENT AREA === */
@@ -882,6 +912,18 @@ export class VaultHomeComponent implements OnInit {
     const q = this.driveStore.quota();
     if (!q) return '0 B usados';
     return `${this.formatSize(q.usedBytes)} de ${this.formatSize(q.maxBytes)} usados`;
+  }
+
+  getGDriveQuotaPercent(): number {
+    const q = this.driveStore.quota();
+    if (!q || !q.gdriveMaxBytes || q.gdriveMaxBytes === 0) return 0;
+    return (q.gdriveUsedBytes! / q.gdriveMaxBytes) * 100;
+  }
+
+  getGDriveQuotaFormatted(): string {
+    const q = this.driveStore.quota();
+    if (!q || !q.gdriveMaxBytes) return '0 B de 0 B usados';
+    return `${this.formatSize(q.gdriveUsedBytes || 0)} de ${this.formatSize(q.gdriveMaxBytes)} usados`;
   }
 
   private formatSize(bytes: number): string {

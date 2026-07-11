@@ -6,6 +6,8 @@ import { environment } from '../../../../environments/environment';
 export interface QuotaResponse {
   used_bytes: number;
   max_bytes: number;
+  gdrive_used_bytes?: number;
+  gdrive_max_bytes?: number;
 }
 
 export interface DriveFolderDto {

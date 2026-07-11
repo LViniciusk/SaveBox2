@@ -506,3 +506,79 @@ bool GoogleDriveService::validate_and_consume_state(uint64_t user_id, const std:
     pending_states_.erase(it);
     return true;
 }
+
+std::pair<uint64_t, uint64_t> GoogleDriveService::get_total_quota(uint64_t user_id) {
+    struct StorageItem {
+        uint64_t id;
+    };
+    std::vector<StorageItem> storages;
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+        auto result = txn.exec(
+            "SELECT id FROM user_external_storages WHERE user_id = $1 AND is_unlinking = FALSE",
+            pqxx::params{user_id}
+        );
+        txn.commit();
+        for (const auto& row : result) {
+            storages.push_back({row[0].as<uint64_t>()});
+        }
+    }
+
+    uint64_t total_virtual_used = 0;
+    uint64_t total_virtual_max = 0;
+
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+
+    for (const auto& storage : storages) {
+        std::string token;
+        try {
+            token = get_access_token_for_storage(storage.id);
+        } catch (...) {
+            continue;
+        }
+
+        cpr::Response r = make_get_request(
+            "https://www.googleapis.com/drive/v3/about?fields=storageQuota",
+            cpr::Header{{"Authorization", "Bearer " + token}}
+        );
+        if (r.status_code != 200) continue;
+
+        picojson::value json_val;
+        if (!picojson::parse(json_val, r.text).empty() || !json_val.is<picojson::object>()) continue;
+
+        auto& obj = json_val.get<picojson::object>();
+        auto quota_it = obj.find("storageQuota");
+        if (quota_it == obj.end() || !quota_it->second.is<picojson::object>()) continue;
+
+        auto& quota = quota_it->second.get<picojson::object>();
+        auto limit_it = quota.find("limit");
+        auto usage_it = quota.find("usage");
+
+        if (limit_it != quota.end() && usage_it != quota.end() && limit_it->second.is<std::string>() && usage_it->second.is<std::string>()) {
+            try {
+                uint64_t limit = std::stoull(limit_it->second.get<std::string>());
+                uint64_t usage = std::stoull(usage_it->second.get<std::string>());
+                
+                uint64_t available = (limit > usage) ? (limit - usage) : 0;
+
+                // Query files size inside SaveBox for this storage
+                auto size_res = txn.exec(
+                    "SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE external_storage_id = $1 AND is_upload_complete = TRUE AND deleted_at IS NULL",
+                    pqxx::params{storage.id}
+                );
+                uint64_t app_usage = 0;
+                if (!size_res.empty()) {
+                    app_usage = size_res[0][0].as<uint64_t>();
+                }
+
+                total_virtual_used += app_usage;
+                total_virtual_max += (app_usage + available);
+            } catch (...) {}
+        }
+    }
+    txn.commit();
+
+    return {total_virtual_used, total_virtual_max};
+}

@@ -34,6 +34,8 @@ export interface DriveFile {
 export interface QuotaState {
   usedBytes: number;
   maxBytes: number;
+  gdriveUsedBytes?: number;
+  gdriveMaxBytes?: number;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -198,7 +200,12 @@ export class DriveStore {
   async loadQuota(): Promise<void> {
     try {
       const res = await firstValueFrom(this.driveService.getQuota());
-      this.quota.set({ usedBytes: res.used_bytes, maxBytes: res.max_bytes });
+      this.quota.set({ 
+        usedBytes: res.used_bytes, 
+        maxBytes: res.max_bytes,
+        gdriveUsedBytes: res.gdrive_used_bytes || 0,
+        gdriveMaxBytes: res.gdrive_max_bytes || 0
+      });
     } catch (e) {
       console.error('Failed to load quota', e);
     }

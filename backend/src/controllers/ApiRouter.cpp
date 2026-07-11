@@ -84,6 +84,17 @@ crow::response ApiRouter::handle_get_quota(const crow::request& req) {
 
     try {
         crow::json::wvalue res = file_mgr_->get_user_quota(user_id);
+        
+        uint64_t gd_used = 0;
+        uint64_t gd_max = 0;
+        if (gdrive_) {
+            auto q_pair = gdrive_->get_total_quota(user_id);
+            gd_used = q_pair.first;
+            gd_max = q_pair.second;
+        }
+        res["gdrive_used_bytes"] = gd_used;
+        res["gdrive_max_bytes"] = gd_max;
+
         return crow::response(200, res);
     } catch (const std::exception& e) {
         return crow::response(500, R"({"error":"Erro interno"})");
