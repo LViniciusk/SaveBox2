@@ -13,6 +13,10 @@ export const jwtInterceptor: HttpInterceptorFn = (req, next) => {
   const authService = inject(AuthService);
   const token = authService.getToken();
 
+  if (req.url.includes('googleapis.com')) {
+    return next(req);
+  }
+
   if (token) {
     req = req.clone({
       setHeaders: {

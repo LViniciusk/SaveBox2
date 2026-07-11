@@ -37,26 +37,49 @@ int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id
     txn.exec("UPDATE users SET used_storage_bytes = used_storage_bytes + $1 WHERE id = $2",
              pqxx::params{size_bytes, user_id});
 
-    try {
-        auto result = txn.exec(
-            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-            pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, total_chunks}
+    pqxx::result conflict_check;
+    if (folder_id.has_value()) {
+        conflict_check = txn.exec(
+            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id = $2 AND name_hash = $3",
+            pqxx::params{user_id, folder_id.value(), name_hash}
         );
-
-        int file_id = result[0][0].as<int>();
-
-        std::string physical_path = std::to_string(file_id) + ".dat";
-        txn.exec(
-            "UPDATE files SET physical_path = $1 WHERE id = $2",
-            pqxx::params{physical_path, file_id}
+    } else {
+        conflict_check = txn.exec(
+            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id IS NULL AND name_hash = $2",
+            pqxx::params{user_id, name_hash}
         );
-
-        txn.commit();
-        return file_id;
-    } catch (const pqxx::unique_violation& e) {
-        throw std::runtime_error("FILE_ALREADY_EXISTS");
     }
+
+    if (!conflict_check.empty()) {
+        bool is_complete = conflict_check[0][1].as<bool>();
+        uint64_t existing_file_id = conflict_check[0][0].as<uint64_t>();
+        uint64_t existing_size = conflict_check[0][2].as<uint64_t>();
+
+        if (!is_complete) {
+            txn.exec("DELETE FROM files WHERE id = $1", pqxx::params{existing_file_id});
+            txn.exec("UPDATE users SET used_storage_bytes = used_storage_bytes - $1 WHERE id = $2",
+                     pqxx::params{existing_size, user_id});
+        } else {
+            throw std::runtime_error("FILE_ALREADY_EXISTS");
+        }
+    }
+
+    auto result = txn.exec(
+        "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+        pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, total_chunks}
+    );
+
+    int file_id = result[0][0].as<int>();
+
+    std::string physical_path = std::to_string(file_id) + ".dat";
+    txn.exec(
+        "UPDATE files SET physical_path = $1 WHERE id = $2",
+        pqxx::params{physical_path, file_id}
+    );
+
+    txn.commit();
+    return file_id;
 }
 
 void FileManager::mark_upload_complete(uint64_t file_id, uint64_t user_id) {
@@ -745,20 +768,42 @@ int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> 
     txn.exec("UPDATE users SET used_storage_bytes = used_storage_bytes + $1 WHERE id = $2",
              pqxx::params{metadata_cost, user_id});
 
-    try {
-        auto result = txn.exec(
-            "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, "
-            "size_bytes, total_chunks, storage_provider, external_storage_id) "
-            "VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8) RETURNING id",
-            pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider, external_storage_id}
+    pqxx::result conflict_check;
+    if (folder_id.has_value()) {
+        conflict_check = txn.exec(
+            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id = $2 AND name_hash = $3",
+            pqxx::params{user_id, folder_id.value(), name_hash}
         );
-
-        int file_id = result[0][0].as<int>();
-        txn.commit();
-        return file_id;
-    } catch (const pqxx::unique_violation& e) {
-        throw std::runtime_error("FILE_ALREADY_EXISTS");
+    } else {
+        conflict_check = txn.exec(
+            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id IS NULL AND name_hash = $2",
+            pqxx::params{user_id, name_hash}
+        );
     }
+
+    if (!conflict_check.empty()) {
+        bool is_complete = conflict_check[0][1].as<bool>();
+        uint64_t existing_file_id = conflict_check[0][0].as<uint64_t>();
+
+        if (!is_complete) {
+            txn.exec("DELETE FROM files WHERE id = $1", pqxx::params{existing_file_id});
+            txn.exec("UPDATE users SET used_storage_bytes = used_storage_bytes - $1 WHERE id = $2",
+                     pqxx::params{metadata_cost, user_id});
+        } else {
+            throw std::runtime_error("FILE_ALREADY_EXISTS");
+        }
+    }
+
+    auto result = txn.exec(
+        "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, "
+        "size_bytes, total_chunks, storage_provider, external_storage_id) "
+        "VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8) RETURNING id",
+        pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider, external_storage_id}
+    );
+
+    int file_id = result[0][0].as<int>();
+    txn.commit();
+    return file_id;
 }
 
 std::vector<BatchInitResult> FileManager::batch_init_uploads(uint64_t user_id, const std::vector<BatchInitItem>& files) {

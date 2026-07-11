@@ -3,7 +3,17 @@ import { DriveService } from '../services/drive.service';
 import { CryptoService } from '../../../core/crypto/crypto.service';
 import { firstValueFrom } from 'rxjs';
 import { KasumiCryptoService } from '../../../core/crypto/kasumi-crypto.service';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpEventType } from '@angular/common/http';
+
+export interface TransferItem {
+  id: string;
+  fileName: string;
+  type: 'upload' | 'download';
+  status: 'pending' | 'processing' | 'success' | 'error';
+  progress: number;
+  errorMsg?: string;
+  timestamp: Date;
+}
 
 export interface DriveFile {
   id: number;
@@ -43,6 +53,7 @@ export class DriveStore {
   readonly storageProvider = signal<'local' | 'google_drive'>((localStorage.getItem('preferred_storage_provider') as 'local' | 'google_drive') || 'local');
   readonly linkedAccounts = signal<any[]>([]);
   readonly trashFiles = signal<DriveFile[]>([]);
+  readonly transfers = signal<TransferItem[]>([]);
 
   readonly currentFolderId = signal<number | null>(null);
 
@@ -292,6 +303,18 @@ export class DriveStore {
     await this.loadTree();
   }
 
+  addTransfer(item: Omit<TransferItem, 'timestamp'>) {
+    this.transfers.update(list => [{ ...item, timestamp: new Date() }, ...list]);
+  }
+
+  updateTransfer(id: string, updates: Partial<TransferItem>) {
+    this.transfers.update(list => list.map(item => item.id === id ? { ...item, ...updates } : item));
+  }
+
+  clearCompletedTransfers() {
+    this.transfers.update(list => list.filter(item => item.status !== 'success' && item.status !== 'error'));
+  }
+
   async uploadFile(file: File, folderId: number | null = this.currentFolderId()): Promise<void> {
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Cofre trancado');
     this.isUploading.set(true);
@@ -329,6 +352,15 @@ export class DriveStore {
   }
 
   private async _doUpload(file: File, folderId: number | null = null): Promise<void> {
+    const transferId = 'up_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    this.addTransfer({
+      id: transferId,
+      fileName: file.name,
+      type: 'upload',
+      status: 'processing',
+      progress: 0
+    });
+
     try {
       const encName = await this.cryptoService.encryptName(file.name);
       const hash = await this.cryptoService.hashName(file.name);
@@ -386,16 +418,31 @@ export class DriveStore {
           offset += chunk.length;
         }
 
-        const uploadRes = await firstValueFrom(this.http.post<any>(
-          'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
-          bodyUint8,
-          {
-            headers: {
-              'Authorization': `Bearer ${initRes.access_token}`,
-              'Content-Type': `multipart/related; boundary=${boundary}`
+        const uploadRes = await new Promise<any>((resolve, reject) => {
+          this.http.post<any>(
+            'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
+            new Blob([bodyUint8]),
+            {
+              headers: {
+                'Authorization': `Bearer ${initRes.access_token}`,
+                'Content-Type': `multipart/related; boundary=${boundary}`
+              },
+              reportProgress: true,
+              observe: 'events'
             }
-          }
-        ));
+          ).subscribe({
+            next: (event: any) => {
+              if (event.type === HttpEventType.UploadProgress) {
+                const percent = Math.round((event.loaded / event.total) * 100);
+                this.uploadProgress.set(percent);
+                this.updateTransfer(transferId, { progress: percent });
+              } else if (event.type === HttpEventType.Response) {
+                resolve(event.body);
+              }
+            },
+            error: (err) => reject(err)
+          });
+        });
 
         if (!uploadRes || !uploadRes.id) {
           throw new Error('Google Drive upload failed: ID missing from response');
@@ -413,13 +460,17 @@ export class DriveStore {
           await firstValueFrom(this.driveService.uploadChunk(fileId, i, chunk));
           
           // Update progress
-          this.uploadProgress.set(Math.round(((i + 1) / totalChunks) * 100));
+          const percent = Math.round(((i + 1) / totalChunks) * 100);
+          this.uploadProgress.set(percent);
+          this.updateTransfer(transferId, { progress: percent });
         }
       }
 
+      this.updateTransfer(transferId, { status: 'success', progress: 100 });
       await this.loadTree();
       await this.loadQuota();
-    } catch (e) {
+    } catch (e: any) {
+      this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no upload' });
       throw e;
     }
   }
@@ -428,11 +479,22 @@ export class DriveStore {
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Cofre trancado');
     if (file.isFolder || !file.encryptedFdk) return;
 
+    const transferId = 'dl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    this.addTransfer({
+      id: transferId,
+      fileName: file.decryptedName || file.encryptedName,
+      type: 'download',
+      status: 'processing',
+      progress: 0
+    });
+
     try {
       let encryptedBlob: Blob;
 
+      this.updateTransfer(transferId, { progress: 20 });
       if (file.storageProvider === 'google_drive') {
         const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
+        this.updateTransfer(transferId, { progress: 40 });
         encryptedBlob = await firstValueFrom(this.driveService.downloadExternalFile(
           `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`,
           meta.access_token
@@ -441,6 +503,7 @@ export class DriveStore {
         encryptedBlob = await firstValueFrom(this.driveService.downloadFile(file.id));
       }
 
+      this.updateTransfer(transferId, { progress: 70 });
       // Decrypt FDK string using Vault Key
       const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
       
@@ -451,9 +514,11 @@ export class DriveStore {
         fdk[i] = fdkString.charCodeAt(i);
       }
 
+      this.updateTransfer(transferId, { progress: 85 });
       // Decrypt the blob using Kasumi XChaCha20
       const decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk);
 
+      this.updateTransfer(transferId, { progress: 95 });
       // Create object URL and trigger download
       const url = URL.createObjectURL(decryptedBlob);
       const a = document.createElement('a');
@@ -463,8 +528,11 @@ export class DriveStore {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch (e) {
+
+      this.updateTransfer(transferId, { status: 'success', progress: 100 });
+    } catch (e: any) {
       console.error('Falha no download', e);
+      this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no download' });
       throw e;
     }
   }

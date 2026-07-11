@@ -75,6 +75,10 @@ import { CommonModule } from '@angular/common';
             <span class="material-symbols-outlined">delete</span>
             Lixeira
           </button>
+          <button class="nav-item" [class.active]="currentView() === 'transfers'" (click)="currentView.set('transfers')">
+            <span class="material-symbols-outlined">pending_actions</span>
+            Pendentes
+          </button>
           <button class="nav-item" [class.active]="currentView() === 'storage'" (click)="currentView.set('storage')">
             <span class="material-symbols-outlined">cloud</span>
             Armazenamento
@@ -98,7 +102,7 @@ import { CommonModule } from '@angular/common';
           <!-- Breadcrumb -->
           <div class="breadcrumb">
             <span class="material-symbols-outlined breadcrumb-icon">
-              {{ currentView() === 'drive' ? (driveStore.currentFolderId() ? 'folder_open' : 'folder') : (currentView() === 'trash' ? 'delete' : 'cloud') }}
+              {{ currentView() === 'drive' ? (driveStore.currentFolderId() ? 'folder_open' : 'folder') : (currentView() === 'trash' ? 'delete' : (currentView() === 'storage' ? 'cloud' : 'pending_actions')) }}
             </span>
             @if (currentView() === 'drive') {
               <div class="breadcrumb-path">
@@ -118,6 +122,8 @@ import { CommonModule } from '@angular/common';
               <span class="breadcrumb-text">Armazenamento</span>
             } @else if (currentView() === 'trash') {
               <span class="breadcrumb-text">Lixeira</span>
+            } @else if (currentView() === 'transfers') {
+              <span class="breadcrumb-text">Pendentes</span>
             }
           </div>
 
@@ -131,11 +137,79 @@ import { CommonModule } from '@angular/common';
             </div>
           }
 
-          <!-- File List -->
+          <!-- File List / Transfers View -->
           @if (currentView() === 'trash') {
             <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" />
+          } @else if (currentView() === 'transfers') {
+            <div class="transfers-container">
+              <div class="transfers-header">
+                <h2>Fila de Transferências</h2>
+                @if (driveStore.transfers().length > 0) {
+                  <button class="clear-completed-btn" (click)="driveStore.clearCompletedTransfers()">
+                    <span class="material-symbols-outlined">clear_all</span>
+                    Limpar Concluídos
+                  </button>
+                }
+              </div>
+
+              @if (driveStore.transfers().length === 0) {
+                <div class="transfers-empty">
+                  <span class="material-symbols-outlined empty-icon">check_circle</span>
+                  <p>Nenhuma transferência pendente ou concluída no momento.</p>
+                </div>
+              } @else {
+                <div class="transfers-list">
+                  @for (t of driveStore.transfers(); track t.id) {
+                    <div class="transfer-card" [class.error]="t.status === 'error'" [class.success]="t.status === 'success'">
+                      <div class="transfer-icon-area">
+                        @if (t.type === 'upload') {
+                          <span class="material-symbols-outlined transfer-type-icon upload">upload</span>
+                        } @else {
+                          <span class="material-symbols-outlined transfer-type-icon download">download</span>
+                        }
+                      </div>
+
+                      <div class="transfer-details">
+                        <div class="transfer-filename" [title]="t.fileName">{{ t.fileName }}</div>
+                        <div class="transfer-meta">
+                          <span class="transfer-type-badge">{{ t.type === 'upload' ? 'Upload' : 'Download' }}</span>
+                          <span class="transfer-time">{{ t.timestamp | date:'shortTime' }}</span>
+                        </div>
+                        @if (t.status === 'processing') {
+                          <div class="transfer-progress-bar-container">
+                            <div class="transfer-progress-bar-fill" [style.width.%]="t.progress"></div>
+                          </div>
+                        }
+                        @if (t.status === 'error' && t.errorMsg) {
+                          <div class="transfer-error-msg">{{ t.errorMsg }}</div>
+                        }
+                      </div>
+
+                      <div class="transfer-status-area">
+                        @if (t.status === 'processing') {
+                          <div class="status-indicator processing">
+                            <div class="spinner"></div>
+                            <span>{{ t.progress }}%</span>
+                          </div>
+                        } @else if (t.status === 'success') {
+                          <div class="status-indicator success">
+                            <span class="material-symbols-outlined">check_circle</span>
+                            <span>Concluído</span>
+                          </div>
+                        } @else if (t.status === 'error') {
+                          <div class="status-indicator error">
+                            <span class="material-symbols-outlined">error</span>
+                            <span>Falhou</span>
+                          </div>
+                        }
+                      </div>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
           } @else {
-            <app-file-list [files]="driveStore.currentFolderFiles()" [viewMode]="currentView()" [quota]="driveStore.quota()" />
+            <app-file-list [files]="driveStore.currentFolderFiles()" [viewMode]="currentView() === 'storage' ? 'storage' : 'drive'" [quota]="driveStore.quota()" />
           }
 
           <!-- Upload Progress -->
@@ -533,6 +607,245 @@ import { CommonModule } from '@angular/common';
           padding: 8px;
         }
       }
+
+      /* === TRANSFERS VIEW === */
+      .transfers-container {
+        padding: 0 24px 24px;
+        font-family: 'Roboto', sans-serif;
+      }
+
+      .transfers-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 20px;
+        border-bottom: 1px solid #e2e8f0;
+        padding-bottom: 12px;
+      }
+
+      .transfers-header h2 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 500;
+        color: #0f172a;
+      }
+
+      .clear-completed-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: #f1f5f9;
+        border: 1px solid #cbd5e1;
+        border-radius: 20px;
+        padding: 6px 16px;
+        font-size: 13px;
+        font-weight: 500;
+        color: #334155;
+        cursor: pointer;
+        transition: background 150ms, border-color 150ms;
+      }
+
+      .clear-completed-btn:hover {
+        background: #e2e8f0;
+        border-color: #94a3b8;
+      }
+
+      .clear-completed-btn .material-symbols-outlined {
+        font-size: 18px;
+      }
+
+      .transfers-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 60px 0;
+        color: #64748b;
+        text-align: center;
+      }
+
+      .transfers-empty .empty-icon {
+        font-size: 48px;
+        color: #94a3b8;
+        margin-bottom: 12px;
+      }
+
+      .transfers-empty p {
+        margin: 0;
+        font-size: 14px;
+      }
+
+      .transfers-list {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .transfer-card {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 16px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        transition: box-shadow 150ms, border-color 150ms;
+      }
+
+      .transfer-card:hover {
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        border-color: #cbd5e1;
+      }
+
+      .transfer-card.success {
+        background: #f0fdf4;
+        border-color: #bbf7d0;
+      }
+
+      .transfer-card.error {
+        background: #fef2f2;
+        border-color: #fecaca;
+      }
+
+      .transfer-icon-area {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        background: #e2e8f0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+
+      .transfer-card.success .transfer-icon-area {
+        background: #dcfce7;
+      }
+
+      .transfer-card.error .transfer-icon-area {
+        background: #fee2e2;
+      }
+
+      .transfer-type-icon {
+        font-size: 20px;
+      }
+
+      .transfer-type-icon.upload {
+        color: #0b57d0;
+      }
+
+      .transfer-type-icon.download {
+        color: #0891b2;
+      }
+
+      .transfer-details {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .transfer-filename {
+        font-size: 14px;
+        font-weight: 500;
+        color: #1e293b;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .transfer-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: #64748b;
+      }
+
+      .transfer-type-badge {
+        background: #e2e8f0;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-weight: 500;
+      }
+
+      .transfer-card.success .transfer-type-badge {
+        background: #dcfce7;
+        color: #166534;
+      }
+
+      .transfer-card.error .transfer-type-badge {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+
+      .transfer-progress-bar-container {
+        width: 100%;
+        height: 6px;
+        background: #e2e8f0;
+        border-radius: 3px;
+        overflow: hidden;
+        margin-top: 4px;
+      }
+
+      .transfer-progress-bar-fill {
+        height: 100%;
+        background: #1a73e8;
+        border-radius: 3px;
+        transition: width 150ms ease-out;
+      }
+
+      .transfer-error-msg {
+        font-size: 11px;
+        color: #dc2626;
+        margin-top: 4px;
+        font-weight: 500;
+      }
+
+      .transfer-status-area {
+        display: flex;
+        align-items: center;
+        flex-shrink: 0;
+      }
+
+      .status-indicator {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        font-weight: 500;
+      }
+
+      .status-indicator.processing {
+        color: #0b57d0;
+      }
+
+      .status-indicator.success {
+        color: #166534;
+      }
+
+      .status-indicator.error {
+        color: #991b1b;
+      }
+
+      .status-indicator .material-symbols-outlined {
+        font-size: 18px;
+      }
+
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid #e2e8f0;
+        border-top-color: #1a73e8;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
     `,
   ],
 })
@@ -544,7 +857,7 @@ export class VaultHomeComponent implements OnInit {
   protected readonly AppStatus = AppStatus;
 
   readonly isUnlockModalOpen = signal(false);
-  readonly currentView = signal<'drive' | 'storage' | 'trash'>('drive');
+  readonly currentView = signal<'drive' | 'storage' | 'trash' | 'transfers'>('drive');
 
   constructor() {
     effect(() => {
