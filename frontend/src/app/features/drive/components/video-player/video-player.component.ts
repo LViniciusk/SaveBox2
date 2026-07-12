@@ -23,23 +23,7 @@ import { DriveFile } from '../../state/drive.store';
         <div class="video-wrapper">
           <video #videoElement controls autoplay playsinline class="video-node"></video>
 
-          <!-- Loading Indicator Overlay -->
-          @if (streamService.isStreaming() && streamService.isBuffering()) {
-            <div class="loading-overlay">
-              <div class="spinner"></div>
-              <div class="loading-text">
-                Carregando do Drive Crypt ... {{ streamService.bufferProgress() }}%
-              </div>
-            </div>
-          }
 
-          <!-- Seeking Overlay -->
-          @if (streamService.isSeeking()) {
-            <div class="loading-overlay">
-              <div class="spinner"></div>
-              <div class="loading-text">Buscando posicao no video ...</div>
-            </div>
-          }
 
           <!-- Error Alert Overlay -->
           @if (streamService.error()) {
@@ -165,9 +149,6 @@ import { DriveFile } from '../../state/drive.store';
         font-family: 'Inter', sans-serif;
       }
 
-      .loading-overlay {
-        pointer-events: none; /* Allow clicking through to the video controls */
-      }
 
       .spinner {
         width: 48px;

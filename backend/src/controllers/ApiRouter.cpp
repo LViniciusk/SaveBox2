@@ -434,6 +434,13 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
         int64_t raw_size_bytes;
         std::string storage_provider = "local";
 
+        std::optional<std::string> proxy_external_file_id = std::nullopt;
+        std::optional<uint64_t> proxy_size_bytes = std::nullopt;
+        std::optional<std::string> proxy_encrypted_fdk = std::nullopt;
+        
+        int64_t raw_total_chunks = 0;
+        bool has_total_chunks = false;
+
         try {
             if (body.has("folder_id") && body["folder_id"].t() != crow::json::type::Null) {
                 folder_id = static_cast<uint64_t>(body["folder_id"].i());
@@ -446,6 +453,23 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
             if (body.has("storage_provider") && body["storage_provider"].t() == crow::json::type::String) {
                 storage_provider = body["storage_provider"].s();
             }
+
+            if (body.has("proxy_external_file_id") && body["proxy_external_file_id"].t() == crow::json::type::String) {
+                proxy_external_file_id = body["proxy_external_file_id"].s();
+            }
+            if (body.has("proxy_size_bytes")) {
+                int64_t proxy_size = body["proxy_size_bytes"].i();
+                if (proxy_size >= 0) proxy_size_bytes = static_cast<uint64_t>(proxy_size);
+            }
+            if (body.has("proxy_encrypted_fdk") && body["proxy_encrypted_fdk"].t() == crow::json::type::String) {
+                proxy_encrypted_fdk = body["proxy_encrypted_fdk"].s();
+            }
+
+            if (body.has("total_chunks")) {
+                has_total_chunks = true;
+                raw_total_chunks = body["total_chunks"].i();
+            }
+
         } catch (const std::runtime_error&) {
             return crow::response(400, R"({"error":"Tipos de dados invalidos no JSON"})");
         }
@@ -470,7 +494,8 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
             }
 
             int file_id = file_mgr_->init_external_upload(
-                user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider, best_storage_id
+                user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider, best_storage_id,
+                proxy_external_file_id, proxy_size_bytes, proxy_encrypted_fdk
             );
 
             crow::json::wvalue res_body;
@@ -482,15 +507,8 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
             return crow::response(201, res_body);
         }
 
-        if (!body.has("total_chunks")) {
+        if (!has_total_chunks) {
             return crow::response(400, R"({"error":"JSON invalido"})");
-        }
-
-        int64_t raw_total_chunks;
-        try {
-            raw_total_chunks = body["total_chunks"].i();
-        } catch (const std::runtime_error&) {
-            return crow::response(400, R"({"error":"Tipos de dados invalidos no JSON"})");
         }
 
         if (raw_total_chunks <= 0) {
@@ -506,7 +524,8 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
             return crow::response(400, R"({"error":"Quantidade de chunks incompativel com o tamanho do arquivo"})");
         }
 
-        int file_id = file_mgr_->init_upload(user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, total_chunks);
+        int file_id = file_mgr_->init_upload(user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, total_chunks,
+                                             proxy_external_file_id, proxy_size_bytes, proxy_encrypted_fdk);
 
         return crow::response(201, R"({"file_id":)" + std::to_string(file_id) + "}");
 
@@ -603,6 +622,19 @@ crow::response ApiRouter::handle_batch_init_uploads(const crow::request& req) {
                     gdrive_tokens[b_item.name_hash] = {root_folder_id, access_token};
                 } else {
                     return crow::response(400, R"({"error":"storage_provider invalido"})");
+                }
+
+                if (item.has("proxy_external_file_id") && item["proxy_external_file_id"].t() == crow::json::type::String) {
+                    b_item.proxy_external_file_id = item["proxy_external_file_id"].s();
+                }
+                if (item.has("proxy_size_bytes")) {
+                    int64_t proxy_size = item["proxy_size_bytes"].i();
+                    if (proxy_size >= 0) {
+                        b_item.proxy_size_bytes = static_cast<uint64_t>(proxy_size);
+                    }
+                }
+                if (item.has("proxy_encrypted_fdk") && item["proxy_encrypted_fdk"].t() == crow::json::type::String) {
+                    b_item.proxy_encrypted_fdk = item["proxy_encrypted_fdk"].s();
                 }
 
             } catch (const std::runtime_error&) {

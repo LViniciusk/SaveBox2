@@ -63,7 +63,7 @@ import { firstValueFrom, timer } from 'rxjs';
 import { retry } from 'rxjs/operators';
 import { CryptoService } from '../../../core/crypto/crypto.service';
 import { DriveService }  from '../services/drive.service';
-import { DriveFile }     from '../state/drive.store';
+import { DriveFile, DriveStore } from '../state/drive.store';
 
 // ---------------------------------------------------------------------------
 // On-disk format constants (must mirror Kasumi XChaCha20 layout exactly).
@@ -136,8 +136,13 @@ interface StreamState {
   /** AbortController for the current in-flight HTTP Range request. */
   currentFetch: AbortController | null;
 
+  seekDebounceTimeout: any | null;
+
   /** Whether the stream has been fully destroyed. */
   aborted: boolean;
+
+  silentRetryCount: number;
+  lastSilentRetryTime: number;
 
   // Video element binding references
   videoElement: HTMLVideoElement;
@@ -158,6 +163,7 @@ export class VideoStreamService {
   private readonly cryptoService = inject(CryptoService);
   private readonly driveService  = inject(DriveService);
   private readonly ngZone        = inject(NgZone);
+  private readonly driveStore    = inject(DriveStore);
 
   // Public reactive state for component bindings.
   readonly isStreaming    = signal(false);
@@ -177,7 +183,7 @@ export class VideoStreamService {
    * Attaches a secure streaming session to the given HTMLVideoElement.
    * Safe to call multiple times -- destroys any previous session first.
    */
-  async initializeStream(videoElement: HTMLVideoElement, file: DriveFile): Promise<void> {
+  async initializeStream(videoElement: HTMLVideoElement, file: DriveFile, initialSeekTime?: number, previousRetryCount = 0, previousRetryTime = 0): Promise<void> {
     this.destroyStream();
     this.error.set(null);
     this.isStreaming.set(true);
@@ -191,16 +197,29 @@ export class VideoStreamService {
       this.isStreaming.set(false);
       return;
     }
-    if (!file.encryptedFdk) {
+    
+    // Procura por versão otimizada (proxy) do vídeo
+    let fileToPlay = file;
+    if (this.driveStore) {
+      const allFiles = this.driveStore.files();
+      const proxyName = '__PROXY__' + file.decryptedName;
+      const proxyFile = allFiles.find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
+      if (proxyFile) {
+        console.log('[VideoStream] Proxy version found! Using optimized stream instead of original master.');
+        fileToPlay = proxyFile;
+      }
+    }
+    
+    if (!fileToPlay.encryptedFdk) {
       this.error.set('FDK ausente nos metadados do arquivo.');
       this.isStreaming.set(false);
       return;
     }
 
     try {
-      console.log('[VideoStream] initializeStream started', file);
+      console.log('[VideoStream] initializeStream started', fileToPlay);
       // --- Step 1: Decrypt the File Data Key from the Vault. -----------------
-      const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
+      const fdkBase64 = await this.cryptoService.decryptName(fileToPlay.encryptedFdk);
       const fdkString = atob(fdkBase64);
       const fdk       = new Uint8Array(fdkString.length);
       for (let i = 0; i < fdkString.length; i++) fdk[i] = fdkString.charCodeAt(i);
@@ -208,16 +227,16 @@ export class VideoStreamService {
       let gdriveUrl: string | null = null;
       let gdriveToken: string | null = null;
 
-      if (file.storageProvider === 'google_drive') {
-        console.log('[VideoStream] Loading Google Drive metadata for file ID:', file.id);
-        const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
+      if (fileToPlay.storageProvider === 'google_drive') {
+        console.log('[VideoStream] Loading Google Drive metadata for file ID:', fileToPlay.id);
+        const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(fileToPlay.id));
         gdriveUrl = `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`;
         gdriveToken = meta.access_token;
       }
 
       console.log('[VideoStream] Fetching header...');
       // --- Step 2: Download the 32-byte file header. -------------------------
-      const headerBlob    = await this.fetchRange(file.id, 0, HEADER_SIZE - 1, new AbortController(), gdriveUrl, gdriveToken);
+      const headerBlob    = await this.fetchRange(fileToPlay.id, 0, HEADER_SIZE - 1, new AbortController(), gdriveUrl, gdriveToken);
       console.log('[VideoStream] Header blob fetched size:', headerBlob.size);
       const headerBuffer  = await headerBlob.arrayBuffer();
       const baseNonce     = new Uint8Array(headerBuffer, 0, NONCE_SIZE);
@@ -251,7 +270,7 @@ export class VideoStreamService {
       });
 
       const s: StreamState = {
-        file,
+        file: fileToPlay,
         fdk,
         baseNonce,
         plaintextSize,
@@ -267,7 +286,10 @@ export class VideoStreamService {
         isRemoving: false,
         seekGeneration: 0,
         currentFetch: null,
+        seekDebounceTimeout: null,
         aborted: false,
+        silentRetryCount: previousRetryCount,
+        lastSilentRetryTime: previousRetryTime,
         videoElement,
         videoUrl,
         gdriveUrl,
@@ -285,9 +307,14 @@ export class VideoStreamService {
       // --- Step 6: Attach event listeners. ----------------------------------
       this.attachVideoListeners(s, videoElement);
 
-      console.log('[VideoStream] Priming the pump (scheduleNextChunk)...');
-      // --- Step 7: Prime the pump -- request the first content chunk. --------
-      this.scheduleNextChunk(s, videoElement);
+      if (initialSeekTime !== undefined && initialSeekTime > 0) {
+        console.log('[VideoStream] Silent retry: jumping to initialSeekTime', initialSeekTime);
+        videoElement.currentTime = initialSeekTime;
+      } else {
+        console.log('[VideoStream] Priming the pump (scheduleNextChunk)...');
+        // --- Step 7: Prime the pump -- request the first content chunk. --------
+        this.scheduleNextChunk(s, videoElement);
+      }
 
     } catch (err: any) {
       if (!this.state?.aborted) {
@@ -359,7 +386,15 @@ export class VideoStreamService {
       this.onTimeupdateTick(s, videoElement);
     };
     const onSeeking = () => {
-      this.onSeek(s, videoElement);
+      this.ngZone.run(() => this.isSeeking.set(true));
+      
+      if (s.seekDebounceTimeout) {
+        clearTimeout(s.seekDebounceTimeout);
+      }
+      s.seekDebounceTimeout = setTimeout(() => {
+        s.seekDebounceTimeout = null;
+        this.onSeek(s, videoElement);
+      }, 300);
     };
 
     const onWaiting = () => this.ngZone.run(() => this.isBuffering.set(true));
@@ -473,7 +508,26 @@ export class VideoStreamService {
       .catch((err) => {
         s.isFetching = false;
         if (!s.aborted && err?.name !== 'AbortError') {
-          this.ngZone.run(() => this.error.set(err?.message ?? 'Erro no pipeline de chunk.'));
+          if (err?.message === 'Erro no appendBuffer.') {
+            const now = Date.now();
+            let newRetryCount = s.silentRetryCount;
+            
+            if (now - s.lastSilentRetryTime < 10000) {
+              newRetryCount++;
+            } else {
+              newRetryCount = 1;
+            }
+
+            if (newRetryCount > 3) {
+              console.warn('[VideoStream] Silent retry loop detected! Adding playhead by 1 second to bypass corrupted chunk.', err);
+              this.initializeStream(videoElement, s.file, videoElement.currentTime + 1, 0, now);
+            } else {
+              console.warn(`[VideoStream] Append error detected! Attempting silent retry ${newRetryCount}/3 at currentTime:`, videoElement.currentTime);
+              this.initializeStream(videoElement, s.file, videoElement.currentTime, newRetryCount, now);
+            }
+          } else {
+            this.ngZone.run(() => this.error.set(err?.message ?? 'Erro no pipeline de chunk.'));
+          }
         }
       });
   }
@@ -974,7 +1028,7 @@ export class VideoStreamService {
       } catch (err: any) {
         sb.removeEventListener('updateend', onEnd);
         sb.removeEventListener('error',     onErr);
-        reject(err);
+        reject(new Error('Erro no appendBuffer.'));
       }
     });
   }

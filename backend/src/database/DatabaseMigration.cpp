@@ -85,6 +85,10 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 storage_provider VARCHAR(20) DEFAULT 'local',
                 external_file_id VARCHAR(255) NULL,
                 external_storage_id BIGINT REFERENCES user_external_storages(id) ON DELETE CASCADE,
+                proxy_external_file_id VARCHAR(255) NULL,
+                proxy_physical_path TEXT UNIQUE NULL,
+                proxy_size_bytes BIGINT NULL,
+                proxy_encrypted_fdk TEXT NULL,
                 deleted_at TIMESTAMP NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 CONSTRAINT unique_file_name UNIQUE (user_id, folder_id, name_hash)

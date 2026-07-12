@@ -262,7 +262,7 @@ import { CommonModule } from '@angular/common';
             @if (driveStore.isUploading()) {
               <div class="upload-progress-container">
                 <div class="upload-header">
-                  <span>Fazendo upload...</span>
+                  <span>{{ driveStore.uploadStatusMessage() }}</span>
                   <span>{{ driveStore.uploadProgress() }}%</span>
                 </div>
                 <progress class="quota-progress-bar upload-progress-bar" [value]="driveStore.uploadProgress()" max="100"></progress>

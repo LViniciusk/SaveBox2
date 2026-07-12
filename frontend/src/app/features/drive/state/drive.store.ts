@@ -5,6 +5,7 @@ import { firstValueFrom, Subscription } from 'rxjs';
 import { KasumiCryptoService } from '../../../core/crypto/kasumi-crypto.service';
 import { HttpClient, HttpEventType } from '@angular/common/http';
 import { DialogService } from '../../../core/dialog/dialog.service';
+import { VideoTranscoderService } from '../services/video-transcoder.service';
 
 export interface TransferItem {
   id: string;
@@ -34,6 +35,9 @@ export interface DriveFile {
   storageProvider?: string;
   parentId?: number | null;
   folderId?: number | null;
+  proxyExternalFileId?: string;
+  proxySizeBytes?: number;
+  proxyEncryptedFdk?: string;
 }
 
 export interface QuotaState {
@@ -49,18 +53,33 @@ export class DriveStore {
   private readonly cryptoService = inject(CryptoService);
   private readonly http = inject(HttpClient);
   private readonly dialogService = inject(DialogService);
+  private readonly videoTranscoder = inject(VideoTranscoderService);
 
   readonly files = signal<DriveFile[]>([]);
   readonly quota = signal<QuotaState>({ usedBytes: 0, maxBytes: 10 * 1024 * 1024 * 1024 });
   readonly isLoading = signal(false);
   
+  readonly visibleFiles = computed(() => {
+    return this.files().filter(f => !f.decryptedName?.startsWith('__PROXY__'));
+  });
+
   readonly isUploading = signal(false);
   readonly uploadProgress = signal(0);
+  
+  readonly uploadStatusMessage = computed(() => {
+    const active = this.transfers().find(t => t.type === 'upload' && t.status === 'processing');
+    if (active) {
+      return active.fileName;
+    }
+    return 'Fazendo upload...';
+  });
+
   readonly isDownloading = signal(false);
   readonly downloadProgress = signal(0);
   private readonly kasumi = inject(KasumiCryptoService);
 
   readonly storageProvider = signal<'local' | 'google_drive'>((localStorage.getItem('preferred_storage_provider') as 'local' | 'google_drive') || 'local');
+  readonly videoUploadMode = signal<'original' | 'dual' | 'optimized'>((localStorage.getItem('preferred_video_upload_mode') as 'original' | 'dual' | 'optimized') || 'dual');
   readonly linkedAccounts = signal<any[]>([]);
   readonly trashFiles = signal<DriveFile[]>([]);
   readonly transfers = signal<TransferItem[]>([]);
@@ -108,6 +127,7 @@ export class DriveStore {
     }
 
     return trash.filter(f => {
+      if (f.decryptedName?.startsWith('__PROXY__')) return false;
       if (f.isFolder) {
         return f.parentId === currentId;
       } else {
@@ -118,7 +138,7 @@ export class DriveStore {
 
   readonly currentFolderFiles = computed(() => {
     const currentId = this.currentFolderId();
-    return this.files().filter(f => {
+    return this.visibleFiles().filter(f => {
       if (f.isFolder) {
         return f.parentId === currentId;
       } else {
@@ -165,6 +185,11 @@ export class DriveStore {
   setStorageProvider(provider: 'local' | 'google_drive'): void {
     this.storageProvider.set(provider);
     localStorage.setItem('preferred_storage_provider', provider);
+  }
+
+  setVideoUploadMode(mode: 'original' | 'dual' | 'optimized'): void {
+    this.videoUploadMode.set(mode);
+    localStorage.setItem('preferred_video_upload_mode', mode);
   }
 
   async loadLinkedAccounts(): Promise<void> {
@@ -400,6 +425,12 @@ export class DriveStore {
       bytesTransferred,
       totalBytes
     });
+
+    // Sincroniza com a barra de progresso global se for o upload ativo
+    const t = this.transfers().find(item => item.id === id);
+    if (t && t.type === 'upload' && t.status === 'processing') {
+      this.uploadProgress.set(progress);
+    }
   }
 
   async uploadFile(file: File, folderId: number | null = this.currentFolderId()): Promise<void> {
@@ -438,11 +469,62 @@ export class DriveStore {
     }
   }
 
-  private async _doUpload(file: File, folderId: number | null = null): Promise<void> {
+  private async _doUpload(originalFile: File, folderId: number | null = null): Promise<void> {
+    const isVideo = this.videoTranscoder.isVideo(originalFile);
+    const mode = this.videoUploadMode();
+    
+    // Lista de arquivos a enviar
+    const filesToUpload: { file: File, isHiddenProxy: boolean }[] = [];
+    
+    if (isVideo && (mode === 'optimized' || mode === 'dual')) {
+      // Cria a transferencia do tipo processing pra exibir na UI
+      const transcodeTransferId = 'tc_' + Date.now();
+      this.addTransfer({
+        id: transcodeTransferId,
+        fileName: 'Otimizando: ' + originalFile.name,
+        type: 'upload',
+        status: 'processing',
+        progress: 0
+      });
+
+      try {
+        const proxyFile = await this.videoTranscoder.transcodeToProxy(originalFile, (p) => {
+          this.updateTransferProgress(transcodeTransferId, Math.round(p * 100), 0, 100);
+        });
+        
+        if (mode === 'optimized') {
+          // Substitui completamente pelo otimizado, mantendo o nome original
+          const renamedProxy = new File([proxyFile], originalFile.name, { type: proxyFile.type });
+          filesToUpload.push({ file: renamedProxy, isHiddenProxy: false });
+        } else {
+          // Dual: envia o original E o proxy oculto
+          filesToUpload.push({ file: originalFile, isHiddenProxy: false });
+          const hiddenProxy = new File([proxyFile], '__PROXY__' + originalFile.name, { type: proxyFile.type });
+          filesToUpload.push({ file: hiddenProxy, isHiddenProxy: true });
+        }
+      } catch (e: any) {
+        console.error('Erro na transcodificação, enviando apenas original', e);
+        // Fallback: envia só o original se der erro no ffmpeg
+        filesToUpload.push({ file: originalFile, isHiddenProxy: false });
+      } finally {
+        this.activeUploads.delete(transcodeTransferId);
+        // Remove processing bar
+        this.updateTransfer(transcodeTransferId, { status: 'success' });
+      }
+    } else {
+      filesToUpload.push({ file: originalFile, isHiddenProxy: false });
+    }
+
+    for (const item of filesToUpload) {
+      await this._uploadSingleFile(item.file, folderId, item.isHiddenProxy);
+    }
+  }
+
+  private async _uploadSingleFile(file: File, folderId: number | null, isHiddenProxy: boolean): Promise<void> {
     const transferId = 'up_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
     this.addTransfer({
       id: transferId,
-      fileName: file.name,
+      fileName: isHiddenProxy ? 'Otimizando nuvem: ' + file.name.replace('__PROXY__', '') : file.name,
       type: 'upload',
       status: 'processing',
       progress: 0
@@ -470,7 +552,6 @@ export class DriveStore {
       ));
       const fileId = initRes.file_id;
 
-      // Save upload context in activeUploads to allow Pause & Resume
       this.activeUploads.set(transferId, {
         file,
         fileId,
@@ -831,6 +912,16 @@ export class DriveStore {
       await firstValueFrom(this.driveService.updateFolder(file.id, { encrypted_name: encName, name_hash: hash }));
     } else {
       await firstValueFrom(this.driveService.updateFile(file.id, { encrypted_name: encName, name_hash: hash }));
+      
+      // Se tiver proxy (dual mode), renomeia também
+      const proxyName = '__PROXY__' + file.decryptedName;
+      const proxyFile = untracked(() => this.files()).find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
+      if (proxyFile) {
+        const newProxyName = '__PROXY__' + newName;
+        const proxyEncName = await this.cryptoService.encryptName(newProxyName);
+        const proxyHash = await this.cryptoService.hashName(newProxyName);
+        await firstValueFrom(this.driveService.updateFile(proxyFile.id, { encrypted_name: proxyEncName, name_hash: proxyHash }));
+      }
     }
     await this.loadTree();
   }
@@ -852,6 +943,13 @@ export class DriveStore {
       await firstValueFrom(this.driveService.trashFolder(file.id));
     } else {
       await firstValueFrom(this.driveService.trashFile(file.id));
+      
+      // Se tiver proxy, manda pra lixeira tambem
+      const proxyName = '__PROXY__' + file.decryptedName;
+      const proxyFile = untracked(() => this.files()).find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
+      if (proxyFile) {
+        await firstValueFrom(this.driveService.trashFile(proxyFile.id));
+      }
     }
     await this.loadTree();
     await this.loadQuota();
@@ -924,6 +1022,12 @@ export class DriveStore {
       await firstValueFrom(this.driveService.restoreFolder(file.id));
     } else {
       await firstValueFrom(this.driveService.restoreFile(file.id));
+      
+      const proxyName = '__PROXY__' + file.decryptedName;
+      const proxyFile = untracked(() => this.trashFiles()).find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
+      if (proxyFile) {
+        await firstValueFrom(this.driveService.restoreFile(proxyFile.id));
+      }
     }
     await this.loadTrash();
     await this.loadTree();
@@ -935,6 +1039,12 @@ export class DriveStore {
       await firstValueFrom(this.driveService.hardDeleteFolder(file.id));
     } else {
       await firstValueFrom(this.driveService.hardDeleteFile(file.id));
+      
+      const proxyName = '__PROXY__' + file.decryptedName;
+      const proxyFile = untracked(() => this.trashFiles()).find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
+      if (proxyFile) {
+        await firstValueFrom(this.driveService.hardDeleteFile(proxyFile.id));
+      }
     }
     await this.loadTrash();
     await this.loadQuota();

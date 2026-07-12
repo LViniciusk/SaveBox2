@@ -56,8 +56,19 @@ export class DriveService {
     });
   }
 
-  initFileUpload(folderId: number | null, encryptedName: string, nameHash: string, encryptedFdk: string, sizeBytes: number, totalChunks: number, storageProvider: string = 'local'): Observable<{file_id: number, storage_provider?: string, access_token?: string, root_folder_id?: string}> {
-    const body = {
+  initFileUpload(
+    folderId: number | null, 
+    encryptedName: string, 
+    nameHash: string, 
+    encryptedFdk: string, 
+    sizeBytes: number, 
+    totalChunks: number, 
+    storageProvider: string = 'local',
+    proxyExternalFileId?: string,
+    proxySizeBytes?: number,
+    proxyEncryptedFdk?: string
+  ): Observable<{file_id: number, storage_provider?: string, access_token?: string, root_folder_id?: string}> {
+    const body: any = {
       folder_id: folderId ?? null,
       encrypted_name: encryptedName,
       name_hash: nameHash,
@@ -66,6 +77,11 @@ export class DriveService {
       total_chunks: totalChunks,
       storage_provider: storageProvider
     };
+    
+    if (proxyExternalFileId) body.proxy_external_file_id = proxyExternalFileId;
+    if (proxySizeBytes !== undefined) body.proxy_size_bytes = proxySizeBytes;
+    if (proxyEncryptedFdk) body.proxy_encrypted_fdk = proxyEncryptedFdk;
+
     return this.http.post<{file_id: number, storage_provider?: string, access_token?: string, root_folder_id?: string}>(`${environment.apiUrl}/files`, body, {
       withCredentials: true,
     });

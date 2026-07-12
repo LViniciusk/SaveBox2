@@ -127,6 +127,18 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         crow::response res1 = router.handle_init_file_upload(req_init);
         REQUIRE(res1.code == 201);
 
+        auto init_body = crow::json::load(res1.body);
+        int file_id = init_body["file_id"].i();
+
+        crow::request req_chunk;
+        req_chunk.add_header("Authorization", "Bearer " + token);
+        req_chunk.add_header("X-Chunk-Index", "0");
+        req_chunk.body = std::string(100, '\xAB');
+
+        crow::response res_chunk = router.handle_upload_chunk(req_chunk, file_id);
+        REQUIRE(res_chunk.code == 200);
+        REQUIRE(res_chunk.body.find("completed") != std::string::npos);
+
         crow::response res2 = router.handle_init_file_upload(req_init);
         REQUIRE(res2.code == 409);
         REQUIRE(res2.body.find("Um arquivo com este nome ja existe nesta pasta") != std::string::npos);

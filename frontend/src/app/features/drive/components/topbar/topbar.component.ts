@@ -233,6 +233,53 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                 }
               </div>
 
+              <!-- Configurações de Mídia -->
+              <div class="settings-section" style="margin-top: 24px; border-top: 1px solid #e2e8f0; padding-top: 16px;">
+                <h4 class="section-title">Upload de Vídeos</h4>
+                <p class="section-desc">Escolha como o SaveBox deve processar seus vídeos pesados.</p>
+                
+                <div class="storage-switch-container" style="flex-direction: column; gap: 8px;">
+                  <!-- Mode: Original -->
+                  <button 
+                    class="switch-option" 
+                    [class.active]="driveStore.videoUploadMode() === 'original'"
+                    (click)="driveStore.setVideoUploadMode('original')"
+                    style="width: 100%;">
+                    <span class="material-symbols-outlined option-icon">movie</span>
+                    <div class="option-details">
+                      <span class="option-name">Apenas Original (Mais rápido)</span>
+                      <span class="option-sub">Salva apenas o arquivo master. Pode travar no streaming web.</span>
+                    </div>
+                  </button>
+
+                  <!-- Mode: Dual -->
+                  <button 
+                    class="switch-option" 
+                    [class.active]="driveStore.videoUploadMode() === 'dual'"
+                    (click)="driveStore.setVideoUploadMode('dual')"
+                    style="width: 100%;">
+                    <span class="material-symbols-outlined option-icon">hdr_auto</span>
+                    <div class="option-details">
+                      <span class="option-name">Armazenamento Duplo (Recomendado)</span>
+                      <span class="option-sub">Salva o Master e gera uma cópia leve para streaming rápido. Usa mais espaço.</span>
+                    </div>
+                  </button>
+
+                  <!-- Mode: Optimized -->
+                  <button 
+                    class="switch-option" 
+                    [class.active]="driveStore.videoUploadMode() === 'optimized'"
+                    (click)="driveStore.setVideoUploadMode('optimized')"
+                    style="width: 100%;">
+                    <span class="material-symbols-outlined option-icon">compress</span>
+                    <div class="option-details">
+                      <span class="option-name">Apenas Otimizado (Economiza espaço)</span>
+                      <span class="option-sub">Converte para web, apaga o Original e salva espaço na nuvem.</span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
               <!-- Alterar Frase de Segurança -->
               <div class="settings-section" style="margin-top: 24px; border-top: 1px solid #e2e8f0; padding-top: 16px;">
                 <h4 class="section-title" style="margin-bottom: 4px;">Alterar Frase de Segurança</h4>

@@ -9,7 +9,10 @@ FileManager::FileManager(DatabasePool& pool) : pool_(pool) {}
 int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id,
                               const std::string& enc_name, const std::string& name_hash,
                               const std::string& encrypted_fdk,
-                              uint64_t size_bytes, int total_chunks) {
+                              uint64_t size_bytes, int total_chunks,
+                              std::optional<std::string> proxy_external_file_id,
+                              std::optional<uint64_t> proxy_size_bytes,
+                              std::optional<std::string> proxy_encrypted_fdk) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
@@ -40,12 +43,12 @@ int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id
     pqxx::result conflict_check;
     if (folder_id.has_value()) {
         conflict_check = txn.exec(
-            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id = $2 AND name_hash = $3",
+            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id = $2 AND name_hash = $3 AND deleted_at IS NULL",
             pqxx::params{user_id, folder_id.value(), name_hash}
         );
     } else {
         conflict_check = txn.exec(
-            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id IS NULL AND name_hash = $2",
+            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id IS NULL AND name_hash = $2 AND deleted_at IS NULL",
             pqxx::params{user_id, name_hash}
         );
     }
@@ -64,11 +67,25 @@ int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id
         }
     }
 
-    auto result = txn.exec(
-        "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-        pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, total_chunks}
-    );
+    std::string proxy_ext_id = proxy_external_file_id.has_value() ? txn.quote(proxy_external_file_id.value()) : "NULL";
+    std::string proxy_size = proxy_size_bytes.has_value() ? std::to_string(proxy_size_bytes.value()) : "NULL";
+    std::string proxy_fdk = proxy_encrypted_fdk.has_value() ? txn.quote(proxy_encrypted_fdk.value()) : "NULL";
+
+    std::string f_id = folder_id.has_value() ? std::to_string(folder_id.value()) : "NULL";
+    std::string query = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, "
+                        "proxy_external_file_id, proxy_size_bytes, proxy_encrypted_fdk) VALUES (" +
+                        std::to_string(user_id) + ", " +
+                        f_id + ", " +
+                        txn.quote(enc_name) + ", " +
+                        txn.quote(name_hash) + ", " +
+                        txn.quote(encrypted_fdk) + ", " +
+                        std::to_string(size_bytes) + ", " +
+                        std::to_string(total_chunks) + ", " +
+                        proxy_ext_id + ", " +
+                        proxy_size + ", " +
+                        proxy_fdk +
+                        ") RETURNING id";
+    auto result = txn.exec(query);
 
     int file_id = result[0][0].as<int>();
 
@@ -163,7 +180,8 @@ std::vector<crow::json::wvalue> FileManager::get_user_files_paginated(uint64_t u
     pqxx::work txn(*conn);
 
     auto result = txn.exec(
-        "SELECT id, folder_id, encrypted_name, size_bytes, encrypted_fdk, storage_provider FROM files "
+        "SELECT id, folder_id, encrypted_name, size_bytes, encrypted_fdk, storage_provider, "
+        "proxy_external_file_id, proxy_size_bytes, proxy_encrypted_fdk FROM files "
         "WHERE user_id = $1 AND is_upload_complete = true AND deleted_at IS NULL "
         "ORDER BY id ASC LIMIT $2 OFFSET $3",
         pqxx::params{user_id, limit, offset}
@@ -184,6 +202,11 @@ std::vector<crow::json::wvalue> FileManager::get_user_files_paginated(uint64_t u
         item["size_bytes"] = row[3].as<int64_t>();
         item["encrypted_fdk"] = row[4].as<std::string>();
         item["storage_provider"] = row[5].as<std::string>();
+        
+        if (!row[6].is_null()) item["proxy_external_file_id"] = row[6].as<std::string>();
+        if (!row[7].is_null()) item["proxy_size_bytes"] = row[7].as<int64_t>();
+        if (!row[8].is_null()) item["proxy_encrypted_fdk"] = row[8].as<std::string>();
+
         files.push_back(std::move(item));
     }
 
@@ -740,7 +763,10 @@ int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> 
                                        const std::string& enc_name, const std::string& name_hash,
                                        const std::string& encrypted_fdk,
                                        uint64_t size_bytes, const std::string& storage_provider,
-                                       std::optional<uint64_t> external_storage_id) {
+                                       std::optional<uint64_t> external_storage_id,
+                                       std::optional<std::string> proxy_external_file_id,
+                                       std::optional<uint64_t> proxy_size_bytes,
+                                       std::optional<std::string> proxy_encrypted_fdk) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
@@ -773,12 +799,12 @@ int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> 
     pqxx::result conflict_check;
     if (folder_id.has_value()) {
         conflict_check = txn.exec(
-            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id = $2 AND name_hash = $3",
+            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id = $2 AND name_hash = $3 AND deleted_at IS NULL",
             pqxx::params{user_id, folder_id.value(), name_hash}
         );
     } else {
         conflict_check = txn.exec(
-            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id IS NULL AND name_hash = $2",
+            "SELECT id, is_upload_complete, size_bytes FROM files WHERE user_id = $1 AND folder_id IS NULL AND name_hash = $2 AND deleted_at IS NULL",
             pqxx::params{user_id, name_hash}
         );
     }
@@ -796,12 +822,29 @@ int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> 
         }
     }
 
-    auto result = txn.exec(
-        "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, "
-        "size_bytes, total_chunks, storage_provider, external_storage_id) "
-        "VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8) RETURNING id",
-        pqxx::params{user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider, external_storage_id}
-    );
+    std::string proxy_ext_id = proxy_external_file_id.has_value() ? txn.quote(proxy_external_file_id.value()) : "NULL";
+    std::string proxy_size = proxy_size_bytes.has_value() ? std::to_string(proxy_size_bytes.value()) : "NULL";
+    std::string proxy_fdk = proxy_encrypted_fdk.has_value() ? txn.quote(proxy_encrypted_fdk.value()) : "NULL";
+
+    std::string f_id = folder_id.has_value() ? std::to_string(folder_id.value()) : "NULL";
+    std::string ext_id = external_storage_id.has_value() ? std::to_string(external_storage_id.value()) : "NULL";
+
+    std::string query = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, storage_provider, external_storage_id, "
+                        "proxy_external_file_id, proxy_size_bytes, proxy_encrypted_fdk) VALUES (" +
+                        std::to_string(user_id) + ", " +
+                        f_id + ", " +
+                        txn.quote(enc_name) + ", " +
+                        txn.quote(name_hash) + ", " +
+                        txn.quote(encrypted_fdk) + ", " +
+                        std::to_string(size_bytes) + ", " +
+                        "0, " +
+                        txn.quote(storage_provider) + ", " +
+                        ext_id + ", " +
+                        proxy_ext_id + ", " +
+                        proxy_size + ", " +
+                        proxy_fdk +
+                        ") RETURNING id";
+    auto result = txn.exec(query);
 
     int file_id = result[0][0].as<int>();
     txn.commit();
@@ -854,7 +897,8 @@ std::vector<BatchInitResult> FileManager::batch_init_uploads(uint64_t user_id, c
              pqxx::params{total_cost, user_id});
 
     std::string query = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, "
-                        "size_bytes, total_chunks, storage_provider, external_storage_id) VALUES ";
+                        "size_bytes, total_chunks, storage_provider, external_storage_id, "
+                        "proxy_external_file_id, proxy_size_bytes, proxy_encrypted_fdk) VALUES ";
 
     for (size_t i = 0; i < files.size(); ++i) {
         if (i > 0) query += ", ";
@@ -863,6 +907,10 @@ std::vector<BatchInitResult> FileManager::batch_init_uploads(uint64_t user_id, c
         std::string ext_id = files[i].external_storage_id.has_value() ? std::to_string(files[i].external_storage_id.value()) : "NULL";
         int chunks = files[i].storage_provider == "local" ? files[i].total_chunks : 0;
         
+        std::string proxy_ext_id = files[i].proxy_external_file_id.has_value() ? txn.quote(files[i].proxy_external_file_id.value()) : "NULL";
+        std::string proxy_size = files[i].proxy_size_bytes.has_value() ? std::to_string(files[i].proxy_size_bytes.value()) : "NULL";
+        std::string proxy_fdk = files[i].proxy_encrypted_fdk.has_value() ? txn.quote(files[i].proxy_encrypted_fdk.value()) : "NULL";
+
         query += "(" + std::to_string(user_id) + ", " + 
                  f_id + ", " + 
                  txn.quote(files[i].enc_name) + ", " + 
@@ -871,7 +919,10 @@ std::vector<BatchInitResult> FileManager::batch_init_uploads(uint64_t user_id, c
                  std::to_string(files[i].size_bytes) + ", " + 
                  std::to_string(chunks) + ", " + 
                  txn.quote(files[i].storage_provider) + ", " + 
-                 ext_id + ")";
+                 ext_id + ", " + 
+                 proxy_ext_id + ", " + 
+                 proxy_size + ", " + 
+                 proxy_fdk + ")";
     }
 
     query += " RETURNING id, name_hash, storage_provider";

@@ -83,8 +83,8 @@ function createState(): TransmuxState {
   try {
     if (typeof (MP4Box as any).createFile === 'function') {
       mp4file = (MP4Box as any).createFile();
-    } else if (MP4Box && typeof (MP4Box as any).default?.createFile === 'function') {
-      mp4file = (MP4Box as any).default.createFile();
+    } else if (MP4Box && typeof (MP4Box as any)['default']?.createFile === 'function') {
+      mp4file = (MP4Box as any)['default'].createFile();
     } else {
       throw new Error('MP4Box.createFile is not a function');
     }
@@ -168,7 +168,7 @@ function createState(): TransmuxState {
 
         console.log('[TransmuxWorker] onReady step 5: setting segment options for track', track.id, 'codecStr:', codecStr);
         codecDict[String(track.id)] = codecStr;
-        mp4file.setSegmentOptions(track.id, null, { nbSamples: 15 });
+        mp4file.setSegmentOptions(track.id, null, { nbSamples: 100, rapAlign: true });
       }
     } else {
       console.warn('[TransmuxWorker] onReady step 2: info.tracks is missing!');
@@ -217,6 +217,8 @@ function createState(): TransmuxState {
   return s;
 }
 
+let bootstrapData: { chunk0: ArrayBuffer, moovBytes: ArrayBuffer | null, moovOffset?: number } | null = null;
+
 self.onmessage = async (event: MessageEvent) => {
   const data = event.data;
   const type = data.type;
@@ -230,8 +232,25 @@ self.onmessage = async (event: MessageEvent) => {
   // Handle SEEK message
   if (type === 'SEEK') {
     const { time, generation } = data;
-    if (state && state.mp4file) {
-      console.log('[TransmuxWorker] Seeking mp4file to time:', time);
+    if (bootstrapData) {
+      console.log('[TransmuxWorker] Re-bootstrapping mp4file for pure state before seek...');
+      state = createState();
+      
+      const { chunk0, moovBytes, moovOffset } = bootstrapData;
+      
+      const newChunk0 = chunk0.slice(0);
+      (newChunk0 as any).fileStart = 0;
+      state.mp4file.appendBuffer(newChunk0);
+      
+      if (moovBytes && typeof moovOffset === 'number') {
+        const newMoov = moovBytes.slice(0);
+        (newMoov as any).fileStart = moovOffset;
+        state.mp4file.appendBuffer(newMoov);
+      }
+
+      await state.readyPromise;
+      
+      console.log('[TransmuxWorker] Seeking fresh mp4file to time:', time);
       const seekResult = state.mp4file.seek(time, true);
       const offset = seekResult.offset;
       const chunkIndex = Math.floor(offset / (4 * 1024 * 1024));
@@ -252,6 +271,8 @@ self.onmessage = async (event: MessageEvent) => {
         moovBytes: ArrayBuffer | null;
         moovOffset?: number;
       };
+
+      bootstrapData = { chunk0: chunk0.slice(0), moovBytes: moovBytes ? moovBytes.slice(0) : null, moovOffset };
 
       console.log('[TransmuxWorker] Received BOOTSTRAP message. chunk0 size:', chunk0.byteLength, 'hasMoovBytes:', !!moovBytes, 'moovOffset:', moovOffset);
       state = createState();

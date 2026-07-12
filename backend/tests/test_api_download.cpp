@@ -178,7 +178,7 @@ TEST_CASE("API de Download de Arquivos", "[api][download]") {
 
         crow::response res = router.handle_download_file(req, large_file_id);
         REQUIRE(res.code == 400);
-        REQUIRE(res.body.find("excede o limite de 5MB") != std::string::npos);
+        REQUIRE(res.body.find("excede o limite") != std::string::npos);
     }
 
     SECTION("Proteção contra Out-Of-Bounds e Path Traversal no File ID") {
