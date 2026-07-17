@@ -22,6 +22,7 @@ export interface DriveFileDto {
   encrypted_name: string;
   size_bytes: number;
   encrypted_fdk: string;
+  is_hidden: boolean;
 }
 
 export interface TreeResponse {
@@ -66,7 +67,8 @@ export class DriveService {
     storageProvider: string = 'local',
     proxyExternalFileId?: string,
     proxySizeBytes?: number,
-    proxyEncryptedFdk?: string
+    proxyEncryptedFdk?: string,
+    isHidden: boolean = false
   ): Observable<{file_id: number, storage_provider?: string, access_token?: string, root_folder_id?: string}> {
     const body: any = {
       folder_id: folderId ?? null,
@@ -75,7 +77,8 @@ export class DriveService {
       encrypted_fdk: encryptedFdk,
       size_bytes: sizeBytes,
       total_chunks: totalChunks,
-      storage_provider: storageProvider
+      storage_provider: storageProvider,
+      is_hidden: isHidden
     };
     
     if (proxyExternalFileId) body.proxy_external_file_id = proxyExternalFileId;

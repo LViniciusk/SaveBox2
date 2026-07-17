@@ -92,6 +92,36 @@ crow::response ApiRouter::handle_get_vault_verification(const crow::request& req
     }
 }
 
+crow::response ApiRouter::handle_update_profile(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    auto body = crow::json::load(req.body);
+    if (!body) return crow::response(400, R"({"error":"JSON invalido"})");
+
+    std::string full_name = body.has("full_name") ? body["full_name"].s() : std::string("");
+    std::string avatar_url = body.has("avatar_url") ? body["avatar_url"].s() : std::string("");
+
+    try {
+        auto conn = pool_->acquire_connection();
+        pqxx::work txn(*conn);
+        txn.exec(
+            "UPDATE users SET full_name = $1, avatar_url = $2 WHERE id = $3",
+            pqxx::params{full_name, avatar_url, user_id}
+        );
+        txn.commit();
+        
+        crow::json::wvalue res;
+        res["status"] = "success";
+        res["full_name"] = full_name;
+        res["avatar_url"] = avatar_url;
+        return crow::response(200, res);
+    } catch (const std::exception& e) {
+        return crow::response(500, R"({"error":"Erro ao atualizar perfil"})");
+    }
+}
+
 crow::response ApiRouter::handle_get_quota(const crow::request& req) {
     auto user_id_opt = authenticate_request(req);
     if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
@@ -437,6 +467,7 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
         std::optional<std::string> proxy_external_file_id = std::nullopt;
         std::optional<uint64_t> proxy_size_bytes = std::nullopt;
         std::optional<std::string> proxy_encrypted_fdk = std::nullopt;
+        bool is_hidden = false;
         
         int64_t raw_total_chunks = 0;
         bool has_total_chunks = false;
@@ -463,6 +494,12 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
             }
             if (body.has("proxy_encrypted_fdk") && body["proxy_encrypted_fdk"].t() == crow::json::type::String) {
                 proxy_encrypted_fdk = body["proxy_encrypted_fdk"].s();
+            }
+            if (body.has("is_hidden") && body["is_hidden"].t() == crow::json::type::True) {
+                is_hidden = true;
+            }
+            if (body.has("is_hidden") && body["is_hidden"].t() == crow::json::type::False) {
+                is_hidden = false;
             }
 
             if (body.has("total_chunks")) {
@@ -495,7 +532,7 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
 
             int file_id = file_mgr_->init_external_upload(
                 user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, storage_provider, best_storage_id,
-                proxy_external_file_id, proxy_size_bytes, proxy_encrypted_fdk
+                proxy_external_file_id, proxy_size_bytes, proxy_encrypted_fdk, is_hidden
             );
 
             crow::json::wvalue res_body;
@@ -525,7 +562,7 @@ crow::response ApiRouter::handle_init_file_upload(const crow::request& req) {
         }
 
         int file_id = file_mgr_->init_upload(user_id, folder_id, enc_name, name_hash, encrypted_fdk, size_bytes, total_chunks,
-                                             proxy_external_file_id, proxy_size_bytes, proxy_encrypted_fdk);
+                                             proxy_external_file_id, proxy_size_bytes, proxy_encrypted_fdk, is_hidden);
 
         return crow::response(201, R"({"file_id":)" + std::to_string(file_id) + "}");
 
@@ -635,6 +672,12 @@ crow::response ApiRouter::handle_batch_init_uploads(const crow::request& req) {
                 }
                 if (item.has("proxy_encrypted_fdk") && item["proxy_encrypted_fdk"].t() == crow::json::type::String) {
                     b_item.proxy_encrypted_fdk = item["proxy_encrypted_fdk"].s();
+                }
+                if (item.has("is_hidden") && item["is_hidden"].t() == crow::json::type::True) {
+                    b_item.is_hidden = true;
+                }
+                if (item.has("is_hidden") && item["is_hidden"].t() == crow::json::type::False) {
+                    b_item.is_hidden = false;
                 }
 
             } catch (const std::runtime_error&) {
@@ -1645,6 +1688,7 @@ crow::response ApiRouter::handle_get_google_accounts(const crow::request& req) {
             crow::json::wvalue acc_json;
             acc_json["id"] = acc.id;
             acc_json["account_email"] = acc.account_email;
+            acc_json["account_picture"] = acc.account_picture;
             acc_json["root_folder_id"] = acc.root_folder_id;
             acc_list.push_back(std::move(acc_json));
         }
@@ -2129,6 +2173,13 @@ void ApiRouter::setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware
     CROW_ROUTE(app, "/api/vault/verification").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req) {
         auto res = handle_get_vault_verification(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/users/me/profile").methods(crow::HTTPMethod::Put)
+    ([this](const crow::request& req) {
+        auto res = handle_update_profile(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });

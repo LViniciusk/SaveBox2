@@ -61,10 +61,16 @@ function deriveChunkNonce(baseNonce: Uint8Array, chunkIndex: number): Uint8Array
   return nonce;
 }
 
-console.log('[CryptoWorker] Top-level script evaluated.');
+let logsEnabled = false;
+if (logsEnabled) console.log('[CryptoWorker] Top-level script evaluated.');
 
 self.onmessage = async (event: MessageEvent) => {
-  console.log('[CryptoWorker] Received message:', event.data.type, 'chunkIndex:', event.data.chunkIndex);
+  if (event.data.type === 'INIT') {
+    logsEnabled = !!event.data.logsEnabled;
+    return;
+  }
+  
+  if (logsEnabled) console.log('[CryptoWorker] Received message:', event.data.type, 'chunkIndex:', event.data.chunkIndex);
   const { type, encryptedChunk, fdk, baseNonce, chunkIndex } = event.data as {
     type: string;
     encryptedChunk: ArrayBuffer;

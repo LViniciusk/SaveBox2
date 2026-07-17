@@ -25,6 +25,7 @@ public:
     std::string handle_healthcheck() const;
     crow::response handle_get_quota(const crow::request& req);
     crow::response handle_delete_user(const crow::request& req);
+    crow::response handle_update_profile(const crow::request& req);
     crow::response handle_register(const crow::request& req);
     crow::response handle_login(const crow::request& req);
     crow::response handle_google_login(const crow::request& req);

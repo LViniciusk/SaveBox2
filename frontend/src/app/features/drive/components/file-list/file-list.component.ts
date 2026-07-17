@@ -86,12 +86,15 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
             
             <div class="col col-size">
               {{ isLocked() ? getObfuscatedValue(file.sizeFormatted) : file.sizeFormatted }}
+              @if (viewMode() === 'storage' && getProxySize(file) > 0) {
+                <span style="color: #5f6368; font-size: 12px; margin-left: 4px;">(+{{ formatBytes(getProxySize(file)) }})</span>
+              }
             </div>
 
             <div class="col col-quota" *ngIf="viewMode() === 'storage'">
                <div class="quota-bar-container" *ngIf="!isLocked()">
                  <span class="quota-percent-text">{{ getPercentage(file) }} da conta</span>
-                 <progress class="quota-progress" [value]="file.sizeBytes" [max]="quota()?.maxBytes || 1"></progress>
+                 <progress class="quota-progress" [value]="getTotalSize(file)" [max]="getTotalStorageMax() || 1"></progress>
                </div>
                <span *ngIf="isLocked()">{{ getObfuscatedValue(getPercentage(file) + ' da conta') }}</span>
             </div>
@@ -120,6 +123,28 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                       Eliminar permanentemente
                     </button>
                   } @else {
+                    @if (file.type === 'video') {
+                      @if (hasProxy(file)) {
+                        <div class="menu-item-wrapper" (mouseenter)="checkSubmenuBounds($event)">
+                          <button class="menu-item" style="justify-content: space-between;">
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                              <span class="material-symbols-outlined">visibility</span>
+                              Preview
+                            </div>
+                            <span class="material-symbols-outlined" style="font-size: 16px;">chevron_right</span>
+                          </button>
+                          <div class="submenu">
+                            <button class="menu-item" (click)="onPlayOriginal(file, $event)">Original</button>
+                            <button class="menu-item" (click)="onPlayProxy(file, $event)">Compacta</button>
+                          </div>
+                        </div>
+                      } @else {
+                        <button class="menu-item" (click)="onPlayOriginal(file, $event)">
+                          <span class="material-symbols-outlined">visibility</span>
+                          Preview
+                        </button>
+                      }
+                    }
                     @if (!file.isFolder) {
                       <button class="menu-item" (click)="onDownload(file, $event)">
                         <span class="material-symbols-outlined">download</span>
@@ -433,6 +458,30 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
       .menu-item .material-symbols-outlined {
         font-size: 20px;
         color: #5f6368;
+      }
+
+      .menu-item-wrapper {
+        position: relative;
+        width: 100%;
+      }
+
+      .submenu {
+        display: none;
+        position: absolute;
+        top: 0;
+        left: 100%;
+        right: auto;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px 0 rgba(60,64,67,0.3), 0 4px 8px 3px rgba(60,64,67,0.15);
+        min-width: 150px;
+        z-index: 1001;
+        flex-direction: column;
+        padding: 6px 0;
+      }
+
+      .menu-item-wrapper:hover .submenu {
+        display: flex;
       }
 
       .drag-custom-preview {
@@ -752,12 +801,45 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   async onDownload(file: DriveFile, event: Event) {
     event.stopPropagation();
-    this.activeMenuFileId.set(null);
+    this.closeMenu();
     try {
       await this.driveStore.downloadFile(file);
     } catch (e) {
       console.error('Erro no download', e);
       alert('Falha ao transferir ficheiro.');
+    }
+  }
+
+  onPlayOriginal(file: DriveFile, event: Event) {
+    event.stopPropagation();
+    this.closeMenu();
+    this.videoSelected.emit({ ...file, forceOriginal: true });
+  }
+
+  onPlayProxy(file: DriveFile, event: Event) {
+    event.stopPropagation();
+    this.closeMenu();
+    this.videoSelected.emit(file);
+  }
+
+  hasProxy(file: DriveFile): boolean {
+    const proxyName = file.decryptedName + '.proxy.mp4';
+    const legacyProxyName = '__PROXY__' + file.decryptedName;
+    return this.driveStore.files().some(f => (f.decryptedName === proxyName || f.decryptedName === legacyProxyName) && f.folderId === file.folderId);
+  }
+
+  checkSubmenuBounds(event: MouseEvent) {
+    const wrapper = event.currentTarget as HTMLElement;
+    const submenu = wrapper.querySelector('.submenu') as HTMLElement;
+    if (!submenu) return;
+    
+    // Se o mouse estiver na metade direita da tela, abre o submenu para a esquerda
+    if (event.clientX > window.innerWidth / 2) {
+      submenu.style.left = 'auto';
+      submenu.style.right = '100%';
+    } else {
+      submenu.style.left = '100%';
+      submenu.style.right = 'auto';
     }
   }
 
@@ -927,11 +1009,36 @@ export class FileListComponent implements OnInit, OnDestroy {
     }
   }
 
-  getPercentage(file: DriveFile): string {
+  getTotalStorageMax(): number {
     const q = this.quota();
-    if (!q || q.maxBytes === 0) return '0%';
-    const pct = (file.sizeBytes / q.maxBytes) * 100;
-    if (pct < 0.01 && file.sizeBytes > 0) return '<0.01%';
+    if (!q) return 0;
+    return (q.maxBytes || 0) + (q.gdriveMaxBytes || 0);
+  }
+
+  getProxySize(file: DriveFile): number {
+    const proxyName = file.decryptedName + '.proxy.mp4';
+    const legacyProxyName = '__PROXY__' + file.decryptedName;
+    const proxy = this.driveStore.files().find(f => (f.decryptedName === proxyName || f.decryptedName === legacyProxyName) && f.folderId === file.folderId);
+    return proxy ? proxy.sizeBytes : 0;
+  }
+
+  getTotalSize(file: DriveFile): number {
+    return file.sizeBytes + this.getProxySize(file);
+  }
+
+  formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
+  getPercentage(file: DriveFile): string {
+    const max = this.getTotalStorageMax();
+    if (max === 0) return '0%';
+    const pct = (this.getTotalSize(file) / max) * 100;
+    if (pct < 0.01 && this.getTotalSize(file) > 0) return '<0.01%';
     return pct.toFixed(2) + '%';
   }
 

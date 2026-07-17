@@ -121,7 +121,7 @@ export class AuthService {
       .subscribe({
         next: (res) => {
           this.jwtToken = res.token;
-          const userInfo = this.decodeUserFromIdToken(idToken);
+          const userInfo = this.decodeUserFromIdToken(res.token);
           
           // Extrair a flag real do JWT
           const isVaultInitialized = this.isVaultInitializedFromToken(res.token);
@@ -168,6 +168,25 @@ export class AuthService {
     } catch {
       return false;
     }
+  }
+
+  updateProfile(name: string, avatarUrl: string): Promise<any> {
+    return new Promise((resolve, reject) => {
+      this.http.put(`${environment.apiUrl}/users/me/profile`, {
+        full_name: name,
+        avatar_url: avatarUrl
+      }, { withCredentials: true }).subscribe({
+        next: (res) => {
+          // Since the JWT token contains the old name/picture, 
+          // we might need to refresh the token. Let's just call restoreSession()
+          this.restoreSession().subscribe({
+            next: () => resolve(res),
+            error: (err) => resolve(res) // resolve anyway, as the DB update succeeded
+          });
+        },
+        error: (err) => reject(err)
+      });
+    });
   }
 
   linkGoogleDrive(code: string, state: string): void {

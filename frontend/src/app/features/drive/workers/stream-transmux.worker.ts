@@ -168,7 +168,7 @@ function createState(): TransmuxState {
 
         console.log('[TransmuxWorker] onReady step 5: setting segment options for track', track.id, 'codecStr:', codecStr);
         codecDict[String(track.id)] = codecStr;
-        mp4file.setSegmentOptions(track.id, null, { nbSamples: 100, rapAlign: true });
+        mp4file.setSegmentOptions(track.id, null, { nbSamples: 35, rapAlign: true });
       }
     } else {
       console.warn('[TransmuxWorker] onReady step 2: info.tracks is missing!');
@@ -266,10 +266,11 @@ self.onmessage = async (event: MessageEvent) => {
 
   try {
     if (type === 'BOOTSTRAP') {
-      const { chunk0, moovBytes, moovOffset } = data as {
+      const { chunk0, moovBytes, moovOffset, isLastChunk } = data as {
         chunk0: ArrayBuffer;
         moovBytes: ArrayBuffer | null;
         moovOffset?: number;
+        isLastChunk?: boolean;
       };
 
       bootstrapData = { chunk0: chunk0.slice(0), moovBytes: moovBytes ? moovBytes.slice(0) : null, moovOffset };
@@ -295,6 +296,11 @@ self.onmessage = async (event: MessageEvent) => {
       await Promise.race([state.readyPromise, timeout]);
       console.log('[TransmuxWorker] BOOTSTRAP: readyPromise resolved!');
 
+      if (isLastChunk) {
+        console.log('[TransmuxWorker] BOOTSTRAP: isLastChunk is true, flushing mp4file!');
+        state.mp4file.flush();
+      }
+
       const outMessage: Record<string, any> = {
         type: 'BOOTSTRAP_COMPLETE',
         videoDuration: state.videoDuration,
@@ -307,6 +313,12 @@ self.onmessage = async (event: MessageEvent) => {
           transferables.push(item.buffer);
         }
         state.initData = null; // Prevent double-transfer.
+      }
+
+      const segments = state.pendingSegments.splice(0);
+      outMessage['segments'] = segments;
+      for (const seg of segments) {
+        transferables.push(seg.buffer);
       }
 
       self.postMessage(outMessage, transferables);

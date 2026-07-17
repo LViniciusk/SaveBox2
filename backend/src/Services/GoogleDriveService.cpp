@@ -114,9 +114,9 @@ GoogleDriveService::LinkResult GoogleDriveService::link_account(uint64_t user_id
     std::string encrypted_refresh_token = encrypt_token_symmetric(tokens.refresh_token, key);
 
     txn.exec(
-        "INSERT INTO user_external_storages (user_id, provider, account_email, refresh_token, root_folder_id) "
-        "VALUES ($1, 'google_drive', $2, $3, $4)",
-        pqxx::params{user_id, tokens.account_email, encrypted_refresh_token, root_folder_id}
+        "INSERT INTO user_external_storages (user_id, provider, account_email, account_picture, refresh_token, root_folder_id) "
+        "VALUES ($1, 'google_drive', $2, $3, $4, $5)",
+        pqxx::params{user_id, tokens.account_email, tokens.account_picture, encrypted_refresh_token, root_folder_id}
     );
 
     txn.commit();
@@ -129,7 +129,7 @@ std::vector<GoogleDriveService::LinkedAccount> GoogleDriveService::get_linked_ac
     pqxx::work txn(*conn);
 
     auto result = txn.exec(
-        "SELECT id, account_email, root_folder_id FROM user_external_storages "
+        "SELECT id, account_email, root_folder_id, account_picture FROM user_external_storages "
         "WHERE user_id = $1 AND provider = 'google_drive' AND is_unlinking = FALSE",
         pqxx::params{user_id}
     );
@@ -142,6 +142,7 @@ std::vector<GoogleDriveService::LinkedAccount> GoogleDriveService::get_linked_ac
         acc.id = row[0].as<uint64_t>();
         acc.account_email = row[1].is_null() ? "" : row[1].as<std::string>();
         acc.root_folder_id = row[2].is_null() ? "" : row[2].as<std::string>();
+        acc.account_picture = row[3].is_null() ? "" : row[3].as<std::string>();
         accounts.push_back(acc);
     }
 
@@ -301,6 +302,10 @@ GoogleDriveService::TokenResponse GoogleDriveService::exchange_code(const std::s
             auto email_it = ui_json.get<picojson::object>().find("email");
             if (email_it != ui_json.get<picojson::object>().end() && email_it->second.is<std::string>()) {
                 tokens.account_email = email_it->second.get<std::string>();
+            }
+            auto picture_it = ui_json.get<picojson::object>().find("picture");
+            if (picture_it != ui_json.get<picojson::object>().end() && picture_it->second.is<std::string>()) {
+                tokens.account_picture = picture_it->second.get<std::string>();
             }
         }
     }
@@ -565,7 +570,7 @@ std::pair<uint64_t, uint64_t> GoogleDriveService::get_total_quota(uint64_t user_
 
                 // Query files size inside Nanika for this storage
                 auto size_res = txn.exec(
-                    "SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE external_storage_id = $1 AND is_upload_complete = TRUE AND deleted_at IS NULL",
+                    "SELECT COALESCE(SUM(size_bytes), 0) FROM files WHERE external_storage_id = $1 AND is_upload_complete = TRUE",
                     pqxx::params{storage.id}
                 );
                 uint64_t app_usage = 0;

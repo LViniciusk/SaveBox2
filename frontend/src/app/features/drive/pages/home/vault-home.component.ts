@@ -185,6 +185,9 @@ import { CommonModule } from '@angular/common';
 
                       <div class="transfer-details">
                         <div class="transfer-filename" [title]="t.fileName">{{ t.fileName }}</div>
+                        @if (t.statusMessage) {
+                          <div class="transfer-status-message" style="font-size: 11px; color: #666; margin-top: 2px;">{{ t.statusMessage }}</div>
+                        }
                         <div class="transfer-meta">
                           <span class="transfer-type-badge">{{ t.type === 'upload' ? 'Upload' : 'Download' }}</span>
                           <span class="transfer-time">{{ t.timestamp | date:'shortTime' }}</span>
@@ -257,28 +260,58 @@ import { CommonModule } from '@angular/common';
               (videoSelected)="activeVideoFile.set($event)" />
           }
 
-          <!-- Transfers Progress (Uploads / Downloads) -->
-          <div class="transfers-progress-wrapper">
-            @if (driveStore.isUploading()) {
-              <div class="upload-progress-container">
-                <div class="upload-header">
-                  <span>{{ driveStore.uploadStatusMessage() }}</span>
-                  <span>{{ driveStore.uploadProgress() }}%</span>
+          <!-- Transfers Mini Popup -->
+          @if (driveStore.transfers().length > 0) {
+            <div class="transfers-popup-wrapper">
+              <div class="transfers-popup-header" (click)="isTransfersPopupMinimized.set(!isTransfersPopupMinimized())">
+                <span class="popup-title">Transferências ({{ driveStore.transfers().length }})</span>
+                <div class="popup-actions">
+                  <button class="icon-btn" (click)="$event.stopPropagation(); isTransfersPopupMinimized.set(!isTransfersPopupMinimized())">
+                    <span class="material-symbols-outlined">{{ isTransfersPopupMinimized() ? 'expand_less' : 'expand_more' }}</span>
+                  </button>
                 </div>
-                <progress class="quota-progress-bar upload-progress-bar" [value]="driveStore.uploadProgress()" max="100"></progress>
               </div>
-            }
-
-            @if (driveStore.isDownloading()) {
-              <div class="upload-progress-container">
-                <div class="upload-header">
-                  <span>Baixando arquivo...</span>
-                  <span>{{ driveStore.downloadProgress() }}%</span>
+              @if (!isTransfersPopupMinimized()) {
+                <div class="transfers-popup-body">
+                  @for (t of driveStore.transfers().slice().reverse(); track t.id) {
+                    <div class="mini-transfer-item" [class.success]="t.status === 'success'" [class.error]="t.status === 'error'" [class.paused]="t.status === 'paused'">
+                      <div class="mini-transfer-icon-wrapper">
+                        @if (t.type === 'upload') {
+                          <span class="material-symbols-outlined mini-icon">upload</span>
+                        } @else {
+                          <span class="material-symbols-outlined mini-icon">download</span>
+                        }
+                      </div>
+                      <div class="mini-transfer-details">
+                        <div class="mini-transfer-header">
+                          <span class="mini-filename" [title]="t.fileName">{{ t.fileName }}</span>
+                          <span class="mini-status">
+                            @if (t.status === 'processing') {
+                              {{ t.progress }}%
+                            } @else if (t.status === 'success') {
+                              <span class="material-symbols-outlined success-icon">check_circle</span>
+                            } @else if (t.status === 'error') {
+                              <span class="material-symbols-outlined error-icon">error</span>
+                            } @else if (t.status === 'paused') {
+                              <span class="material-symbols-outlined paused-icon">pause</span>
+                            }
+                          </span>
+                        </div>
+                        @if (t.status === 'processing' || t.status === 'paused') {
+                          <div class="mini-progress-track">
+                            <div class="mini-progress-fill" [style.width.%]="t.progress" [style.background-color]="t.status === 'paused' ? '#d97706' : '#1a73e8'"></div>
+                          </div>
+                        }
+                        @if (t.statusMessage && t.status !== 'success') {
+                          <div class="mini-status-msg">{{ t.statusMessage }}</div>
+                        }
+                      </div>
+                    </div>
+                  }
                 </div>
-                <progress class="quota-progress-bar download-progress-bar" [value]="driveStore.downloadProgress()" max="100"></progress>
-              </div>
-            }
-          </div>
+              }
+            </div>
+          }
 
           <!-- Unlock Modal (visible when unlocked requested) -->
           @if (isUnlockModalOpen()) {
@@ -624,19 +657,169 @@ import { CommonModule } from '@angular/common';
         user-select: none;
       }
 
-      /* Transfers Progress Wrapper */
-      .transfers-progress-wrapper {
+      /* === TRANSFERS MINI POPUP === */
+      .transfers-popup-wrapper {
         position: absolute;
         bottom: 24px;
         right: 24px;
+        width: 360px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 1px 4px rgba(0,0,0,0.1);
+        z-index: 50;
         display: flex;
         flex-direction: column;
-        gap: 12px;
-        z-index: 50;
-        pointer-events: none;
+        border: 1px solid #dadce0;
+        overflow: hidden;
       }
-      .transfers-progress-wrapper > * {
-        pointer-events: auto;
+
+      .transfers-popup-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        background: #323232;
+        color: white;
+        cursor: pointer;
+        user-select: none;
+      }
+      
+      .transfers-popup-header:hover {
+        background: #404040;
+      }
+
+      .popup-title {
+        font-weight: 500;
+        font-size: 14px;
+      }
+
+      .popup-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .popup-actions .icon-btn {
+        background: transparent;
+        border: none;
+        color: white;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px;
+        border-radius: 4px;
+      }
+
+      .popup-actions .icon-btn:hover {
+        background: rgba(255,255,255,0.1);
+      }
+      
+      .popup-actions .icon-btn span {
+        font-size: 20px;
+      }
+
+      .transfers-popup-body {
+        max-height: 300px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .mini-transfer-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 12px 16px;
+        border-bottom: 1px solid #f1f3f4;
+      }
+      
+      .mini-transfer-item:last-child {
+        border-bottom: none;
+      }
+
+      .mini-transfer-icon-wrapper {
+        color: #5f6368;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f1f3f4;
+        border-radius: 50%;
+        width: 32px;
+        height: 32px;
+        flex-shrink: 0;
+      }
+      
+      .mini-transfer-icon-wrapper .mini-icon {
+        font-size: 18px;
+      }
+
+      .mini-transfer-item.success .mini-transfer-icon-wrapper {
+        background: #e6f4ea;
+        color: #137333;
+      }
+      
+      .mini-transfer-item.error .mini-transfer-icon-wrapper {
+        background: #fce8e6;
+        color: #c5221f;
+      }
+
+      .mini-transfer-details {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .mini-transfer-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .mini-filename {
+        font-size: 13px;
+        font-weight: 500;
+        color: #202124;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .mini-status {
+        font-size: 12px;
+        color: #5f6368;
+        display: flex;
+        align-items: center;
+      }
+      
+      .mini-status .success-icon { color: #137333; font-size: 16px; }
+      .mini-status .error-icon { color: #c5221f; font-size: 16px; }
+      .mini-status .paused-icon { color: #d97706; font-size: 16px; }
+
+      .mini-progress-track {
+        width: 100%;
+        height: 4px;
+        background: #e2e8f0;
+        border-radius: 2px;
+        overflow: hidden;
+        margin-top: 2px;
+      }
+
+      .mini-progress-fill {
+        height: 100%;
+        background: #1a73e8;
+        transition: width 0.2s ease-out;
+      }
+
+      .mini-status-msg {
+        font-size: 11px;
+        color: #5f6368;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       /* Upload / Download Progress Panel */
@@ -1169,6 +1352,7 @@ export class VaultHomeComponent implements OnInit {
 
   readonly isUnlockModalOpen = signal(false);
   readonly currentView = signal<'drive' | 'storage' | 'trash' | 'transfers'>('drive');
+  readonly isTransfersPopupMinimized = signal(false);
 
   constructor() {
     effect(() => {
@@ -1218,6 +1402,12 @@ export class VaultHomeComponent implements OnInit {
   /**
    * Computes the first letter of the user's name for the avatar.
    */
+  readonly currentStorageFiles = computed(() => {
+    return [...this.driveStore.files()]
+      .filter(f => !f.isHidden && !f.isFolder)
+      .sort((a, b) => b.sizeBytes - a.sizeBytes);
+  });
+
   readonly userInitial = computed(() => {
     const user = this.appState.user();
     if (user?.name) return user.name.charAt(0).toUpperCase();

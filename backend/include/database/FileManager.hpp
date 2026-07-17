@@ -21,6 +21,7 @@ struct BatchInitItem {
     std::optional<std::string> proxy_external_file_id;
     std::optional<uint64_t> proxy_size_bytes;
     std::optional<std::string> proxy_encrypted_fdk;
+    bool is_hidden = false;
 };
 
 struct BatchInitResult {
@@ -52,7 +53,8 @@ public:
                     uint64_t size_bytes, int total_chunks,
                     std::optional<std::string> proxy_external_file_id = std::nullopt,
                     std::optional<uint64_t> proxy_size_bytes = std::nullopt,
-                    std::optional<std::string> proxy_encrypted_fdk = std::nullopt);
+                    std::optional<std::string> proxy_encrypted_fdk = std::nullopt,
+                    bool is_hidden = false);
     std::vector<BatchInitResult> batch_init_uploads(uint64_t user_id, const std::vector<BatchInitItem>& files);
     crow::json::wvalue get_user_quota(uint64_t user_id);
     void mark_upload_complete(uint64_t file_id, uint64_t user_id);
@@ -82,7 +84,8 @@ public:
                              std::optional<uint64_t> external_storage_id = std::nullopt,
                              std::optional<std::string> proxy_external_file_id = std::nullopt,
                              std::optional<uint64_t> proxy_size_bytes = std::nullopt,
-                             std::optional<std::string> proxy_encrypted_fdk = std::nullopt);
+                             std::optional<std::string> proxy_encrypted_fdk = std::nullopt,
+                             bool is_hidden = false);
     void finalize_external_upload(uint64_t file_id, uint64_t user_id,
                                   const std::string& external_file_id);
     std::string get_storage_provider(uint64_t file_id, uint64_t user_id);

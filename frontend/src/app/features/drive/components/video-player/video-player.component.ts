@@ -1,4 +1,4 @@
-import { Component, input, output, ElementRef, ViewChild, inject, AfterViewInit, OnDestroy, OnInit } from '@angular/core';
+import { Component, input, output, ElementRef, ViewChild, inject, AfterViewInit, OnDestroy, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { VideoStreamService } from '../../services/video-stream.service';
 import { DriveFile } from '../../state/drive.store';
@@ -23,7 +23,13 @@ import { DriveFile } from '../../state/drive.store';
         <div class="video-wrapper">
           <video #videoElement controls autoplay playsinline class="video-node"></video>
 
-
+          <!-- Loading Overlay -->
+          @if (isInitialLoad()) {
+            <div class="loading-overlay">
+              <div class="spinner"></div>
+              <div class="loading-text">Carregando player...</div>
+            </div>
+          }
 
           <!-- Error Alert Overlay -->
           @if (streamService.error()) {
@@ -131,6 +137,10 @@ import { DriveFile } from '../../state/drive.store';
         height: 100%;
         display: block;
         outline: none;
+        object-fit: contain;
+        will-change: transform;
+        transform: translateZ(0);
+        backface-visibility: hidden;
       }
 
       .loading-overlay, .error-overlay {
@@ -241,9 +251,15 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
   @ViewChild('videoElement') videoElement!: ElementRef<HTMLVideoElement>;
 
   protected readonly streamService = inject(VideoStreamService);
+  readonly isInitialLoad = signal(true);
 
   ngAfterViewInit() {
     this.startStream();
+    if (this.videoElement?.nativeElement) {
+      this.videoElement.nativeElement.addEventListener('canplay', () => {
+        this.isInitialLoad.set(false);
+      }, { once: true });
+    }
   }
 
   ngOnDestroy() {

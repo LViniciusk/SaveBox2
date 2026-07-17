@@ -61,6 +61,7 @@
 import { Injectable, signal, inject, NgZone } from '@angular/core';
 import { firstValueFrom, timer } from 'rxjs';
 import { retry } from 'rxjs/operators';
+import { environment } from '../../../../environments/environment';
 import { CryptoService } from '../../../core/crypto/crypto.service';
 import { DriveService }  from '../services/drive.service';
 import { DriveFile, DriveStore } from '../state/drive.store';
@@ -200,12 +201,14 @@ export class VideoStreamService {
     
     // Procura por versão otimizada (proxy) do vídeo
     let fileToPlay = file;
-    if (this.driveStore) {
+    if (this.driveStore && !file.forceOriginal) {
+      // Tenta achar a versão proxy (otimizada H.264 720p) caso exista
       const allFiles = this.driveStore.files();
-      const proxyName = '__PROXY__' + file.decryptedName;
-      const proxyFile = allFiles.find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
+      const proxyName = file.decryptedName + '.proxy.mp4';
+      const legacyProxyName = '__PROXY__' + file.decryptedName;
+      const proxyFile = allFiles.find(f => (f.decryptedName === proxyName || f.decryptedName === legacyProxyName) && f.folderId === file.folderId);
       if (proxyFile) {
-        console.log('[VideoStream] Proxy version found! Using optimized stream instead of original master.');
+        if (environment.logs.transmuxer) console.log('[VideoStream] Proxy version found! Using optimized stream instead of original master.');
         fileToPlay = proxyFile;
       }
     }
@@ -217,7 +220,7 @@ export class VideoStreamService {
     }
 
     try {
-      console.log('[VideoStream] initializeStream started', fileToPlay);
+      if (environment.logs.transmuxer) console.log('[VideoStream] initializeStream started', fileToPlay);
       // --- Step 1: Decrypt the File Data Key from the Vault. -----------------
       const fdkBase64 = await this.cryptoService.decryptName(fileToPlay.encryptedFdk);
       const fdkString = atob(fdkBase64);
@@ -228,36 +231,37 @@ export class VideoStreamService {
       let gdriveToken: string | null = null;
 
       if (fileToPlay.storageProvider === 'google_drive') {
-        console.log('[VideoStream] Loading Google Drive metadata for file ID:', fileToPlay.id);
+        if (environment.logs.transmuxer) console.log('[VideoStream] Loading Google Drive metadata for file ID:', fileToPlay.id);
         const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(fileToPlay.id));
         gdriveUrl = `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`;
         gdriveToken = meta.access_token;
       }
 
-      console.log('[VideoStream] Fetching header...');
+      if (environment.logs.transmuxer) console.log('[VideoStream] Fetching header...');
       // --- Step 2: Download the 32-byte file header. -------------------------
       const headerBlob    = await this.fetchRange(fileToPlay.id, 0, HEADER_SIZE - 1, new AbortController(), gdriveUrl, gdriveToken);
-      console.log('[VideoStream] Header blob fetched size:', headerBlob.size);
+      if (environment.logs.transmuxer) console.log('[VideoStream] Header blob fetched size:', headerBlob.size);
       const headerBuffer  = await headerBlob.arrayBuffer();
       const baseNonce     = new Uint8Array(headerBuffer, 0, NONCE_SIZE);
       const headerView    = new DataView(headerBuffer);
       const plaintextSize = Number(headerView.getBigUint64(NONCE_SIZE, true));
       const totalChunks   = Math.ceil(plaintextSize / CHUNK_SIZE);
-      console.log('[VideoStream] File size:', plaintextSize, 'totalChunks:', totalChunks);
+      if (environment.logs.transmuxer) console.log('[VideoStream] File size:', plaintextSize, 'totalChunks:', totalChunks);
 
       // --- Step 3: Create MediaSource and bind to the video element. ---------
       const mediaSource = new MediaSource();
       const videoUrl = URL.createObjectURL(mediaSource);
       videoElement.src = videoUrl;
-      console.log('[VideoStream] Waiting for media source open...');
+      if (environment.logs.transmuxer) console.log('[VideoStream] Waiting for media source open...');
       await this.waitForSourceOpen(mediaSource);
-      console.log('[VideoStream] Media source opened.');
+      if (environment.logs.transmuxer) console.log('[VideoStream] Media source opened.');
 
       // --- Step 4: Instantiate workers. --------------------------------------
       const cryptoWorker = new Worker(
         new URL('../workers/stream-crypto.worker',   import.meta.url), { type: 'module' }
       );
       cryptoWorker.onerror = (e) => console.error('[CryptoWorker Error]', e);
+      cryptoWorker.postMessage({ type: 'INIT', logsEnabled: environment.logs.crypto });
 
       const transmuxWorker = new Worker(
         new URL('../workers/stream-transmux.worker', import.meta.url), { type: 'module' }
@@ -265,7 +269,7 @@ export class VideoStreamService {
       transmuxWorker.onerror = (e) => console.error('[TransmuxWorker Error]', e);
       transmuxWorker.addEventListener('message', (ev) => {
         if (ev.data && ev.data.type === 'LOG') {
-          console.log('[TransmuxWorker Log]', ev.data.message);
+          if (environment.logs.transmuxer) console.log('[TransmuxWorker Log]', ev.data.message);
         }
       });
 
@@ -298,20 +302,20 @@ export class VideoStreamService {
       };
       this.state = s;
 
-      console.log('[VideoStream] Starting bootstrapLastChunk...');
+      if (environment.logs.transmuxer) console.log('[VideoStream] Starting bootstrapLastChunk...');
       // --- Step 5: Bootstrap (moov atom from last chunk). --------------------
       await this.bootstrapLastChunk(s, videoElement);
       if (s.aborted) return;
-      console.log('[VideoStream] bootstrapLastChunk completed. nextChunkIndex is:', s.nextChunkIndex);
+      if (environment.logs.transmuxer) console.log('[VideoStream] bootstrapLastChunk completed. nextChunkIndex is:', s.nextChunkIndex);
 
       // --- Step 6: Attach event listeners. ----------------------------------
       this.attachVideoListeners(s, videoElement);
 
       if (initialSeekTime !== undefined && initialSeekTime > 0) {
-        console.log('[VideoStream] Silent retry: jumping to initialSeekTime', initialSeekTime);
+        if (environment.logs.transmuxer) console.log('[VideoStream] Silent retry: jumping to initialSeekTime', initialSeekTime);
         videoElement.currentTime = initialSeekTime;
       } else {
-        console.log('[VideoStream] Priming the pump (scheduleNextChunk)...');
+        if (environment.logs.transmuxer) console.log('[VideoStream] Priming the pump (scheduleNextChunk)...');
         // --- Step 7: Prime the pump -- request the first content chunk. --------
         this.scheduleNextChunk(s, videoElement);
       }
@@ -719,7 +723,7 @@ export class VideoStreamService {
     const firstEncryptedBytes = MAC_SIZE + Math.min(CHUNK_SIZE, s.plaintextSize);
     const firstRangeStart     = HEADER_SIZE;
     const firstRangeEnd       = firstRangeStart + firstEncryptedBytes - 1;
-    console.log('[VideoStream] Bootstrap: downloading chunk 0...');
+    if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap: downloading chunk 0...');
 
     const controller0 = new AbortController();
     s.currentFetch    = controller0;
@@ -727,7 +731,7 @@ export class VideoStreamService {
     s.currentFetch    = null;
     if (s.aborted) return;
     const buf0 = await blob0.arrayBuffer();
-    console.log('[VideoStream] Decrypting chunk 0 for bootstrap...');
+    if (environment.logs.transmuxer) console.log('[VideoStream] Decrypting chunk 0 for bootstrap...');
     const decryptedChunk0 = await this.sendToCryptoWorker(s, buf0, 0);
     if (s.aborted) return;
 
@@ -746,34 +750,37 @@ export class VideoStreamService {
 
     let initData: { id: number; codecString: string; buffer: ArrayBuffer }[] | undefined;
     let videoDuration: number | undefined;
+    let initialSegments: any[] | undefined;
 
     if (moovOffsetInChunk0 !== -1 && moovOffsetInChunk0 + moovSizeInChunk0 <= len0) {
       // --- Fast-Start MP4: moov is in chunk 0 ---
-      console.log('[VideoStream] Bootstrap: moov found in chunk 0 (Fast-Start MP4) at offset:', moovOffsetInChunk0, 'size:', moovSizeInChunk0);
-      const res = await this.sendBootstrapToTransmuxWorker(s, decryptedChunk0, null);
+      if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap: moov found in chunk 0 (Fast-Start MP4) at offset:', moovOffsetInChunk0, 'size:', moovSizeInChunk0);
+      const isOnlyChunk = s.totalChunks === 1;
+      const res = await this.sendBootstrapToTransmuxWorker(s, decryptedChunk0, null, undefined, isOnlyChunk);
       initData = res.initData;
       videoDuration = res.videoDuration;
+      initialSegments = res.segments;
       // Mark chunk 0 as already processed so scheduleNextChunk starts at chunk 1.
       s.nextChunkIndex = 1;
     } else {
       // --- Standard MP4: moov is in the last chunk ---
-      console.log('[VideoStream] Bootstrap: moov NOT in chunk 0. Downloading last chunk...');
+      if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap: moov NOT in chunk 0. Downloading last chunk...');
       const lastChunkIndex     = s.totalChunks - 1;
       const lastPlaintextBytes = s.plaintextSize - lastChunkIndex * CHUNK_SIZE;
       const lastEncryptedBytes = MAC_SIZE + lastPlaintextBytes;
       const lastRangeStart     = HEADER_SIZE + lastChunkIndex * (CHUNK_SIZE + MAC_SIZE);
       const lastRangeEnd       = lastRangeStart + lastEncryptedBytes - 1;
-      console.log('[VideoStream] Bootstrap last chunk idx:', lastChunkIndex, 'rangeStart:', lastRangeStart, 'rangeEnd:', lastRangeEnd);
+      if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap last chunk idx:', lastChunkIndex, 'rangeStart:', lastRangeStart, 'rangeEnd:', lastRangeEnd);
 
       const controller = new AbortController();
       s.currentFetch   = controller;
       const encChunkBlob   = await this.fetchRange(s.file.id, lastRangeStart, lastRangeEnd, controller, s.gdriveUrl, s.gdriveToken);
       s.currentFetch = null;
       if (s.aborted) return;
-      console.log('[VideoStream] Bootstrap last chunk download size:', encChunkBlob.size);
+      if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap last chunk download size:', encChunkBlob.size);
       const encChunkBuffer = await encChunkBlob.arrayBuffer();
 
-      console.log('[VideoStream] Decrypting last chunk...');
+      if (environment.logs.transmuxer) console.log('[VideoStream] Decrypting last chunk...');
       const decryptedLast = await this.sendToCryptoWorker(s, encChunkBuffer, lastChunkIndex);
       if (s.aborted) return;
 
@@ -794,19 +801,20 @@ export class VideoStreamService {
         throw new Error('Metadados de video nao encontrados (moov atom ausente).');
       }
 
-      console.log('[VideoStream] Bootstrap: moov found in last chunk at offset:', moovOffsetInLast, 'size:', moovSizeInLast);
+      if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap: moov found in last chunk at offset:', moovOffsetInLast, 'size:', moovSizeInLast);
       const moovBytes = decryptedLast.slice(moovOffsetInLast, moovOffsetInLast + moovSizeInLast);
       const realMoovOffset = lastChunkIndex * CHUNK_SIZE + moovOffsetInLast;
 
       const res = await this.sendBootstrapToTransmuxWorker(s, decryptedChunk0, moovBytes, realMoovOffset);
       initData = res.initData;
       videoDuration = res.videoDuration;
+      initialSegments = res.segments;
 
       // Standard MP4 needs chunk 0 again to start feeding video data (since we only fed it to get ftyp in bootstrap)
       s.nextChunkIndex = 0;
     }
 
-    console.log('[VideoStream] Transmux result initData tracks:', initData?.length, 'duration:', videoDuration);
+    if (environment.logs.transmuxer) console.log('[VideoStream] Transmux result initData tracks:', initData?.length, 'duration:', videoDuration);
     if (s.aborted) return;
 
     if (videoDuration && videoDuration > 0) {
@@ -830,7 +838,7 @@ export class VideoStreamService {
       for (const track of initData) {
         if (!s.sourceBuffers.has(track.id)) {
           try {
-            console.log('[VideoStream] Adding SourceBuffer for track:', track.id, 'codec:', track.codecString);
+            if (environment.logs.transmuxer) console.log('[VideoStream] Adding SourceBuffer for track:', track.id, 'codec:', track.codecString);
             const sb = s.mediaSource.addSourceBuffer(track.codecString);
             s.sourceBuffers.set(track.id, sb);
             s.codecStrings.set(track.id, track.codecString);
@@ -839,10 +847,19 @@ export class VideoStreamService {
             throw e;
           }
         }
-        
         const sb = s.sourceBuffers.get(track.id);
         if (sb) {
           await this.appendToSourceBufferRaw(sb, track.buffer);
+        }
+      }
+
+      if (initialSegments && initialSegments.length > 0) {
+        if (environment.logs.transmuxer) console.log('[VideoStream] Appending', initialSegments.length, 'segments generated during bootstrap');
+        for (const seg of initialSegments) {
+          const sb = s.sourceBuffers.get(seg.id);
+          if (sb && seg.buffer.byteLength > 0) {
+            await this.appendToSourceBufferRaw(sb, seg.buffer);
+          }
         }
       }
     } else {
@@ -888,8 +905,9 @@ export class VideoStreamService {
     s: StreamState,
     chunk0: ArrayBuffer,
     moovBytes: ArrayBuffer | null,
-    moovOffset?: number
-  ): Promise<{ initData?: { id: number; codecString: string; buffer: ArrayBuffer }[]; videoDuration?: number }> {
+    moovOffset?: number,
+    isLastChunk: boolean = false
+  ): Promise<{ initData?: { id: number; codecString: string; buffer: ArrayBuffer }[]; videoDuration?: number; segments?: any[] }> {
     return new Promise((resolve, reject) => {
       const onMessage = (ev: MessageEvent) => {
         if (ev.data.type === 'BOOTSTRAP_COMPLETE') {
@@ -897,6 +915,7 @@ export class VideoStreamService {
           resolve({
             initData:      ev.data.initData      as { id: number; codecString: string; buffer: ArrayBuffer }[] | undefined,
             videoDuration: ev.data.videoDuration as number | undefined,
+            segments:      ev.data.segments      as any[] | undefined,
           });
         } else if (ev.data.type === 'ERROR') {
           s.transmuxWorker.removeEventListener('message', onMessage);
@@ -914,6 +933,7 @@ export class VideoStreamService {
           chunk0,
           moovBytes,
           moovOffset,
+          isLastChunk
         },
         transferables
       );
@@ -1093,14 +1113,14 @@ export class VideoStreamService {
     gdriveUrl: string | null = null,
     gdriveToken: string | null = null,
   ): Promise<Blob> {
-    console.log('[VideoStream] fetchRange start:', start, 'end:', end);
+    if (environment.logs.transmuxer) console.log('[VideoStream] fetchRange start:', start, 'end:', end);
     return new Promise<Blob>((resolve, reject) => {
       const abortHandler = () => {
-        console.log('[VideoStream] fetchRange aborted');
+        if (environment.logs.transmuxer) console.log('[VideoStream] fetchRange aborted');
         reject(Object.assign(new Error('Fetch aborted.'), { name: 'AbortError' }));
       };
       if (controller.signal.aborted) {
-        console.log('[VideoStream] fetchRange already aborted');
+        if (environment.logs.transmuxer) console.log('[VideoStream] fetchRange already aborted');
         reject(Object.assign(new Error('Fetch aborted.'), { name: 'AbortError' }));
         return;
       }
@@ -1125,7 +1145,7 @@ export class VideoStreamService {
       )
       .subscribe({
         next: (blob) => {
-          console.log('[VideoStream] fetchRange complete size:', blob.size);
+          if (environment.logs.transmuxer) console.log('[VideoStream] fetchRange complete size:', blob.size);
           controller.signal.removeEventListener('abort', abortHandler);
           resolve(blob);
         },
@@ -1157,3 +1177,4 @@ export class VideoStreamService {
     this.state?.transmuxWorker.terminate();
   }
 }
+

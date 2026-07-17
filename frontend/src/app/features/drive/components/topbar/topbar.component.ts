@@ -39,7 +39,7 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
         <div class="avatar-container">
           <button class="avatar-btn" (click)="toggleProfileMenu()">
             @if (appState.user()?.picture) {
-              <img [src]="appState.user()?.picture" alt="Avatar" class="avatar-img" />
+              <img [src]="appState.user()?.picture" alt="Avatar" class="avatar-img" crossorigin="anonymous" referrerpolicy="no-referrer" />
             } @else {
               <div class="avatar-fallback">{{ appState.user()?.name?.charAt(0) || 'U' }}</div>
             }
@@ -62,18 +62,23 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                 <div class="profile-pic-ring">
                   <div class="profile-pic-wrapper">
                     @if (appState.user()?.picture) {
-                      <img [src]="appState.user()?.picture" alt="Avatar" class="profile-pic-large" />
+                      <img [src]="appState.user()?.picture" alt="Avatar" class="profile-pic-large" crossorigin="anonymous" referrerpolicy="no-referrer" />
                     } @else {
                       <div class="profile-pic-fallback-large">{{ appState.user()?.name?.charAt(0) || 'U' }}</div>
                     }
-                    <button class="profile-pic-camera-badge" title="Mudar foto de perfil">
+                    <button class="profile-pic-camera-badge" title="Mudar foto de perfil" (click)="changeProfilePicture()">
                       <span class="material-symbols-outlined">photo_camera</span>
                     </button>
                   </div>
                 </div>
 
                 <div class="profile-greeting">
-                  Olá, {{ appState.user()?.name || 'usuário' }}!
+                  <div style="display: flex; align-items: center; justify-content: center; gap: 4px;">
+                    Olá, {{ appState.user()?.name || 'usuário' }}!
+                    <button class="edit-name-btn" title="Editar nome" (click)="changeProfileName()">
+                      <span class="material-symbols-outlined" style="font-size: 16px;">edit</span>
+                    </button>
+                  </div>
                 </div>
 
                 <button class="profile-manage-account-btn" (click)="openSettings()">
@@ -93,9 +98,13 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
 
                     @for (acc of driveStore.linkedAccounts(); track acc.id) {
                       <div class="profile-card-subrow" (click)="$event.stopPropagation()">
-                        <span class="user-bubble {{ getBubbleColorClass(acc.account_email) }}">
-                          {{ acc.account_email.charAt(0).toUpperCase() }}
-                        </span>
+                        @if (acc.account_picture) {
+                          <img class="user-bubble-img" [src]="acc.account_picture" [alt]="acc.account_email">
+                        } @else {
+                          <span class="user-bubble {{ getBubbleColorClass(acc.account_email) }}">
+                            {{ acc.account_email.charAt(0).toUpperCase() }}
+                          </span>
+                        }
                         <div class="subrow-details">
                           <span class="subrow-name">{{ getAccountName(acc.account_email) }}</span>
                           <span class="subrow-email">{{ acc.account_email }}</span>
@@ -115,9 +124,13 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                     <span class="card-row-text">Mostrar contas vinculadas</span>
                     <div class="card-row-bubbles">
                       @for (acc of driveStore.linkedAccounts().slice(0, 3); track acc.id) {
-                        <span class="user-bubble {{ getBubbleColorClass(acc.account_email) }}">
-                          {{ acc.account_email.charAt(0).toUpperCase() }}
-                        </span>
+                        @if (acc.account_picture) {
+                          <img class="user-bubble-img bubble-small" [src]="acc.account_picture" [alt]="acc.account_email">
+                        } @else {
+                          <span class="user-bubble {{ getBubbleColorClass(acc.account_email) }}">
+                            {{ acc.account_email.charAt(0).toUpperCase() }}
+                          </span>
+                        }
                       }
                       @if (driveStore.linkedAccounts().length > 3) {
                         <span class="user-bubble bubble-blue">+{{ driveStore.linkedAccounts().length - 3 }}</span>
@@ -128,11 +141,11 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                 }
 
                 <!-- Option 2: Actual Quota -->
-                <div class="profile-card-row no-hover">
+                <div class="profile-card-row no-hover" style="margin-top: 5px;">
                   <div class="quota-card-content">
                     <span class="material-symbols-outlined quota-card-icon">cloud</span>
                     <span class="quota-card-text">
-                      Você usou {{ getQuotaPercentFormatted() }}% de {{ getQuotaMaxFormatted() }}
+                      Você usou {{ getTotalQuotaPercentFormatted() }}% de {{ getTotalQuotaMaxFormatted() }}
                     </span>
                   </div>
                 </div>
@@ -214,7 +227,11 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                         @for (acc of driveStore.linkedAccounts(); track acc.id) {
                           <div class="account-item">
                             <div class="account-info">
-                              <span class="material-symbols-outlined account-avatar-icon">account_circle</span>
+                              @if (acc.account_picture) {
+                                <img class="user-bubble-img account-avatar-icon" [src]="acc.account_picture" [alt]="acc.account_email" style="margin-right: 12px; width: 24px; height: 24px;">
+                              } @else {
+                                <span class="material-symbols-outlined account-avatar-icon">account_circle</span>
+                              }
                               <span class="account-email">{{ acc.account_email }}</span>
                             </div>
                             <button class="unlink-btn-item" (click)="unlinkAccount(acc.id)" title="Desvincular conta">
@@ -239,6 +256,19 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                 <p class="section-desc">Escolha como o SaveBox deve processar seus vídeos pesados.</p>
                 
                 <div class="storage-switch-container" style="flex-direction: column; gap: 8px;">
+                  <!-- Mode: Smart -->
+                  <button 
+                    class="switch-option" 
+                    [class.active]="driveStore.videoUploadMode() === 'smart'"
+                    (click)="driveStore.setVideoUploadMode('smart')"
+                    style="width: 100%;">
+                    <span class="material-symbols-outlined option-icon">auto_awesome</span>
+                    <div class="option-details">
+                      <span class="option-name">Compressão Inteligente (Recomendado)</span>
+                      <span class="option-sub">Analisa o vídeo e otimiza apenas se for muito pesado (>5 Mbps).</span>
+                    </div>
+                  </button>
+
                   <!-- Mode: Original -->
                   <button 
                     class="switch-option" 
@@ -248,7 +278,7 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                     <span class="material-symbols-outlined option-icon">movie</span>
                     <div class="option-details">
                       <span class="option-name">Apenas Original (Mais rápido)</span>
-                      <span class="option-sub">Salva apenas o arquivo master. Pode travar no streaming web.</span>
+                      <span class="option-sub">Salva apenas o arquivo original. Pode travar no streaming web.</span>
                     </div>
                   </button>
 
@@ -260,8 +290,8 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                     style="width: 100%;">
                     <span class="material-symbols-outlined option-icon">hdr_auto</span>
                     <div class="option-details">
-                      <span class="option-name">Armazenamento Duplo (Recomendado)</span>
-                      <span class="option-sub">Salva o Master e gera uma cópia leve para streaming rápido. Usa mais espaço.</span>
+                      <span class="option-name">Armazenamento Duplo</span>
+                      <span class="option-sub">Salva o original e gera uma cópia leve para streaming rápido. Usa mais espaço.</span>
                     </div>
                   </button>
 
@@ -274,7 +304,7 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                     <span class="material-symbols-outlined option-icon">compress</span>
                     <div class="option-details">
                       <span class="option-name">Apenas Otimizado (Economiza espaço)</span>
-                      <span class="option-sub">Converte para web, apaga o Original e salva espaço na nuvem.</span>
+                      <span class="option-sub">Converte para web, e salva espaço na nuvem.</span>
                     </div>
                   </button>
                 </div>
@@ -617,6 +647,22 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
         text-align: center;
       }
 
+      .edit-name-btn {
+        background: none;
+        border: none;
+        color: #5f6368;
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .edit-name-btn:hover {
+        background: #f1f3f4;
+        color: #1a73e8;
+      }
+
       .profile-manage-account-btn {
         background: transparent;
         border: 1px solid #747775;
@@ -678,25 +724,38 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
       }
 
       .user-bubble {
-        width: 24px;
-        height: 24px;
+        width: 32px;
+        height: 32px;
         border-radius: 50%;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 11px;
-        font-weight: bold;
-        color: white;
-        font-family: 'Roboto', sans-serif;
+        color: #ffffff;
+        font-weight: 500;
+        font-size: 14px;
+        flex-shrink: 0;
+      }
+
+      .user-bubble-img {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        object-fit: cover;
+        flex-shrink: 0;
+      }
+
+      .user-bubble-img.bubble-small {
+        width: 28px;
+        height: 28px;
       }
 
       .bubble-green { background: #137333; }
       .bubble-orange { background: #c93300; }
-      .bubble-blue { background: #e8f0fe; color: #1a73e8; }
-
-      .bubble-chevron {
-        font-size: 18px;
-        color: #5f6368;
+      .user-bubble.bubble-blue {
+        background-color: #e8f0fe;
+        color: #1a73e8;
+        border-color: #1a73e8;
+        font-weight: 600;
         margin-left: 2px;
       }
 
@@ -705,6 +764,7 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
         align-items: center;
         gap: 12px;
         width: 100%;
+        margin-top: 4px;
       }
 
       .quota-card-icon {
@@ -716,6 +776,12 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
         font-size: 13px;
         color: #3c4043;
         font-family: 'Roboto', sans-serif;
+      }
+
+      .bubble-chevron {
+        font-size: 18px;
+        color: #5f6368;
+        margin-left: 2px;
       }
 
       .profile-logout-btn {
@@ -1222,6 +1288,34 @@ export class TopbarComponent {
     return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
   }
 
+  async changeProfileName() {
+    const user = this.appState.user();
+    if (!user) return;
+    const newName = await this.dialogService.prompt(
+      'Editar Nome',
+      user.name,
+      'Seu novo nome',
+      'Salvar'
+    );
+    if (newName && newName !== user.name) {
+      await this.authService.updateProfile(newName, user.picture);
+    }
+  }
+
+  async changeProfilePicture() {
+    const user = this.appState.user();
+    if (!user) return;
+    const newPic = await this.dialogService.prompt(
+      'Editar Foto de Perfil',
+      user.picture,
+      'URL da imagem da sua nova foto',
+      'Salvar'
+    );
+    if (newPic !== null && newPic !== user.picture) {
+      await this.authService.updateProfile(user.name, newPic);
+    }
+  }
+
   getBubbleColorClass(email: string): string {
     const char = email.charAt(0).toLowerCase();
     const index = char.charCodeAt(0) % 5;
@@ -1262,16 +1356,20 @@ export class TopbarComponent {
     this.authService.logoutGlobal();
   }
 
-  getQuotaPercentFormatted(): string {
+  getTotalQuotaPercentFormatted(): string {
     const q = this.driveStore.quota();
-    if (!q || q.maxBytes === 0) return '0';
-    return ((q.usedBytes / q.maxBytes) * 100).toFixed(0);
+    if (!q) return '0';
+    const totalMax = q.maxBytes + (q.gdriveMaxBytes || 0);
+    const totalUsed = q.usedBytes + (q.gdriveUsedBytes || 0);
+    if (totalMax === 0) return '0';
+    return ((totalUsed / totalMax) * 100).toFixed(0);
   }
 
-  getQuotaMaxFormatted(): string {
+  getTotalQuotaMaxFormatted(): string {
     const q = this.driveStore.quota();
     if (!q) return '5 TB';
-    return this.formatSize(q.maxBytes);
+    const totalMax = q.maxBytes + (q.gdriveMaxBytes || 0);
+    return this.formatSize(totalMax);
   }
 
   private formatSize(bytes: number): string {
@@ -1282,24 +1380,7 @@ export class TopbarComponent {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(0)) + ' ' + sizes[i];
   }
 
-  getQuotaPercent(): string {
-    const q = this.driveStore.quota();
-    if (!q || q.maxBytes === 0) return '0';
-    return ((q.usedBytes / q.maxBytes) * 100).toFixed(1);
-  }
 
-  getQuotaFormatted(): string {
-    const q = this.driveStore.quota();
-    return this.formatBytes(q.usedBytes) + ' de ' + this.formatBytes(q.maxBytes);
-  }
-
-  private formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  }
 
   openSettings() {
     this.isProfileMenuOpen.set(false);

@@ -25,6 +25,7 @@ public:
     struct LinkedAccount {
         uint64_t id;
         std::string account_email;
+        std::string account_picture;
         std::string root_folder_id;
     };
     
@@ -54,6 +55,7 @@ private:
         std::string access_token;
         std::string refresh_token;
         std::string account_email;
+        std::string account_picture;
     };
 
     struct TokenCacheEntry {
