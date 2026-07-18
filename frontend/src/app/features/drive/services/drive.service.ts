@@ -105,6 +105,12 @@ export class DriveService {
     });
   }
 
+  getPendingUploads(): Observable<{ pending_uploads: any[] }> {
+    return this.http.get<{ pending_uploads: any[] }>(`${environment.apiUrl}/pending-uploads`, {
+      withCredentials: true,
+    });
+  }
+
   downloadFile(fileId: number): Observable<Blob> {
     return this.http.get(`${environment.apiUrl}/files/${fileId}/download`, {
       responseType: 'blob',

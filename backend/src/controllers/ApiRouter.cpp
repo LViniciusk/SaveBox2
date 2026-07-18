@@ -883,33 +883,40 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
             auto conn = pool_->acquire_connection();
             pqxx::work txn(*conn);
             auto result = txn.exec(
-                "SELECT external_file_id, external_storage_id FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+                "SELECT external_file_id, external_storage_id, is_upload_complete FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
                 pqxx::params{file_id, user_id}
             );
             txn.commit();
 
-            if (result.empty() || result[0][0].is_null()) {
-                return crow::response(404, R"({"error":"Arquivo externo nao encontrado"})");
+            bool is_upload_complete = false;
+            if (!result.empty()) {
+                is_upload_complete = result[0][2].as<bool>();
             }
 
-            std::string external_file_id = result[0][0].as<std::string>();
-            std::string access_token;
-            
-            if (!result[0][1].is_null()) {
-                uint64_t storage_id = result[0][1].as<uint64_t>();
-                access_token = gdrive_->get_access_token_for_storage(storage_id);
-            } else {
-                return crow::response(500, R"({"error":"Storage externo nao encontrado para este arquivo"})");
+            if (is_upload_complete) {
+                if (result.empty() || result[0][0].is_null()) {
+                    return crow::response(404, R"({"error":"Arquivo externo nao encontrado"})");
+                }
+
+                std::string external_file_id = result[0][0].as<std::string>();
+                std::string access_token;
+                
+                if (!result[0][1].is_null()) {
+                    uint64_t storage_id = result[0][1].as<uint64_t>();
+                    access_token = gdrive_->get_access_token_for_storage(storage_id);
+                } else {
+                    return crow::response(500, R"({"error":"Storage externo nao encontrado para este arquivo"})");
+                }
+
+                crow::json::wvalue res_body;
+                res_body["storage_provider"] = "google_drive";
+                res_body["external_file_id"] = external_file_id;
+                res_body["access_token"] = access_token;
+
+                crow::response res(200, res_body);
+                res.set_header("Content-Type", "application/json");
+                return res;
             }
-
-            crow::json::wvalue res_body;
-            res_body["storage_provider"] = "google_drive";
-            res_body["external_file_id"] = external_file_id;
-            res_body["access_token"] = access_token;
-
-            crow::response res(200, res_body);
-            res.set_header("Content-Type", "application/json");
-            return res;
         }
     } catch (const std::exception& e) {
         std::string msg = e.what();
@@ -942,7 +949,7 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
     };
 
     try {
-        file_mgr_->can_user_download(static_cast<uint64_t>(file_id), user_id);
+        // file_mgr_->can_user_download(static_cast<uint64_t>(file_id), user_id); // Removed to allow downloading incomplete files (for preview and resume)
         
         size_t total_size = chunker_->get_file_size(file_id);
         std::string range_header = req.get_header_value("Range");

@@ -6,6 +6,7 @@ import { KasumiCryptoService } from '../../../core/crypto/kasumi-crypto.service'
 import { HttpClient, HttpEventType } from '@angular/common/http';
 import { DialogService } from '../../../core/dialog/dialog.service';
 import { VideoTranscoderService } from '../services/video-transcoder.service';
+import { environment } from '../../../../environments/environment';
 
 export interface TransferItem {
   id: string;
@@ -18,8 +19,21 @@ export interface TransferItem {
   timestamp: Date;
   speed?: string;
   eta?: string;
+  isRecovery?: boolean;
+  pendingData?: any;
   bytesTransferred?: number;
   totalBytes?: number;
+}
+
+export interface PendingUpload {
+  id: number;
+  folder_id: number | null;
+  encrypted_name: string;
+  size_bytes: number;
+  total_chunks: number;
+  encrypted_fdk: string;
+  uploaded_chunks_count: number;
+  storage_provider: 'local' | 'google_drive';
 }
 
 export interface DriveFile {
@@ -92,27 +106,34 @@ export class DriveStore {
 
   // States to persist active/paused uploads and downloads in RAM
   private activeUploads = new Map<string, {
+    transferId: string;
     file: File;
     fileId: number;
     fdk: Uint8Array;
     encryptedBlob: Blob;
     totalChunks: number;
     folderId: number | null;
+    provider: 'local' | 'google_drive';
+    initRes?: any;
+    isHiddenProxy: boolean;
   }>();
 
   private activeDownloads = new Map<string, {
     file: DriveFile;
-    fdk: Uint8Array;
-    baseNonce: Uint8Array;
-    expectedSize: number;
-    plaintextChunks: Blob[];
-    decryptedBytes: number;
-    currentOffset: number;
-    chunkIndex: number;
+    isGoogleDrive?: boolean;
+    meta?: any;
+    fdk?: Uint8Array;
+    baseNonce?: Uint8Array;
+    expectedSize?: number;
+    decryptedBytes?: number;
+    currentOffset?: number;
+    chunkIndex?: number;
+    plaintextChunks?: Blob[];
   }>();
 
   private pausedTransfers = new Set<string>();
   private activeSubscriptions = new Map<string, Subscription>();
+  private activeRejectors = new Map<string, (reason?: any) => void>();
   private transferHistory = new Map<string, { bytes: number, time: number }[]>();
 
   readonly currentTrashFolderFiles = computed(() => {
@@ -326,10 +347,40 @@ export class DriveStore {
       }
 
       this.files.set(parsedFiles);
+      await this.loadPendingUploads();
     } catch (e) {
       console.error('Failed to load tree', e);
     } finally {
       this.isLoading.set(false);
+    }
+  }
+
+  async loadPendingUploads(): Promise<void> {
+    try {
+      const res = await firstValueFrom(this.driveService.getPendingUploads());
+      if (res.pending_uploads && res.pending_uploads.length > 0) {
+        // Remove existing recovery items to avoid duplicates
+        this.transfers.update(list => list.filter(t => !t.isRecovery));
+        
+        for (const pending of res.pending_uploads) {
+          const id = `pending_${pending.id}`;
+          const decryptedName = await this.cryptoService.decryptName(pending.encrypted_name);
+          const percent = pending.total_chunks > 0 ? Math.round((pending.uploaded_chunks_count / pending.total_chunks) * 100) : 0;
+          
+          this.addTransfer({
+            id,
+            fileName: decryptedName || 'Arquivo Desconhecido',
+            type: 'upload',
+            status: 'paused',
+            statusMessage: 'Aguardando arquivo original...',
+            progress: percent,
+            isRecovery: true,
+            pendingData: pending
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load pending uploads', e);
     }
   }
 
@@ -360,6 +411,16 @@ export class DriveStore {
       });
     }
     this.files.set(updated);
+
+    const currentTransfers = untracked(() => this.transfers());
+    for (const t of currentTransfers) {
+      if (t.isRecovery && t.pendingData?.encrypted_name) {
+        const decName = await this.cryptoService.decryptName(t.pendingData.encrypted_name);
+        if (decName) {
+          this.updateTransfer(t.id, { fileName: decName });
+        }
+      }
+    }
   }
 
   async createFolder(name: string, parentId: number | null = this.currentFolderId()): Promise<void> {
@@ -512,26 +573,40 @@ export class DriveStore {
     }
 
     if (isVideo && (finalMode === 'optimized' || finalMode === 'dual')) {
-      try {
-        const proxyFile = await this.videoTranscoder.transcodeToProxy(originalFile, (p, statusMessage) => {
-          this.updateTransfer(transferId, { statusMessage: statusMessage });
-          this.updateTransferProgress(transferId, Math.round(p * 100), 0, 100);
+      if (finalMode === 'dual') {
+        // Envia o original imediatamente sem aguardar o proxy
+        this._uploadSingleFile(originalFile, folderId, false, transferId).catch(e => {
+          console.error('Falha no upload do original (dual)', e);
         });
-        
-        if (finalMode === 'optimized') {
-          // Substitui completamente pelo otimizado, mantendo o nome original
+
+        // Gera o proxy em background
+        this.videoTranscoder.transcodeToProxy(originalFile, (p, statusMessage) => {
+          // Não atualizamos o statusMessage principal para não sobrescrever o progresso do original,
+          // mas a conversão está acontecendo em background.
+        }).then(proxyFile => {
+          const hiddenProxy = new File([proxyFile], originalFile.name + '.proxy.mp4', { type: proxyFile.type });
+          // Inicia o upload silencioso do proxy
+          this._uploadSingleFile(hiddenProxy, folderId, true, transferId).catch(e => {
+            console.error('Falha no upload do proxy (dual)', e);
+          });
+        }).catch(e => {
+          console.error('Erro na transcodificação do proxy (dual)', e);
+        });
+
+        return; // Retorna imediatamente, os envios acontecem de forma assíncrona
+      } else {
+        // Optimized mode aguarda a transcodificação antes de subir
+        try {
+          const proxyFile = await this.videoTranscoder.transcodeToProxy(originalFile, (p, statusMessage) => {
+            this.updateTransfer(transferId, { statusMessage: statusMessage });
+            this.updateTransferProgress(transferId, Math.round(p * 100), 0, 100);
+          });
           const renamedProxy = new File([proxyFile], originalFile.name, { type: proxyFile.type });
           filesToUpload.push({ file: renamedProxy, isHiddenProxy: false });
-        } else {
-          // Dual: envia o original E o proxy oculto
+        } catch (e: any) {
+          console.error('Erro na transcodificação, enviando apenas original', e);
           filesToUpload.push({ file: originalFile, isHiddenProxy: false });
-          const hiddenProxy = new File([proxyFile], originalFile.name + '.proxy.mp4', { type: proxyFile.type });
-          filesToUpload.push({ file: hiddenProxy, isHiddenProxy: true });
         }
-      } catch (e: any) {
-        console.error('Erro na transcodificação, enviando apenas original', e);
-        // Fallback: envia só o original se der erro no ffmpeg
-        filesToUpload.push({ file: originalFile, isHiddenProxy: false });
       }
     } else {
       filesToUpload.push({ file: originalFile, isHiddenProxy: false });
@@ -543,6 +618,8 @@ export class DriveStore {
   }
 
   private async _uploadSingleFile(file: File, folderId: number | null, isHiddenProxy: boolean, transferId: string): Promise<void> {
+    const uploadId = transferId + (isHiddenProxy ? '_proxy' : '_original');
+    
     this.updateTransfer(transferId, {
       status: 'processing',
       statusMessage: isHiddenProxy ? 'Enviando versão otimizada...' : 'Enviando original...',
@@ -572,30 +649,38 @@ export class DriveStore {
       ));
       const fileId = initRes.file_id;
 
-      this.activeUploads.set(transferId, {
+      this.activeUploads.set(uploadId, {
+        transferId,
         file,
         fileId,
         fdk,
         encryptedBlob,
         totalChunks,
-        folderId
+        folderId,
+        provider: activeProvider,
+        initRes,
+        isHiddenProxy
       });
 
-      await this.runUploadLoop(transferId, fileId, encryptedBlob, totalChunks, activeProvider, initRes);
+      await this.runUploadLoop(uploadId, transferId, fileId, encryptedBlob, totalChunks, activeProvider, initRes, isHiddenProxy);
     } catch (e: any) {
-      this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no upload' });
-      this.activeUploads.delete(transferId);
+      if (e?.message !== 'PAUSED') {
+        this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no upload' });
+        this.activeUploads.delete(uploadId);
+      }
       throw e;
     }
   }
 
   private async runUploadLoop(
+    uploadId: string,
     transferId: string,
     fileId: number,
     encryptedBlob: Blob,
     totalChunks: number,
     activeProvider: 'local' | 'google_drive',
-    initRes: any
+    initRes: any,
+    isHiddenProxy: boolean
   ): Promise<void> {
     const CHUNK_SIZE = 4 * 1024 * 1024;
 
@@ -633,6 +718,7 @@ export class DriveStore {
       }
 
       const uploadResPromise = new Promise<any>((resolve, reject) => {
+        this.activeRejectors.set(uploadId, reject);
         const sub = this.http.post<any>(
           'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
           new Blob([bodyUint8]),
@@ -656,11 +742,21 @@ export class DriveStore {
           },
           error: (err) => reject(err)
         });
-        this.activeSubscriptions.set(transferId, sub);
+        this.activeSubscriptions.set(uploadId, sub);
       });
 
-      const uploadRes = await uploadResPromise;
-      this.activeSubscriptions.delete(transferId);
+      let uploadRes;
+      try {
+        uploadRes = await uploadResPromise;
+      } catch (e: any) {
+        if (e.message === 'PAUSED') {
+          return;
+        }
+        throw e;
+      } finally {
+        this.activeSubscriptions.delete(uploadId);
+        this.activeRejectors.delete(uploadId);
+      }
 
       if (this.pausedTransfers.has(transferId)) {
         this.updateTransfer(transferId, { status: 'paused' });
@@ -706,9 +802,16 @@ export class DriveStore {
         this.updateTransferProgress(transferId, percent, bytesTransferred, encryptedBlob.size);
       }
     }
-
-    this.updateTransfer(transferId, { status: 'success', progress: 100, statusMessage: 'Concluído!' });
-    this.activeUploads.delete(transferId);
+    
+    // Deleta do activeUploads e apenas marca concluído na UI se não for um proxy escondido ou se for o único arquivo
+    this.activeUploads.delete(uploadId);
+    
+    // Se isHiddenProxy é true, apenas removemos e não atualizamos a UI (o arquivo principal vai atualizar a UI quando acabar)
+    // Contudo, se só havia o proxy (ex: erro no principal), a UI ficaria travada. Mas o fluxo atual não permite isso.
+    if (!isHiddenProxy) {
+      this.updateTransfer(transferId, { status: 'success', progress: 100, statusMessage: 'Concluído!' });
+    }
+    
     await this.loadTree();
     await this.loadQuota();
   }
@@ -749,40 +852,10 @@ export class DriveStore {
       if (file.storageProvider === 'google_drive') {
         const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
         setProgress(30, 0, file.sizeBytes);
-
-        const dlPromise = new Promise<Blob>((resolve, reject) => {
-          const sub = this.driveService.downloadExternalFile(
-            `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`,
-            meta.access_token
-          ).subscribe({
-            next: (blob) => resolve(blob),
-            error: (err) => reject(err)
-          });
-          this.activeSubscriptions.set(transferId, sub);
-        });
-
-        const encryptedBlob = await dlPromise;
-        this.activeSubscriptions.delete(transferId);
-
-        if (this.pausedTransfers.has(transferId)) {
-          this.updateTransfer(transferId, { status: 'paused' });
-          return;
-        }
-
-        setProgress(70, encryptedBlob.size / 2, encryptedBlob.size);
-        const decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk);
-        setProgress(95, encryptedBlob.size, encryptedBlob.size);
-
-        const url = URL.createObjectURL(decryptedBlob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = file.decryptedName || 'arquivo_desconhecido';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-
-        this.updateTransfer(transferId, { status: 'success', progress: 100 });
+        
+        const state = { file, isGoogleDrive: true, meta, fdk };
+        this.activeDownloads.set(transferId, state);
+        await this.runGoogleDriveDownload(transferId, state);
       } else {
         // Local file chunked download
         setProgress(15, 0, file.sizeBytes);
@@ -808,12 +881,70 @@ export class DriveStore {
         await this.runDownloadLoop(transferId, state);
       }
     } catch (e: any) {
-      console.error('Falha no download', e);
-      this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no download' });
-      this.activeDownloads.delete(transferId);
+      if (e?.message !== 'PAUSED') {
+        console.error('Falha no download', e);
+        this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no download' });
+        this.activeDownloads.delete(transferId);
+      }
+      throw e;
     } finally {
       this.isDownloading.set(false);
     }
+  }
+
+  private async runGoogleDriveDownload(transferId: string, state: any): Promise<void> {
+    const { file, meta, fdk } = state;
+
+    const setProgress = (prog: number, bytes: number, total: number) => {
+      this.downloadProgress.set(prog);
+      this.updateTransferProgress(transferId, prog, bytes, total);
+    };
+
+    const dlPromise = new Promise<Blob>((resolve, reject) => {
+      this.activeRejectors.set(transferId, reject);
+      const sub = this.driveService.downloadExternalFile(
+        `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`,
+        meta.access_token
+      ).subscribe({
+        next: (blob) => resolve(blob),
+        error: (err) => reject(err)
+      });
+      this.activeSubscriptions.set(transferId, sub);
+    });
+
+    let encryptedBlob;
+    try {
+      encryptedBlob = await dlPromise;
+    } catch (e: any) {
+      if (e.message === 'PAUSED') {
+        return;
+      }
+      throw e;
+    } finally {
+      this.activeSubscriptions.delete(transferId);
+      this.activeRejectors.delete(transferId);
+    }
+
+    if (this.pausedTransfers.has(transferId)) {
+      this.updateTransfer(transferId, { status: 'paused' });
+      return;
+    }
+
+    setProgress(70, encryptedBlob.size / 2, encryptedBlob.size);
+    const decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk);
+    setProgress(95, encryptedBlob.size, encryptedBlob.size);
+
+    const url = URL.createObjectURL(decryptedBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.decryptedName || 'arquivo_desconhecido';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    this.updateTransfer(transferId, { status: 'success', progress: 100, statusMessage: 'Concluído!' });
+    this.activeDownloads.delete(transferId);
   }
 
   private async runDownloadLoop(transferId: string, state: any): Promise<void> {
@@ -882,27 +1013,167 @@ export class DriveStore {
     this.updateTransfer(id, { status: 'paused', speed: 'Pausado', eta: '--:--' });
 
     // Cancel active Google Drive HTTP request if applicable
+    // id in pausedTransfers is transferId. But activeSubscriptions are mapped to uploadId (which is transferId + suffix) for uploads, and transferId for downloads.
     const sub = this.activeSubscriptions.get(id);
     if (sub) {
       sub.unsubscribe();
       this.activeSubscriptions.delete(id);
     }
+    const rej = this.activeRejectors.get(id);
+    if (rej) {
+      rej(new Error('PAUSED'));
+      this.activeRejectors.delete(id);
+    }
+
+    // Now for uploads which use uploadId
+    for (const uploadId of this.activeUploads.keys()) {
+      if (uploadId.startsWith(id)) {
+        const upSub = this.activeSubscriptions.get(uploadId);
+        if (upSub) {
+          upSub.unsubscribe();
+          this.activeSubscriptions.delete(uploadId);
+        }
+        const upRej = this.activeRejectors.get(uploadId);
+        if (upRej) {
+          upRej(new Error('PAUSED'));
+          this.activeRejectors.delete(uploadId);
+        }
+      }
+    }
   }
 
   async resumeUpload(id: string) {
-    const data = this.activeUploads.get(id);
-    if (!data) return;
+    const uploadsToResume = [];
+    for (const [uploadId, data] of this.activeUploads.entries()) {
+      if (data.transferId === id) {
+        uploadsToResume.push({ uploadId, data });
+      }
+    }
+
+    if (uploadsToResume.length === 0) return;
 
     this.pausedTransfers.delete(id);
     this.updateTransfer(id, { status: 'processing', speed: 'Calculando...', eta: '--:--' });
 
     try {
-      const activeProvider = this.storageProvider();
-      // Google drive simple uploads are restarted, local ones are resumed from last chunk
-      const initRes = { access_token: '', root_folder_id: '' };
-      await this.runUploadLoop(id, data.fileId, data.encryptedBlob, data.totalChunks, activeProvider, initRes);
+      for (const { uploadId, data } of uploadsToResume) {
+        if (this.pausedTransfers.has(id)) return; // Se pausou novamente entre uploads
+        
+        this.updateTransfer(id, {
+          statusMessage: data.isHiddenProxy ? 'Retomando versão otimizada...' : 'Retomando original...'
+        });
+        
+        const activeProvider = data.provider;
+        const initRes = data.initRes || { access_token: '', root_folder_id: '' };
+        await this.runUploadLoop(uploadId, id, data.fileId, data.encryptedBlob, data.totalChunks, activeProvider, initRes, data.isHiddenProxy);
+      }
     } catch (e: any) {
-      this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha no upload' });
+      if (e?.message !== 'PAUSED') {
+        this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha no upload' });
+      }
+    }
+  }
+
+  async cancelTransfer(id: string) {
+    this.pauseTransfer(id);
+    
+    // Se for uma recuperação pendente, excluir o arquivo temporário/incompleto do servidor
+    const transfer = this.transfers().find(t => t.id === id);
+    if (transfer && transfer.isRecovery && transfer.pendingData) {
+      try {
+        await firstValueFrom(this.driveService.trashFile(transfer.pendingData.id));
+        await firstValueFrom(this.driveService.hardDeleteFile(transfer.pendingData.id));
+      } catch (e) {
+        console.error('Falha ao limpar arquivo pendente', e);
+      }
+    }
+    
+    this.transfers.update(list => list.filter(t => t.id !== id));
+    this.activeUploads.delete(id);
+    this.activeDownloads.delete(id);
+    this.pausedTransfers.delete(id);
+  }
+
+  async recoverUpload(id: string, pendingData: PendingUpload, file: File) {
+    // 1. Decriptar a chave FDK do arquivo
+    const fdkBase64 = await this.cryptoService.decryptName(pendingData.encrypted_fdk);
+    if (!fdkBase64) throw new Error('Não foi possível decifrar a chave do arquivo pendente.');
+    const fdkChars = atob(fdkBase64);
+    const fdk = new Uint8Array(fdkChars.length);
+    for (let i = 0; i < fdkChars.length; i++) fdk[i] = fdkChars.charCodeAt(i);
+
+    // 2. Tentar recuperar o baseNonce do servidor se o upload já tiver chunks
+    let baseNonce: Uint8Array | undefined = undefined;
+    if (pendingData.uploaded_chunks_count > 0) {
+      this.updateTransfer(id, { statusMessage: 'Recuperando contexto de criptografia...' });
+      try {
+        const res = await firstValueFrom(this.http.get(`${environment.apiUrl}/files/${pendingData.id}/download`, {
+          responseType: 'arraybuffer',
+          headers: { 'Range': 'bytes=0-23' }
+        }));
+        if (res && res.byteLength === 24) {
+          baseNonce = new Uint8Array(res);
+        }
+      } catch (e) {
+        console.warn('Falha ao obter baseNonce do servidor. Gerando um novo.', e);
+      }
+    }
+
+    // 3. Recriptografar o arquivo localmente com a mesma FDK e mesmo baseNonce
+    this.updateTransfer(id, { status: 'processing', statusMessage: 'Recriptografando arquivo local...', speed: 'Calculando...', eta: '--:--' });
+    const encryptedBlob = await this.kasumi.encryptFile(file, fdk, baseNonce);
+
+    // 3. Checar se o tamanho gerado bate com o servidor
+    // A tolerância de tamanho aqui não é estrita porque o proxy pode ter mudado, mas proxies são ocultos.
+    // Para original, o tamanho criptografado é sempre o mesmo se o arquivo for o mesmo.
+    const fileId = pendingData.id;
+    const activeProvider = pendingData.storage_provider;
+    const totalChunks = pendingData.total_chunks;
+    
+    // Preparar initRes dummy (necessário apenas para google_drive, mas google_drive recomeça do zero)
+    const initRes = { access_token: '', root_folder_id: '' };
+
+    this.pausedTransfers.delete(id);
+    
+    // Adicionar no activeUploads
+    const uploadId = id + '_recovery';
+    this.activeUploads.set(uploadId, {
+      transferId: id,
+      file,
+      fileId,
+      fdk,
+      encryptedBlob,
+      totalChunks,
+      folderId: pendingData.folder_id,
+      provider: activeProvider,
+      initRes,
+      isHiddenProxy: false
+    });
+
+    this.updateTransfer(id, { statusMessage: 'Retomando upload...' });
+
+    // Disparar geração de proxy SE for vídeo e não tivermos proxy? 
+    // Na recuperação o proxy sobe invisivelmente do zero!
+    const isVideo = this.videoTranscoder.isVideo(file);
+    const mode = this.videoUploadMode();
+    if (isVideo && mode === 'dual') {
+      this.videoTranscoder.transcodeToProxy(file, (p, msg) => {}).then(proxyFile => {
+        const hiddenProxy = new File([proxyFile], file.name + '.proxy.mp4', { type: proxyFile.type });
+        // Envia como NOVO upload oculto (vai gerar novo ID no backend)
+        this._uploadSingleFile(hiddenProxy, pendingData.folder_id, true, id).catch(console.error);
+      }).catch(console.error);
+    }
+
+    // Retomar upload do original via chunking
+    try {
+      await this.runUploadLoop(uploadId, id, fileId, encryptedBlob, totalChunks, activeProvider, initRes, false);
+      
+      // Quando concluir
+      this.transfers.update(list => list.map(t => t.id === id ? { ...t, isRecovery: false } : t));
+    } catch (e: any) {
+      if (e?.message !== 'PAUSED') {
+        this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha na recuperação' });
+      }
     }
   }
 
@@ -915,9 +1186,15 @@ export class DriveStore {
 
     try {
       this.isDownloading.set(true);
-      await this.runDownloadLoop(id, state);
+      if (state.isGoogleDrive) {
+        await this.runGoogleDriveDownload(id, state);
+      } else {
+        await this.runDownloadLoop(id, state);
+      }
     } catch (e: any) {
-      this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha no download' });
+      if (e?.message !== 'PAUSED') {
+        this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha no download' });
+      }
     } finally {
       this.isDownloading.set(false);
     }

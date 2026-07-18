@@ -230,8 +230,18 @@ import { CommonModule } from '@angular/common';
                           <div class="status-indicator paused" style="color: #d97706; font-weight: 500; font-size: 13px;">
                             <span>{{ t.progress }}%</span>
                           </div>
-                          <button class="transfer-control-btn resume" (click)="t.type === 'upload' ? driveStore.resumeUpload(t.id) : driveStore.resumeDownload(t.id)" title="Retomar">
-                            <span class="material-symbols-outlined">play_arrow</span>
+                          @if (t.isRecovery) {
+                            <button class="transfer-control-btn resume" (click)="recoveryInput.click()" title="Selecionar arquivo para retomar">
+                              <span class="material-symbols-outlined">folder_open</span>
+                            </button>
+                            <input type="file" #recoveryInput style="display: none" (change)="onRecoverFileSelected($event, t)" />
+                          } @else {
+                            <button class="transfer-control-btn resume" (click)="t.type === 'upload' ? driveStore.resumeUpload(t.id) : driveStore.resumeDownload(t.id)" title="Retomar">
+                              <span class="material-symbols-outlined">play_arrow</span>
+                            </button>
+                          }
+                          <button class="transfer-control-btn cancel" (click)="driveStore.cancelTransfer(t.id)" title="Cancelar e limpar">
+                            <span class="material-symbols-outlined">close</span>
                           </button>
                         } @else if (t.status === 'success') {
                           <div class="status-indicator success">
@@ -1170,6 +1180,11 @@ import { CommonModule } from '@angular/common';
         color: #166534;
       }
 
+      .transfer-control-btn.cancel:hover {
+        background: #fee2e2;
+        color: #dc2626;
+      }
+
       .transfer-status-area {
         display: flex;
         align-items: center;
@@ -1347,8 +1362,23 @@ export class VaultHomeComponent implements OnInit {
   protected readonly authService = inject(AuthService);
   protected readonly cryptoService = inject(CryptoService);
   protected readonly driveStore = inject(DriveStore);
-  protected readonly dialogService = inject(DialogService);
-  protected readonly AppStatus = AppStatus;
+  onRecoverFileSelected(event: Event, transfer: any) {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files.length > 0) {
+      const file = input.files[0];
+      this.driveStore.recoverUpload(transfer.id, transfer.pendingData, file).catch((err: any) => {
+        alert('Falha ao recuperar upload: ' + (err?.message || err));
+      });
+    }
+    input.value = ''; // Reset input
+  }
+
+  onCancelTransfer(transferId: string) {
+    this.driveStore.cancelTransfer(transferId);
+  }
+
+  readonly dialogService = inject(DialogService);
+  readonly AppStatus = AppStatus;
 
   readonly isUnlockModalOpen = signal(false);
   readonly currentView = signal<'drive' | 'storage' | 'trash' | 'transfers'>('drive');

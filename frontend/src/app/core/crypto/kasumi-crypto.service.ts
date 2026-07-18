@@ -141,14 +141,14 @@ export class KasumiCryptoService {
    * @param file The file to encrypt
    * @param key 32-byte FDK (File Data Key)
    */
-  async encryptFile(file: File, key: Uint8Array): Promise<Blob> {
+  async encryptFile(file: File, key: Uint8Array, fixedBaseNonce?: Uint8Array): Promise<Blob> {
     await this.ensureSodium();
 
     if (key.length !== KEY_SIZE) {
       throw new Error(`Key must be ${KEY_SIZE} bytes`);
     }
 
-    const baseNonce = this.generateBaseNonce();
+    const baseNonce = fixedBaseNonce || this.generateBaseNonce();
     const fileSize = file.size;
 
     // Encrypted chunks

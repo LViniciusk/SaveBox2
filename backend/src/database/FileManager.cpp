@@ -222,8 +222,8 @@ std::vector<crow::json::wvalue> FileManager::get_pending_uploads(uint64_t user_i
     pqxx::work txn(*conn);
 
     auto result = txn.exec(
-        "SELECT id, folder_id, encrypted_name, size_bytes, total_chunks, encrypted_fdk FROM files "
-        "WHERE user_id = $1 AND is_upload_complete = false AND deleted_at IS NULL "
+        "SELECT id, folder_id, encrypted_name, size_bytes, total_chunks, encrypted_fdk, storage_provider FROM files "
+        "WHERE user_id = $1 AND is_upload_complete = false AND deleted_at IS NULL AND is_hidden = false "
         "ORDER BY id DESC",
         pqxx::params{user_id}
     );
@@ -243,6 +243,7 @@ std::vector<crow::json::wvalue> FileManager::get_pending_uploads(uint64_t user_i
         item["size_bytes"] = row[3].as<int64_t>();
         item["total_chunks"] = row[4].as<int>();
         item["encrypted_fdk"] = row[5].as<std::string>();
+        item["storage_provider"] = row[6].as<std::string>();
 
         int file_id = row[0].as<int>();
         auto chunks_result = txn.exec(
