@@ -11,6 +11,7 @@
 #include <fstream>
 #include <sstream>
 #include <thread>
+#include <cpr/cpr.h>
 
 ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr,
                      FileManager* file_mgr, FileChunker* chunker,
@@ -383,6 +384,103 @@ crow::response ApiRouter::handle_verify_email(const crow::request& req) {
         }
         return crow::response(500, R"({"error":"Erro interno"})");
     } catch (const std::exception&) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_update_profile_pic(const crow::request& req) {
+    try {
+        auto user_id_opt = authenticate_request(req);
+        if (!user_id_opt) {
+            return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+        }
+        uint64_t user_id = *user_id_opt;
+
+        std::string content_type = req.get_header_value("Content-Type");
+        if (content_type.find("multipart/form-data") == std::string::npos) {
+            return crow::response(400, R"({"error":"Apenas multipart/form-data eh suportado"})");
+        }
+
+        crow::multipart::message msg(req);
+        std::string image_data;
+        bool found_image = false;
+
+        for (const auto& part : msg.parts) {
+            std::cout << "Parsed multipart part. Headers:" << std::endl;
+            for (const auto& h : part.headers) {
+                std::cout << "  " << h.first << ": " << h.second.value << std::endl;
+                for (const auto& p : h.second.params) {
+                    std::cout << "    Param " << p.first << " = " << p.second << std::endl;
+                }
+            }
+
+            auto it = part.headers.find("Content-Disposition");
+            if (it == part.headers.end()) {
+                it = part.headers.find("content-disposition");
+            }
+
+            if (it != part.headers.end()) {
+                auto name_it = it->second.params.find("name");
+                if (name_it != it->second.params.end() && name_it->second == "image") {
+                    image_data = part.body;
+                    found_image = true;
+                    break;
+                }
+            }
+        }
+
+        if (!found_image || image_data.empty()) {
+            return crow::response(400, R"({"error":"Arquivo de imagem nao encontrado"})");
+        }
+
+        std::string client_id = DotEnv::get_imgur_client_id();
+
+        cpr::Response r = cpr::Post(
+            cpr::Url{"https://api.imgur.com/3/image"},
+            cpr::Header{{"Authorization", "Client-ID " + client_id}},
+            cpr::Multipart{{"image", cpr::Buffer{image_data.begin(), image_data.end(), "avatar.png"}}}
+        );
+
+        if (r.status_code != 200) {
+            std::cerr << "Imgur Upload Failed: " << r.text << std::endl;
+            return crow::response(500, R"({"error":"Falha ao fazer upload para o Imgur"})");
+        }
+
+        auto json_val = crow::json::load(r.text);
+        if (!json_val) {
+            return crow::response(500, R"({"error":"Resposta invalida do Imgur"})");
+        }
+
+        if (!json_val.has("success") || json_val["success"].t() != crow::json::type::True) {
+            return crow::response(500, R"({"error":"Falha ao fazer upload da imagem"})");
+        }
+
+        if (!json_val.has("data") || json_val["data"].t() != crow::json::type::Object) {
+            return crow::response(500, R"({"error":"Resposta invalida do Imgur"})");
+        }
+
+        auto data_obj = json_val["data"];
+        if (!data_obj.has("link") || data_obj["link"].t() != crow::json::type::String) {
+            return crow::response(500, R"({"error":"Link nao encontrado na resposta"})");
+        }
+
+        std::string avatar_url = json_val["data"]["link"].s();
+
+        try {
+            auto conn = pool_->acquire_connection();
+            pqxx::work txn(*conn);
+            txn.exec("UPDATE users SET avatar_url = $1 WHERE id = $2", pqxx::params{avatar_url, user_id});
+            txn.commit();
+        } catch (const std::exception& e) {
+            std::cerr << "Erro ao atualizar avatar no banco: " << e.what() << std::endl;
+            return crow::response(500, R"({"error":"Erro ao salvar a url da imagem"})");
+        }
+
+        crow::json::wvalue res;
+        res["status"] = "success";
+        res["avatar_url"] = avatar_url;
+        return crow::response(200, res);
+    } catch (const std::exception& e) {
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -1938,6 +2036,13 @@ void ApiRouter::setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware
     CROW_ROUTE(app, "/verify").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req) {
         auto res = handle_verify_email(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/users/me/profile-pic").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        auto res = handle_update_profile_pic(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });

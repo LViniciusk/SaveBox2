@@ -126,6 +126,11 @@ namespace DotEnv{
         return cfg.get_required_var("EMAIL_VALIDATION_API_KEY");
     }
 
+    inline std::string get_imgur_client_id() {
+        auto& cfg = Utils::get();
+        return cfg.get_required_var("IMGUR_CLIENT_ID");
+    }
+
     inline uint16_t get_port() {
         auto& cfg = Utils::get();
         std::string port_str = cfg.get_var("PORT", "8080");

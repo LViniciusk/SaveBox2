@@ -33,6 +33,7 @@ public:
     crow::response handle_logout(const crow::request& req);
     crow::response handle_logout_global(const crow::request& req);
     crow::response handle_verify_email(const crow::request& req);
+    crow::response handle_update_profile_pic(const crow::request& req);
     crow::response handle_create_folder(const crow::request& req);
     crow::response handle_init_file_upload(const crow::request& req);
     crow::response handle_batch_init_uploads(const crow::request& req);

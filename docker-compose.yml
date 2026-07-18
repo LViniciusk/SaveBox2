@@ -41,6 +41,7 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
+      IMGUR_CLIENT_ID: ${IMGUR_CLIENT_ID}
       NANIKA_STORAGE_PATH: /app/nanika_storage/
     volumes:
       - ./nanika_storage:/app/nanika_storage

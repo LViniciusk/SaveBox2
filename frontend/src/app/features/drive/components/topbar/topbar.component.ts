@@ -1,15 +1,18 @@
 import { Component, EventEmitter, Output, inject, signal, HostListener } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { AppStateService } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
 import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { DriveStore } from '../../state/drive.store';
 import { CommonModule } from '@angular/common';
 import { DialogService } from '../../../../core/dialog/dialog.service';
+import { environment } from '../../../../../environments/environment';
+import { firstValueFrom } from 'rxjs';
 
 @Component({
   selector: 'app-topbar',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, FormsModule],
   template: `
     <header class="topbar">
       <div class="left-section">
@@ -60,13 +63,13 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
               <!-- Main Avatar Section -->
               <div class="profile-main-section">
                 <div class="profile-pic-ring">
-                  <div class="profile-pic-wrapper">
+                  <div class="profile-pic-wrapper" (click)="editProfilePic($event)" title="Mudar foto de perfil">
                     @if (appState.user()?.picture) {
                       <img [src]="appState.user()?.picture" alt="Avatar" class="profile-pic-large" crossorigin="anonymous" referrerpolicy="no-referrer" />
                     } @else {
                       <div class="profile-pic-fallback-large">{{ appState.user()?.name?.charAt(0) || 'U' }}</div>
                     }
-                    <button class="profile-pic-camera-badge" title="Mudar foto de perfil" (click)="changeProfilePicture()">
+                    <button class="profile-pic-camera-badge">
                       <span class="material-symbols-outlined">photo_camera</span>
                     </button>
                   </div>
@@ -594,6 +597,7 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
         background: white;
         padding: 3px;
         box-sizing: border-box;
+        cursor: pointer;
       }
 
       .profile-pic-large {
@@ -1302,17 +1306,53 @@ export class TopbarComponent {
     }
   }
 
-  async changeProfilePicture() {
+  async editProfilePic(event?: Event) {
+    if (event) {
+      event.stopPropagation();
+    }
     const user = this.appState.user();
     if (!user) return;
-    const newPic = await this.dialogService.prompt(
-      'Editar Foto de Perfil',
-      user.picture,
-      'URL da imagem da sua nova foto',
-      'Salvar'
-    );
-    if (newPic !== null && newPic !== user.picture) {
-      await this.authService.updateProfile(user.name, newPic);
+    
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e: Event) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+
+      // Mostra um loading rápido (opcional, pode ser via transfer ou só trocando no front dps)
+      const loadingMsg = 'Fazendo upload da imagem...';
+      
+      try {
+        await this.uploadProfilePic(file);
+        
+        // Agora que o backend atualizou o DB com a nova imagem, atualizamos nosso estado local e o JWT
+        await firstValueFrom(this.authService.restoreSession());
+      } catch (err) {
+        console.error(err);
+        alert('Falha ao fazer upload da imagem.');
+      }
+    };
+    input.click();
+  }
+
+  private async uploadProfilePic(file: File): Promise<void> {
+    const formData = new FormData();
+    formData.append('image', file);
+
+    const token = this.authService.getToken();
+    const response = await fetch(`${environment.apiUrl}/users/me/profile-pic`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      },
+      body: formData
+    });
+
+    const data = await response.json();
+    
+    if (!response.ok) {
+      throw new Error(data.error || 'Falha ao atualizar foto de perfil');
     }
   }
 
