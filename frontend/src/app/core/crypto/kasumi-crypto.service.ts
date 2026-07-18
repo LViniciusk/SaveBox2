@@ -140,8 +140,10 @@ export class KasumiCryptoService {
    * Encrypts a File into a Blob using Kasumi XChaCha20-Poly1305 stream format.
    * @param file The file to encrypt
    * @param key 32-byte FDK (File Data Key)
+   * @param fixedBaseNonce Optional fixed base nonce
+   * @param metadata Optional metadata string to embed in the Kasumi v2 header
    */
-  async encryptFile(file: File, key: Uint8Array, fixedBaseNonce?: Uint8Array): Promise<Blob> {
+  async encryptFile(file: File, key: Uint8Array, fixedBaseNonce?: Uint8Array, metadata?: string): Promise<Blob> {
     await this.ensureSodium();
 
     if (key.length !== KEY_SIZE) {
@@ -154,16 +156,49 @@ export class KasumiCryptoService {
     // Encrypted chunks
     const encryptedChunks: Blob[] = [];
 
-    // Header: Base Nonce (24 bytes) + Original Size (8 bytes, Little Endian)
-    const headerBuffer = new ArrayBuffer(NONCE_SIZE + 8);
-    const headerView = new DataView(headerBuffer);
-    const headerUint8 = new Uint8Array(headerBuffer);
+    if (metadata) {
+      // Kasumi v2 Header
+      const encoder = new TextEncoder();
+      const metaBytes = encoder.encode(metadata);
+      
+      const headerBuffer = new ArrayBuffer(NONCE_SIZE + 8 + 4 + 4);
+      const headerView = new DataView(headerBuffer);
+      const headerUint8 = new Uint8Array(headerBuffer);
 
-    headerUint8.set(baseNonce, 0);
-    // uint64_t Little Endian
-    headerView.setBigUint64(NONCE_SIZE, BigInt(fileSize), true);
-    
-    encryptedChunks.push(new Blob([headerBuffer]));
+      // Base Nonce
+      headerUint8.set(baseNonce, 0);
+      // Original Size (uint64)
+      headerView.setBigUint64(NONCE_SIZE, BigInt(fileSize), true);
+      
+      // Magic 'KAS2'
+      const magicBytes = encoder.encode('KAS2');
+      headerUint8.set(magicBytes, NONCE_SIZE + 8);
+      
+      // Meta Size (uint32)
+      headerView.setUint32(NONCE_SIZE + 12, metaBytes.length, true);
+
+      // Encrypt Metadata Chunk (using special chunk index 0xFFFFFFFF)
+      const metaNonce = this.deriveChunkNonce(baseNonce, 0xFFFFFFFF);
+      const metaEncrypted = _sodium.crypto_aead_xchacha20poly1305_ietf_encrypt_detached(
+        metaBytes, null, null, metaNonce, key
+      );
+
+      encryptedChunks.push(new Blob([
+        headerBuffer,
+        new Uint8Array(metaEncrypted.mac),
+        new Uint8Array(metaEncrypted.ciphertext)
+      ]));
+    } else {
+      // Kasumi v1 Header
+      const headerBuffer = new ArrayBuffer(NONCE_SIZE + 8);
+      const headerView = new DataView(headerBuffer);
+      const headerUint8 = new Uint8Array(headerBuffer);
+
+      headerUint8.set(baseNonce, 0);
+      headerView.setBigUint64(NONCE_SIZE, BigInt(fileSize), true);
+      
+      encryptedChunks.push(new Blob([headerBuffer]));
+    }
 
     let offset = 0;
     let chunkIndex = 0;
@@ -211,20 +246,37 @@ export class KasumiCryptoService {
     }
 
     // Read Header
-    const headerSlice = encryptedBlob.slice(0, NONCE_SIZE + 8);
+    const initialHeaderSize = NONCE_SIZE + 8;
+    const headerSlice = encryptedBlob.slice(0, initialHeaderSize);
     const headerBuffer = await headerSlice.arrayBuffer();
     const baseNonce = new Uint8Array(headerBuffer, 0, NONCE_SIZE);
     
     const headerView = new DataView(headerBuffer);
     const expectedSize = Number(headerView.getBigUint64(NONCE_SIZE, true));
 
+    let offset = initialHeaderSize;
+
+    // Check for KAS2 magic bytes
+    if (encryptedBlob.size >= initialHeaderSize + 8) {
+      const magicSlice = encryptedBlob.slice(initialHeaderSize, initialHeaderSize + 4);
+      const magicBuffer = await magicSlice.arrayBuffer();
+      const magicString = new TextDecoder().decode(magicBuffer);
+
+      if (magicString === 'KAS2') {
+        const metaSizeSlice = encryptedBlob.slice(initialHeaderSize + 4, initialHeaderSize + 8);
+        const metaSizeBuffer = await metaSizeSlice.arrayBuffer();
+        const metaSize = new DataView(metaSizeBuffer).getUint32(0, true);
+
+        // offset now starts after the metadata chunk (MAC + Ciphertext)
+        offset = initialHeaderSize + 8 + MAC_SIZE + metaSize;
+      }
+    }
+
     const decryptedChunks: Blob[] = [];
     let chunkIndex = 0;
     let totalDecrypted = 0;
     
     // Start reading chunks after the header
-    let offset = NONCE_SIZE + 8;
-
     while (offset < encryptedBlob.size) {
       // Each encrypted chunk is MAC (16 bytes) + Ciphertext
       // The ciphertext is at most CHUNK_SIZE. So the total chunk is at most MAC_SIZE + CHUNK_SIZE.
@@ -299,5 +351,67 @@ export class KasumiCryptoService {
     } catch (e) {
       throw new Error(`Authentication failed at chunk ${chunkIndex}.`);
     }
+  }
+
+  /**
+   * Extracts metadata from a Kasumi v2 encrypted Blob.
+   * Useful when only downloading a partial file (e.g. via Range request).
+   * Returns { metadata: string | null, dataOffset: number }
+   */
+  async extractMetadata(partialBlob: Blob, key: Uint8Array): Promise<{ metadata: string | null, dataOffset: number, expectedSize: number }> {
+    await this.ensureSodium();
+    if (key.length !== KEY_SIZE) throw new Error('Key must be 32 bytes');
+
+    const initialHeaderSize = NONCE_SIZE + 8;
+    if (partialBlob.size < initialHeaderSize) {
+      throw new Error('Partial blob is too small to contain header');
+    }
+
+    const headerSlice = partialBlob.slice(0, initialHeaderSize);
+    const headerBuffer = await headerSlice.arrayBuffer();
+    const baseNonce = new Uint8Array(headerBuffer, 0, NONCE_SIZE);
+    
+    const expectedSize = Number(new DataView(headerBuffer).getBigUint64(NONCE_SIZE, true));
+
+    let dataOffset = initialHeaderSize;
+    let metadata: string | null = null;
+
+    if (partialBlob.size >= initialHeaderSize + 8) {
+      const magicSlice = partialBlob.slice(initialHeaderSize, initialHeaderSize + 4);
+      const magicBuffer = await magicSlice.arrayBuffer();
+      const magicString = new TextDecoder().decode(magicBuffer);
+
+      if (magicString === 'KAS2') {
+        const metaSizeSlice = partialBlob.slice(initialHeaderSize + 4, initialHeaderSize + 8);
+        const metaSizeBuffer = await metaSizeSlice.arrayBuffer();
+        const metaSize = new DataView(metaSizeBuffer).getUint32(0, true);
+
+        const expectedTotalHeader = initialHeaderSize + 8 + MAC_SIZE + metaSize;
+        if (partialBlob.size < expectedTotalHeader) {
+          throw new Error('Partial blob is too small to contain the full metadata block');
+        }
+
+        const metaChunkSlice = partialBlob.slice(initialHeaderSize + 8, expectedTotalHeader);
+        const metaChunkBuffer = await metaChunkSlice.arrayBuffer();
+        const metaChunkUint8 = new Uint8Array(metaChunkBuffer);
+
+        const mac = metaChunkUint8.slice(0, MAC_SIZE);
+        const ciphertext = metaChunkUint8.slice(MAC_SIZE);
+        const metaNonce = this.deriveChunkNonce(baseNonce, 0xFFFFFFFF);
+
+        try {
+          const plaintext = _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt_detached(
+            null, ciphertext, mac, null, metaNonce, key
+          );
+          metadata = new TextDecoder().decode(plaintext);
+        } catch (e) {
+          throw new Error('Failed to authenticate or decrypt KAS2 metadata');
+        }
+
+        dataOffset = expectedTotalHeader;
+      }
+    }
+
+    return { metadata, dataOffset, expectedSize };
   }
 }

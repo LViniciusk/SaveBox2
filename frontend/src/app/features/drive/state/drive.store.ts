@@ -102,6 +102,7 @@ export class DriveStore {
   readonly linkedAccounts = signal<any[]>([]);
   readonly trashFiles = signal<DriveFile[]>([]);
   readonly transfers = signal<TransferItem[]>([]);
+  readonly thumbnails = signal<Record<number, string>>({});
 
   readonly currentFolderId = signal<number | null>(null);
 
@@ -643,7 +644,13 @@ export class DriveStore {
       const fdkBase64 = btoa(String.fromCharCode(...fdk));
       const encryptedFdk = await this.cryptoService.encryptName(fdkBase64);
 
-      const encryptedBlob = await this.kasumi.encryptFile(file, fdk);
+      let metadataStr: string | undefined = undefined;
+      const thumbBase64 = await generateThumbnail(file);
+      if (thumbBase64) {
+        metadataStr = JSON.stringify({ thumb: thumbBase64 });
+      }
+
+      const encryptedBlob = await this.kasumi.encryptFile(file, fdk, undefined, metadataStr);
       
       const CHUNK_SIZE = 4 * 1024 * 1024;
       const totalChunks = Math.ceil(encryptedBlob.size / CHUNK_SIZE);
@@ -1322,6 +1329,46 @@ export class DriveStore {
     }
   }
 
+  async loadThumbnail(file: DriveFile): Promise<void> {
+    if (untracked(() => this.thumbnails())[file.id] || !file.encryptedFdk) return;
+    try {
+      const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
+      const fdkString = atob(fdkBase64);
+      const fdk = new Uint8Array(fdkString.length);
+      for (let i = 0; i < fdkString.length; i++) fdk[i] = fdkString.charCodeAt(i);
+
+      let gdriveUrl: string | null = null;
+      let gdriveToken: string | null = null;
+      if (file.storageProvider === 'google_drive') {
+        const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
+        gdriveUrl = `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`;
+        gdriveToken = meta.access_token;
+      }
+
+      const initialFetchSize = 1024 * 128;
+      let blob: Blob;
+
+      if (gdriveUrl && gdriveToken) {
+        blob = await firstValueFrom(this.http.get(gdriveUrl, {
+          headers: { 'Range': `bytes=0-${initialFetchSize - 1}`, 'Authorization': `Bearer ${gdriveToken}` },
+          responseType: 'blob'
+        }));
+      } else {
+        blob = await firstValueFrom(this.driveService.downloadFileRange(file.id, 0, initialFetchSize - 1));
+      }
+
+      const { metadata } = await this.kasumi.extractMetadata(blob, fdk);
+      if (metadata) {
+        const parsed = JSON.parse(metadata);
+        if (parsed.thumb) {
+          this.thumbnails.update(t => ({ ...t, [file.id]: parsed.thumb }));
+        }
+      }
+    } catch (e) {
+      console.warn('Could not load thumbnail for file ' + file.id);
+    }
+  }
+
   async restoreItem(file: DriveFile): Promise<void> {
     if (file.isFolder) {
       await firstValueFrom(this.driveService.restoreFolder(file.id));
@@ -1360,4 +1407,55 @@ export class DriveStore {
     await this.loadTrash();
     await this.loadQuota();
   }
+}
+
+async function generateThumbnail(file: File): Promise<string | null> {
+  if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) return null;
+
+  return new Promise((resolve) => {
+    try {
+      const url = URL.createObjectURL(file);
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return resolve(null);
+
+      const isVideo = file.type.startsWith('video/');
+      let element: HTMLVideoElement | HTMLImageElement;
+      
+      const onLoad = () => {
+        const width = isVideo ? (element as HTMLVideoElement).videoWidth : (element as HTMLImageElement).width;
+        const height = isVideo ? (element as HTMLVideoElement).videoHeight : (element as HTMLImageElement).height;
+        const max = 256;
+        let w = width, h = height;
+        if (w > max || h > max) {
+          if (w > h) { h = Math.round((h * max) / w); w = max; }
+          else { w = Math.round((w * max) / h); h = max; }
+        }
+        canvas.width = w; canvas.height = h;
+        ctx.drawImage(element, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/webp', 0.6);
+        URL.revokeObjectURL(url);
+        resolve(dataUrl);
+      };
+
+      if (isVideo) {
+        element = document.createElement('video');
+        element.muted = true;
+        element.playsInline = true;
+        element.onloadeddata = () => {
+          (element as HTMLVideoElement).currentTime = 1;
+        };
+        element.onseeked = onLoad;
+        element.onerror = () => resolve(null);
+        element.src = url;
+      } else {
+        element = document.createElement('img');
+        element.onload = onLoad;
+        element.onerror = () => resolve(null);
+        element.src = url;
+      }
+    } catch {
+      resolve(null);
+    }
+  });
 }

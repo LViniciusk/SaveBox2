@@ -1,4 +1,4 @@
-import { Component, input, inject, signal, computed, Output, EventEmitter, OnInit, OnDestroy, NgZone, Renderer2 } from '@angular/core';
+import { Component, input, inject, signal, computed, Output, EventEmitter, OnInit, OnDestroy, NgZone, Renderer2, effect } from '@angular/core';
 import { DriveFile, QuotaState, DriveStore } from '../../state/drive.store';
 import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.component';
 import { AppStateService } from '../../../../core/state/app-state.service';
@@ -143,8 +143,11 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                         }
                       }
                     </div>
-                    <div class="file-card-thumbnail">
-                      <app-file-icon [fileType]="file.type" [locked]="isLocked()" class="thumbnail-icon" />
+                    <div class="file-card-thumbnail"
+                         [style.background-image]="driveStore.thumbnails()[file.id] ? 'url(' + driveStore.thumbnails()[file.id] + ')' : ''">
+                      @if (!driveStore.thumbnails()[file.id]) {
+                        <app-file-icon [fileType]="file.type" [locked]="isLocked()" class="thumbnail-icon" />
+                      }
                     </div>
                   </div>
                 }
@@ -680,6 +683,8 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
         align-items: center;
         justify-content: center;
         border-top: 1px solid #dadce0;
+        background-size: cover;
+        background-position: center;
       }
       .thumbnail-icon {
         transform: scale(2.5);
@@ -698,6 +703,20 @@ export class FileListComponent implements OnInit, OnDestroy {
   private clickUnsub: (() => void) | null = null;
   private resizeUnsub: (() => void) | null = null;
   private scrollUnsub: (() => void) | null = null;
+
+  constructor() {
+    effect(() => {
+      if (this.driveStore.displayMode() === 'grid' && !this.isLocked()) {
+        const gridFiles = this.sortedFilesOnly();
+        gridFiles.forEach(f => {
+          if (f.type === 'image' || f.type === 'video') {
+            // Load thumbnail lazily (cache prevents multiple loads)
+            this.driveStore.loadThumbnail(f);
+          }
+        });
+      }
+    });
+  }
 
   ngOnInit() {
     this.ngZone.runOutsideAngular(() => {

@@ -58,6 +58,8 @@
  *   - All SourceBuffer mutations wait for 'updateend' before proceeding.
  */
 
+
+import { KasumiCryptoService } from '../../../core/crypto/kasumi-crypto.service';
 import { Injectable, signal, inject, NgZone } from '@angular/core';
 import { firstValueFrom, timer } from 'rxjs';
 import { retry } from 'rxjs/operators';
@@ -111,6 +113,7 @@ interface StreamState {
   baseNonce: Uint8Array;
   plaintextSize: number;
   totalChunks: number;
+  dataOffset: number; // Kasumi v2 offset
   /** Total video duration in seconds (set after moov parse; 0 until known). */
   videoDuration: number;
 
@@ -162,6 +165,7 @@ interface StreamState {
 @Injectable({ providedIn: 'root' })
 export class VideoStreamService {
   private readonly cryptoService = inject(CryptoService);
+  private readonly kasumi        = inject(KasumiCryptoService);
   private readonly driveService  = inject(DriveService);
   private readonly ngZone        = inject(NgZone);
   private readonly driveStore    = inject(DriveStore);
@@ -238,15 +242,18 @@ export class VideoStreamService {
       }
 
       if (environment.logs.transmuxer) console.log('[VideoStream] Fetching header...');
-      // --- Step 2: Download the 32-byte file header. -------------------------
-      const headerBlob    = await this.fetchRange(fileToPlay.id, 0, HEADER_SIZE - 1, new AbortController(), gdriveUrl, gdriveToken);
+      // --- Step 2: Download the file header and extract metadata. ------------
+      // Download up to 128KB to safely include Kasumi v2 metadata if it exists.
+      const initialFetchSize = 1024 * 128;
+      const headerBlob    = await this.fetchRange(fileToPlay.id, 0, initialFetchSize - 1, new AbortController(), gdriveUrl, gdriveToken);
       if (environment.logs.transmuxer) console.log('[VideoStream] Header blob fetched size:', headerBlob.size);
-      const headerBuffer  = await headerBlob.arrayBuffer();
-      const baseNonce     = new Uint8Array(headerBuffer, 0, NONCE_SIZE);
-      const headerView    = new DataView(headerBuffer);
-      const plaintextSize = Number(headerView.getBigUint64(NONCE_SIZE, true));
+      
+      const { dataOffset, expectedSize } = await this.kasumi.extractMetadata(headerBlob, fdk);
+      const baseNonce = new Uint8Array(await headerBlob.slice(0, 24).arrayBuffer());
+      
+      const plaintextSize = expectedSize;
       const totalChunks   = Math.ceil(plaintextSize / CHUNK_SIZE);
-      if (environment.logs.transmuxer) console.log('[VideoStream] File size:', plaintextSize, 'totalChunks:', totalChunks);
+      if (environment.logs.transmuxer) console.log('[VideoStream] File size:', plaintextSize, 'totalChunks:', totalChunks, 'dataOffset:', dataOffset);
 
       // --- Step 3: Create MediaSource and bind to the video element. ---------
       const mediaSource = new MediaSource();
@@ -279,6 +286,7 @@ export class VideoStreamService {
         baseNonce,
         plaintextSize,
         totalChunks,
+        dataOffset,
         videoDuration: 0,
         mediaSource,
         sourceBuffers: new Map<number, SourceBuffer>(),
@@ -490,7 +498,7 @@ export class VideoStreamService {
       ? s.plaintextSize - chunkIdx * CHUNK_SIZE
       : CHUNK_SIZE;
     const encryptedBytes = MAC_SIZE + plaintextBytes;
-    const rangeStart     = HEADER_SIZE + chunkIdx * (CHUNK_SIZE + MAC_SIZE);
+    const rangeStart     = s.dataOffset + chunkIdx * (CHUNK_SIZE + MAC_SIZE);
     const rangeEnd       = rangeStart + encryptedBytes - 1;
 
     const controller = new AbortController();
@@ -721,7 +729,7 @@ export class VideoStreamService {
   private async bootstrapLastChunk(s: StreamState, videoElement: HTMLVideoElement): Promise<void> {
     // 1. We ALWAYS download chunk 0 first since we need the real ftyp box from the beginning of the file.
     const firstEncryptedBytes = MAC_SIZE + Math.min(CHUNK_SIZE, s.plaintextSize);
-    const firstRangeStart     = HEADER_SIZE;
+    const firstRangeStart     = s.dataOffset;
     const firstRangeEnd       = firstRangeStart + firstEncryptedBytes - 1;
     if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap: downloading chunk 0...');
 
@@ -768,7 +776,7 @@ export class VideoStreamService {
       const lastChunkIndex     = s.totalChunks - 1;
       const lastPlaintextBytes = s.plaintextSize - lastChunkIndex * CHUNK_SIZE;
       const lastEncryptedBytes = MAC_SIZE + lastPlaintextBytes;
-      const lastRangeStart     = HEADER_SIZE + lastChunkIndex * (CHUNK_SIZE + MAC_SIZE);
+      const lastRangeStart     = s.dataOffset + lastChunkIndex * (CHUNK_SIZE + MAC_SIZE);
       const lastRangeEnd       = lastRangeStart + lastEncryptedBytes - 1;
       if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap last chunk idx:', lastChunkIndex, 'rangeStart:', lastRangeStart, 'rangeEnd:', lastRangeEnd);
 
