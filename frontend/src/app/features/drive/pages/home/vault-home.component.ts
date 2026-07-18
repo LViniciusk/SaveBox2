@@ -139,8 +139,19 @@ import { CommonModule } from '@angular/common';
             } @else if (currentView() === 'transfers') {
               <span class="breadcrumb-text">Pendentes</span>
             }
-          </div>
 
+            <div style="flex-grow: 1"></div>
+            @if (currentView() === 'drive' || currentView() === 'trash') {
+              <div class="view-mode-toggle">
+                <button [class.active]="driveStore.displayMode() === 'list'" (click)="driveStore.setDisplayMode('list')" title="Modo Lista">
+                  <span class="material-symbols-outlined">view_list</span>
+                </button>
+                <button [class.active]="driveStore.displayMode() === 'grid'" (click)="driveStore.setDisplayMode('grid')" title="Modo Grade">
+                  <span class="material-symbols-outlined">grid_view</span>
+                </button>
+              </div>
+            }
+          </div>
           <!-- Empty Trash Banner -->
           @if (currentView() === 'trash' && driveStore.trashFiles().length > 0) {
             <div class="trash-banner">
@@ -665,6 +676,43 @@ import { CommonModule } from '@angular/common';
       .breadcrumb-separator {
         color: #5f6368;
         user-select: none;
+      }
+
+      .view-mode-toggle {
+        display: flex;
+        border: 1px solid #747775;
+        border-radius: 100px;
+        overflow: hidden;
+        margin-left: auto;
+      }
+
+      .view-mode-toggle button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
+        padding: 4px 12px;
+        cursor: pointer;
+        color: #444746;
+        transition: background-color 0.2s;
+      }
+
+      .view-mode-toggle button:hover {
+        background-color: rgba(68, 71, 70, 0.08);
+      }
+
+      .view-mode-toggle button.active {
+        background-color: #c2e7ff;
+        color: #001d35;
+      }
+
+      .view-mode-toggle button.active:hover {
+        background-color: #b3dcf4;
+      }
+
+      .view-mode-toggle button:first-child {
+        border-right: 1px solid #747775;
       }
 
       /* === TRANSFERS MINI POPUP === */

@@ -98,6 +98,7 @@ export class DriveStore {
 
   readonly storageProvider = signal<'local' | 'google_drive'>((localStorage.getItem('preferred_storage_provider') as 'local' | 'google_drive') || 'local');
   readonly videoUploadMode = signal<'original' | 'dual' | 'optimized' | 'smart'>((localStorage.getItem('preferred_video_upload_mode') as 'original' | 'dual' | 'optimized' | 'smart') || 'smart');
+  readonly displayMode = signal<'list' | 'grid'>((localStorage.getItem('preferred_display_mode') as 'list' | 'grid') || 'list');
   readonly linkedAccounts = signal<any[]>([]);
   readonly trashFiles = signal<DriveFile[]>([]);
   readonly transfers = signal<TransferItem[]>([]);
@@ -215,6 +216,11 @@ export class DriveStore {
   setVideoUploadMode(mode: 'original' | 'dual' | 'optimized' | 'smart'): void {
     this.videoUploadMode.set(mode);
     localStorage.setItem('preferred_video_upload_mode', mode);
+  }
+
+  setDisplayMode(mode: 'list' | 'grid'): void {
+    this.displayMode.set(mode);
+    localStorage.setItem('preferred_display_mode', mode);
   }
 
   async loadLinkedAccounts(): Promise<void> {

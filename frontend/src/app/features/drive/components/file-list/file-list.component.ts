@@ -14,159 +14,227 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
   },
   template: `
     <div class="file-list-container" (contextmenu)="onContainerContextMenu($event)" (click)="selectedFileId.set(null)">
-      <div class="file-list-header" [class.storage-view]="viewMode() === 'storage'" [class.unlocked]="!isLocked()">
-        <button class="col col-name sortable-header" (click)="setSort('name')">
-          Nome
-          <span class="material-symbols-outlined sort-icon" *ngIf="sortColumn() === 'name'">
-            {{ sortDirection() === 'asc' ? 'arrow_upward' : 'arrow_downward' }}
-          </span>
-        </button>
-        
-        <button class="col col-owner sortable-header" *ngIf="viewMode() === 'drive'" (click)="setSort('owner')">
-          Proprietário
-          <span class="material-symbols-outlined sort-icon" *ngIf="sortColumn() === 'owner'">
-            {{ sortDirection() === 'asc' ? 'arrow_upward' : 'arrow_downward' }}
-          </span>
-        </button>
-
-        <button class="col col-modified sortable-header" *ngIf="viewMode() === 'drive'" (click)="setSort('modified')">
-          Última modificação
-          <span class="material-symbols-outlined sort-icon" *ngIf="sortColumn() === 'modified'">
-            {{ sortDirection() === 'asc' ? 'arrow_upward' : 'arrow_downward' }}
-          </span>
-        </button>
-
-        <button class="col col-size sortable-header" (click)="setSort('size')">
-          Tamanho do arquivo
-          <span class="material-symbols-outlined sort-icon" *ngIf="sortColumn() === 'size'">
-            {{ sortDirection() === 'asc' ? 'arrow_upward' : 'arrow_downward' }}
-          </span>
-        </button>
-
-        <div class="col col-quota" *ngIf="viewMode() === 'storage'">
-          Uso da cota
-        </div>
-
-        <div class="col col-actions" *ngIf="!isLocked()" style="font-size: 12px; font-weight: 500; color: #5f6368; display: flex; justify-content: center;">
-          Ações
-        </div>
-      </div>
-
-      <div class="file-list-body">
-        @for (file of sortedFiles(); track file.id) {
-          <div class="file-row" 
-               tabindex="0" 
-               role="row" 
-               [class.storage-view]="viewMode() === 'storage'" 
-               [class.unlocked]="!isLocked()" 
-               [class.selected]="selectedFileId() === file.id"
-               [class.dragging]="draggedFile()?.id === file.id"
-               [class.drag-over]="dragOverFolderId() === file.id"
-               [attr.draggable]="(!isLocked() && file.id !== -9999) ? 'true' : null"
-               (dragstart)="onDragStart($event, file, dragPreview)"
-               (dragover)="onDragOver($event, file)"
-               (dragleave)="onDragLeave($event, file)"
-               (dragend)="onDragEnd()"
-               (drop)="onDrop($event, file)"
-               (click)="onFileClick(file, $event)" 
-               (dblclick)="onFileDblClick(file, $event)"
-               (contextmenu)="onContextMenu(file, $event)">
-            <div class="col col-name">
-              <app-file-icon [fileType]="file.type" [locked]="isLocked()" />
-              <span class="file-name">{{ getDisplayName(file) }}</span>
-            </div>
-            
-            <div class="col col-owner" *ngIf="viewMode() === 'drive'">
-              {{ isLocked() ? getObfuscatedValue(file.owner) : file.owner }}
-            </div>
-            
-            <div class="col col-modified" *ngIf="viewMode() === 'drive'">
-              {{ isLocked() ? getObfuscatedValue(file.modifiedAt) : file.modifiedAt }}
-            </div>
-            
-            <div class="col col-size">
-              {{ isLocked() ? getObfuscatedValue(file.sizeFormatted) : file.sizeFormatted }}
-              @if (viewMode() === 'storage' && getProxySize(file) > 0) {
-                <span style="color: #5f6368; font-size: 12px; margin-left: 4px;">(+{{ formatBytes(getProxySize(file)) }})</span>
+      <ng-template #ctxMenu let-file="file">
+        <div class="action-menu"
+             [style.position]="contextMenuPosition() ? 'fixed' : 'absolute'"
+             [style.top]="contextMenuPosition() ? (contextMenuPosition()?.y + 'px') : '40px'"
+             [style.left]="contextMenuPosition() ? (contextMenuPosition()?.x + 'px') : 'auto'"
+             [style.right]="contextMenuPosition() ? 'auto' : '20px'"
+             [style.margin]="'0'">
+          @if (viewMode() === 'trash') {
+            <button class="menu-item" (click)="onRestore(file, $event)">
+              <span class="material-symbols-outlined">restore</span>
+              Restaurar
+            </button>
+            <div style="height: 1px; background: #e8eaed; margin: 4px 0;"></div>
+            <button class="menu-item" (click)="onPermanentDelete(file, $event)" style="color: #d93025;">
+              <span class="material-symbols-outlined" style="color: #d93025;">delete_forever</span>
+              Eliminar permanentemente
+            </button>
+          } @else {
+            @if (file.type === 'video') {
+              @if (hasProxy(file)) {
+                <div class="menu-item-wrapper" (mouseenter)="checkSubmenuBounds($event)">
+                  <button class="menu-item" style="justify-content: space-between;">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                      <span class="material-symbols-outlined">visibility</span>
+                      Preview
+                    </div>
+                    <span class="material-symbols-outlined" style="font-size: 16px;">chevron_right</span>
+                  </button>
+                  <div class="submenu">
+                    <button class="menu-item" (click)="onPlayOriginal(file, $event)">Original</button>
+                    <button class="menu-item" (click)="onPlayProxy(file, $event)">Compacta</button>
+                  </div>
+                </div>
+              } @else {
+                <button class="menu-item" (click)="onPlayOriginal(file, $event)">
+                  <span class="material-symbols-outlined">visibility</span>
+                  Preview
+                </button>
               }
-            </div>
-
-            <div class="col col-quota" *ngIf="viewMode() === 'storage'">
-               <div class="quota-bar-container" *ngIf="!isLocked()">
-                 <span class="quota-percent-text">{{ getPercentage(file) }} da conta</span>
-                 <progress class="quota-progress" [value]="getTotalSize(file)" [max]="getTotalStorageMax() || 1"></progress>
-               </div>
-               <span *ngIf="isLocked()">{{ getObfuscatedValue(getPercentage(file) + ' da conta') }}</span>
-            </div>
-
-            <!-- Actions Context Menu -->
-            <div class="col col-actions" *ngIf="!isLocked()" (click)="$event.stopPropagation()">
-              <button class="action-btn" (click)="toggleMenu(file, $event)">
-                <span class="material-symbols-outlined">more_vert</span>
+            }
+            @if (!file.isFolder) {
+              <button class="menu-item" (click)="onDownload(file, $event)">
+                <span class="material-symbols-outlined">download</span>
+                Baixar
               </button>
-              
-              @if (activeMenuFileId() === file.id) {
-                <div class="action-menu"
-                     [style.position]="contextMenuPosition() ? 'fixed' : 'absolute'"
-                     [style.top]="contextMenuPosition() ? (contextMenuPosition()?.y + 'px') : '40px'"
-                     [style.left]="contextMenuPosition() ? (contextMenuPosition()?.x + 'px') : 'auto'"
-                     [style.right]="contextMenuPosition() ? 'auto' : '20px'"
-                     [style.margin]="'0'">
-                  @if (viewMode() === 'trash') {
-                    <button class="menu-item" (click)="onRestore(file, $event)">
-                      <span class="material-symbols-outlined">restore</span>
-                      Restaurar
-                    </button>
-                    <div style="height: 1px; background: #e8eaed; margin: 4px 0;"></div>
-                    <button class="menu-item" (click)="onPermanentDelete(file, $event)" style="color: #d93025;">
-                      <span class="material-symbols-outlined" style="color: #d93025;">delete_forever</span>
-                      Eliminar permanentemente
-                    </button>
-                  } @else {
-                    @if (file.type === 'video') {
-                      @if (hasProxy(file)) {
-                        <div class="menu-item-wrapper" (mouseenter)="checkSubmenuBounds($event)">
-                          <button class="menu-item" style="justify-content: space-between;">
-                            <div style="display: flex; align-items: center; gap: 12px;">
-                              <span class="material-symbols-outlined">visibility</span>
-                              Preview
-                            </div>
-                            <span class="material-symbols-outlined" style="font-size: 16px;">chevron_right</span>
-                          </button>
-                          <div class="submenu">
-                            <button class="menu-item" (click)="onPlayOriginal(file, $event)">Original</button>
-                            <button class="menu-item" (click)="onPlayProxy(file, $event)">Compacta</button>
-                          </div>
-                        </div>
-                      } @else {
-                        <button class="menu-item" (click)="onPlayOriginal(file, $event)">
-                          <span class="material-symbols-outlined">visibility</span>
-                          Preview
-                        </button>
+            }
+            <button class="menu-item" (click)="onRename(file, $event)">
+              <span class="material-symbols-outlined">edit</span>
+              Renomear
+            </button>
+            <div style="height: 1px; background: #e8eaed; margin: 4px 0;"></div>
+            <button class="menu-item" (click)="onDelete(file, $event)" style="color: #d93025;">
+              <span class="material-symbols-outlined" style="color: #d93025;">delete</span>
+              Mover para a lixeira
+            </button>
+          }
+        </div>
+      </ng-template>
+
+      @if (driveStore.displayMode() === 'grid') {
+        <div class="grid-layout">
+          @if (sortedFolders().length > 0) {
+            <div class="grid-section">
+              <div class="grid-section-title">Pastas</div>
+              <div class="grid-container folders-grid">
+                @for (file of sortedFolders(); track file.id) {
+                  <div class="grid-card folder-card"
+                       [class.selected]="selectedFileId() === file.id"
+                       [class.dragging]="draggedFile()?.id === file.id"
+                       [class.drag-over]="dragOverFolderId() === file.id"
+                       [attr.draggable]="(!isLocked() && file.id !== -9999) ? 'true' : null"
+                       (dragstart)="onDragStart($event, file, dragPreview)"
+                       (dragover)="onDragOver($event, file)"
+                       (dragleave)="onDragLeave($event, file)"
+                       (dragend)="onDragEnd()"
+                       (drop)="onDrop($event, file)"
+                       (click)="onFileClick(file, $event)"
+                       (dblclick)="onFileDblClick(file, $event)"
+                       (contextmenu)="onContextMenu(file, $event)">
+                    <div class="folder-card-content">
+                      <app-file-icon [fileType]="file.type" [locked]="isLocked()" />
+                      <span class="file-name" [title]="getDisplayName(file)">{{ getDisplayName(file) }}</span>
+                    </div>
+                    @if (!isLocked()) {
+                      <button class="grid-action-btn" (click)="toggleMenu(file, $event); $event.stopPropagation()">
+                        <span class="material-symbols-outlined">more_vert</span>
+                      </button>
+                      @if (activeMenuFileId() === file.id) {
+                        <ng-container *ngTemplateOutlet="ctxMenu; context: { file: file }"></ng-container>
                       }
                     }
-                    @if (!file.isFolder) {
-                      <button class="menu-item" (click)="onDownload(file, $event)">
-                        <span class="material-symbols-outlined">download</span>
-                        Baixar
-                      </button>
-                    }
-                    <button class="menu-item" (click)="onRename(file, $event)">
-                      <span class="material-symbols-outlined">edit</span>
-                      Renomear
-                    </button>
-                    <div style="height: 1px; background: #e8eaed; margin: 4px 0;"></div>
-                    <button class="menu-item" (click)="onDelete(file, $event)" style="color: #d93025;">
-                      <span class="material-symbols-outlined" style="color: #d93025;">delete</span>
-                      Mover para a lixeira
-                    </button>
-                  }
-                </div>
-              }
+                  </div>
+                }
+              </div>
             </div>
-          </div>
-        }
-      </div>
+          }
+          @if (sortedFilesOnly().length > 0) {
+            <div class="grid-section">
+              @if (sortedFolders().length > 0) {
+                <div class="grid-section-title">Arquivos</div>
+              }
+              <div class="grid-container files-grid">
+                @for (file of sortedFilesOnly(); track file.id) {
+                  <div class="grid-card file-card"
+                       [class.selected]="selectedFileId() === file.id"
+                       [class.dragging]="draggedFile()?.id === file.id"
+                       [attr.draggable]="(!isLocked() && file.id !== -9999) ? 'true' : null"
+                       (dragstart)="onDragStart($event, file, dragPreview)"
+                       (dragover)="onDragOver($event, file)"
+                       (dragleave)="onDragLeave($event, file)"
+                       (dragend)="onDragEnd()"
+                       (drop)="onDrop($event, file)"
+                       (click)="onFileClick(file, $event)"
+                       (dblclick)="onFileDblClick(file, $event)"
+                       (contextmenu)="onContextMenu(file, $event)">
+                    <div class="file-card-header">
+                      <div class="folder-card-content">
+                        <app-file-icon [fileType]="file.type" [locked]="isLocked()" />
+                        <span class="file-name" [title]="getDisplayName(file)">{{ getDisplayName(file) }}</span>
+                      </div>
+                      @if (!isLocked()) {
+                        <button class="grid-action-btn" (click)="toggleMenu(file, $event); $event.stopPropagation()">
+                          <span class="material-symbols-outlined">more_vert</span>
+                        </button>
+                        @if (activeMenuFileId() === file.id) {
+                          <ng-container *ngTemplateOutlet="ctxMenu; context: { file: file }"></ng-container>
+                        }
+                      }
+                    </div>
+                    <div class="file-card-thumbnail">
+                      <app-file-icon [fileType]="file.type" [locked]="isLocked()" class="thumbnail-icon" />
+                    </div>
+                  </div>
+                }
+              </div>
+            </div>
+          }
+        </div>
+      } @else {
+        <div class="file-list-header" [class.storage-view]="viewMode() === 'storage'" [class.unlocked]="!isLocked()">
+          <button class="col col-name sortable-header" (click)="setSort('name')">
+            Nome
+            <span class="material-symbols-outlined sort-icon" *ngIf="sortColumn() === 'name'">
+              {{ sortDirection() === 'asc' ? 'arrow_upward' : 'arrow_downward' }}
+            </span>
+          </button>
+          <button class="col col-owner sortable-header" *ngIf="viewMode() === 'drive'" (click)="setSort('owner')">
+            Proprietário
+            <span class="material-symbols-outlined sort-icon" *ngIf="sortColumn() === 'owner'">
+              {{ sortDirection() === 'asc' ? 'arrow_upward' : 'arrow_downward' }}
+            </span>
+          </button>
+          <button class="col col-modified sortable-header" *ngIf="viewMode() === 'drive'" (click)="setSort('modified')">
+            Última modificação
+            <span class="material-symbols-outlined sort-icon" *ngIf="sortColumn() === 'modified'">
+              {{ sortDirection() === 'asc' ? 'arrow_upward' : 'arrow_downward' }}
+            </span>
+          </button>
+          <button class="col col-size sortable-header" (click)="setSort('size')">
+            Tamanho do arquivo
+            <span class="material-symbols-outlined sort-icon" *ngIf="sortColumn() === 'size'">
+              {{ sortDirection() === 'asc' ? 'arrow_upward' : 'arrow_downward' }}
+            </span>
+          </button>
+          <div class="col col-quota" *ngIf="viewMode() === 'storage'">Uso da cota</div>
+          <div class="col col-actions" *ngIf="!isLocked()" style="font-size: 12px; font-weight: 500; color: #5f6368; display: flex; justify-content: center;">Ações</div>
+        </div>
+        <div class="file-list-body">
+          @for (file of sortedFiles(); track file.id) {
+            <div class="file-row"
+                 tabindex="0"
+                 role="row"
+                 [class.storage-view]="viewMode() === 'storage'"
+                 [class.unlocked]="!isLocked()"
+                 [class.selected]="selectedFileId() === file.id"
+                 [class.dragging]="draggedFile()?.id === file.id"
+                 [class.drag-over]="dragOverFolderId() === file.id"
+                 [attr.draggable]="(!isLocked() && file.id !== -9999) ? 'true' : null"
+                 (dragstart)="onDragStart($event, file, dragPreview)"
+                 (dragover)="onDragOver($event, file)"
+                 (dragleave)="onDragLeave($event, file)"
+                 (dragend)="onDragEnd()"
+                 (drop)="onDrop($event, file)"
+                 (click)="onFileClick(file, $event)"
+                 (dblclick)="onFileDblClick(file, $event)"
+                 (contextmenu)="onContextMenu(file, $event)">
+              <div class="col col-name">
+                <app-file-icon [fileType]="file.type" [locked]="isLocked()" />
+                <span class="file-name">{{ getDisplayName(file) }}</span>
+              </div>
+              <div class="col col-owner" *ngIf="viewMode() === 'drive'">
+                {{ isLocked() ? getObfuscatedValue(file.owner) : file.owner }}
+              </div>
+              <div class="col col-modified" *ngIf="viewMode() === 'drive'">
+                {{ isLocked() ? getObfuscatedValue(file.modifiedAt) : file.modifiedAt }}
+              </div>
+              <div class="col col-size">
+                {{ isLocked() ? getObfuscatedValue(file.sizeFormatted) : file.sizeFormatted }}
+                @if (viewMode() === 'storage' && getProxySize(file) > 0) {
+                  <span style="color: #5f6368; font-size: 12px; margin-left: 4px;">(+{{ formatBytes(getProxySize(file)) }})</span>
+                }
+              </div>
+              <div class="col col-quota" *ngIf="viewMode() === 'storage'">
+                 <div class="quota-bar-container" *ngIf="!isLocked()">
+                   <span class="quota-percent-text">{{ getPercentage(file) }} da conta</span>
+                   <progress class="quota-progress" [value]="getTotalSize(file)" [max]="getTotalStorageMax() || 1"></progress>
+                 </div>
+                 <span *ngIf="isLocked()">{{ getObfuscatedValue(getPercentage(file) + ' da conta') }}</span>
+              </div>
+              <div class="col col-actions" *ngIf="!isLocked()" (click)="$event.stopPropagation()">
+                <button class="action-btn" (click)="toggleMenu(file, $event)">
+                  <span class="material-symbols-outlined">more_vert</span>
+                </button>
+                @if (activeMenuFileId() === file.id) {
+                  <ng-container *ngTemplateOutlet="ctxMenu; context: { file: file }"></ng-container>
+                }
+              </div>
+            </div>
+          }
+        </div>
+      }
 
       @if (isContainerMenuOpen() && contextMenuPosition()) {
         <div class="action-menu"
@@ -512,12 +580,117 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
         overflow: hidden;
         text-overflow: ellipsis;
       }
+
+      /* === GRID VIEW === */
+      .grid-layout {
+        padding: 16px 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        overflow-y: auto;
+      }
+      .grid-section-title {
+        font-size: 14px;
+        font-weight: 500;
+        color: #5f6368;
+        margin-bottom: 12px;
+      }
+      .grid-container {
+        display: grid;
+        gap: 16px;
+      }
+      .folders-grid {
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      }
+      .files-grid {
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      }
+      .grid-card {
+        background: #f8f9fa;
+        border: 1px solid #dadce0;
+        border-radius: 8px;
+        position: relative;
+        cursor: pointer;
+        user-select: none;
+        transition: background-color 0.15s, box-shadow 0.15s;
+        overflow: hidden;
+      }
+      .grid-card:hover {
+        background: #f1f3f4;
+      }
+      .grid-card.selected {
+        background: #e8f0fe;
+        border-color: #d2e3fc;
+      }
+      .folder-card {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        padding: 0 8px 0 16px;
+        height: 48px;
+        justify-content: space-between;
+      }
+      .folder-card-content {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: 1;
+        min-width: 0;
+      }
+      .folder-card-content .file-name {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 13px;
+        font-weight: 500;
+        color: #3c4043;
+      }
+      .grid-action-btn {
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        color: #5f6368;
+        padding: 4px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .grid-action-btn:hover {
+        background: rgba(60,64,67,0.08);
+      }
+      .file-card {
+        display: flex;
+        flex-direction: column;
+        height: 200px;
+      }
+      .file-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 8px 0 16px;
+        height: 48px;
+        flex-shrink: 0;
+      }
+      .file-card-thumbnail {
+        flex: 1;
+        background: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-top: 1px solid #dadce0;
+      }
+      .thumbnail-icon {
+        transform: scale(2.5);
+        opacity: 0.15;
+      }
     `
   ],
 })
 export class FileListComponent implements OnInit, OnDestroy {
   private readonly appState = inject(AppStateService);
-  private readonly driveStore = inject(DriveStore);
+  readonly driveStore = inject(DriveStore);
   private readonly ngZone = inject(NgZone);
   private readonly renderer = inject(Renderer2);
   private readonly dialogService = inject(DialogService);
@@ -979,6 +1152,9 @@ export class FileListComponent implements OnInit, OnDestroy {
 
     return fileArray;
   });
+
+  sortedFolders = computed(() => this.sortedFiles().filter(f => f.isFolder));
+  sortedFilesOnly = computed(() => this.sortedFiles().filter(f => !f.isFolder));
 
   setSort(column: string) {
     if (this.sortColumn() === column) {
