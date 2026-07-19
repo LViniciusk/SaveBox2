@@ -1,7 +1,7 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient, HttpContext } from '@angular/common/http';
 import { Router } from '@angular/router';
-import { Observable, of, catchError, map, tap } from 'rxjs';
+import { Observable, of, catchError, map, tap, switchMap } from 'rxjs';
 import { AppStateService, UserInfo, AppStatus } from '../state/app-state.service';
 import { CryptoService } from '../crypto/crypto.service';
 import { environment } from '../../../environments/environment';
@@ -144,8 +144,16 @@ export class AuthService {
 
   private decodeUserFromIdToken(idToken: string): UserInfo {
     try {
-      const payloadSegment = idToken.split('.')[1];
-      const decoded = JSON.parse(atob(payloadSegment));
+      let payloadSegment = idToken.split('.')[1];
+      payloadSegment = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+      while (payloadSegment.length % 4) {
+        payloadSegment += '=';
+      }
+      // Decode unicode properly via encodeURIComponent/escape
+      const decodedStr = decodeURIComponent(
+        atob(payloadSegment).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+      );
+      const decoded = JSON.parse(decodedStr);
       return {
         email: decoded.email,
         name: decoded.name || '',
@@ -162,7 +170,11 @@ export class AuthService {
    */
   private isVaultInitializedFromToken(token: string): boolean {
     try {
-      const payloadSegment = token.split('.')[1];
+      let payloadSegment = token.split('.')[1];
+      payloadSegment = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+      while (payloadSegment.length % 4) {
+        payloadSegment += '=';
+      }
       const decoded = JSON.parse(atob(payloadSegment));
       return decoded.is_vault_initialized === true || decoded.is_vault_initialized === 'true';
     } catch {
@@ -189,6 +201,14 @@ export class AuthService {
     });
   }
 
+  uploadProfilePic(file: File): Observable<any> {
+    const formData = new FormData();
+    formData.append('image', file);
+    return this.http.post(`${environment.apiUrl}/users/me/profile-pic`, formData, { withCredentials: true }).pipe(
+      switchMap(() => this.restoreSession())
+    );
+  }
+
   linkGoogleDrive(code: string, state: string): void {
     this._loading.set(true);
     this._error.set(null);
@@ -207,6 +227,27 @@ export class AuthService {
         this._loading.set(false);
       }
     });
+  }
+
+  loginWithCredentials(username: string, password: string):Observable<boolean> {
+    return this.http.post<GoogleLoginResponse>(`${environment.apiUrl}/login`, { username, password }, { withCredentials: true })
+      .pipe(
+        tap(res => {
+          this.jwtToken = res.token;
+          const userInfo = this.decodeUserFromIdToken(res.token);
+          const isVaultInitialized = this.isVaultInitializedFromToken(res.token);
+          this.appState.login(userInfo, isVaultInitialized);
+        }),
+        map(() => true)
+      );
+  }
+
+  register(username: string, email: string, password: string): Observable<any> {
+    return this.http.post(`${environment.apiUrl}/register`, { username, email, password });
+  }
+
+  verifyEmail(token: string): Observable<any> {
+    return this.http.get(`${environment.apiUrl}/verify?token=${token}`);
   }
 
   // --- GETTERS ---

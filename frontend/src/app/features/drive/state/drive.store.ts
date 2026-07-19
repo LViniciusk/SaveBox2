@@ -98,6 +98,9 @@ export class DriveStore {
 
   readonly storageProvider = signal<'local' | 'google_drive'>((localStorage.getItem('preferred_storage_provider') as 'local' | 'google_drive') || 'local');
   readonly videoUploadMode = signal<'original' | 'dual' | 'optimized' | 'smart'>((localStorage.getItem('preferred_video_upload_mode') as 'original' | 'dual' | 'optimized' | 'smart') || 'smart');
+
+  readonly selectedFileIds = signal<Set<number>>(new Set());
+
   readonly displayMode = signal<'list' | 'grid'>((localStorage.getItem('preferred_display_mode') as 'list' | 'grid') || 'list');
   readonly linkedAccounts = signal<any[]>([]);
   readonly trashFiles = signal<DriveFile[]>([]);
@@ -200,6 +203,7 @@ export class DriveStore {
 
   navigateTo(folderId: number | null): void {
     this.currentFolderId.set(folderId);
+    this.selectedFileIds.set(new Set());
   }
 
   navigateUp(): void {
@@ -1386,6 +1390,32 @@ export class DriveStore {
     await this.loadQuota();
   }
 
+  async batchRestoreItems(files: DriveFile[]): Promise<void> {
+    const trashFiles = untracked(() => this.trashFiles());
+    const restorePromises = files.map(async file => {
+      if (file.isFolder) {
+        await firstValueFrom(this.driveService.restoreFolder(file.id));
+      } else {
+        await firstValueFrom(this.driveService.restoreFile(file.id));
+        
+        const proxyName1 = '__PROXY__' + file.decryptedName;
+        const proxyName2 = file.decryptedName + '.proxy.mp4';
+        const proxyFiles = trashFiles.filter(p => (p.decryptedName === proxyName1 || p.decryptedName === proxyName2) && p.folderId === file.folderId);
+        for (const proxy of proxyFiles) {
+          await firstValueFrom(this.driveService.restoreFile(proxy.id));
+        }
+      }
+    });
+
+    try {
+      await Promise.all(restorePromises);
+    } finally {
+      await this.loadTrash();
+      await this.loadTree();
+      await this.loadQuota();
+    }
+  }
+
   async permanentDeleteItem(file: DriveFile): Promise<void> {
     if (file.isFolder) {
       await firstValueFrom(this.driveService.hardDeleteFolder(file.id));
@@ -1406,6 +1436,52 @@ export class DriveStore {
     await firstValueFrom(this.driveService.emptyTrash());
     await this.loadTrash();
     await this.loadQuota();
+  }
+
+  async batchTrashItems(files: DriveFile[]): Promise<void> {
+    const fileIds = files.filter(f => !f.isFolder).map(f => f.id);
+    const folderIds = files.filter(f => f.isFolder).map(f => f.id);
+
+    try {
+      if (fileIds.length > 0) {
+        await firstValueFrom(this.driveService.batchSoftDeleteFiles(fileIds));
+      }
+      if (folderIds.length > 0) {
+        await firstValueFrom(this.driveService.batchSoftDeleteFolders(folderIds));
+      }
+    } finally {
+      await this.loadTree();
+      await this.loadQuota();
+    }
+  }
+
+  async batchPermanentDeleteItems(files: DriveFile[]): Promise<void> {
+    const fileIds = files.filter(f => !f.isFolder).map(f => f.id);
+    const folderIds = files.filter(f => f.isFolder).map(f => f.id);
+    
+    // Also try to find proxies to delete
+    const trashFiles = untracked(() => this.trashFiles());
+    const proxyIds: number[] = [];
+    for (const f of files.filter(f => !f.isFolder)) {
+      const proxyName1 = '__PROXY__' + f.decryptedName;
+      const proxyName2 = f.decryptedName + '.proxy.mp4';
+      const proxyFiles = trashFiles.filter(p => (p.decryptedName === proxyName1 || p.decryptedName === proxyName2) && p.folderId === f.folderId);
+      proxyFiles.forEach(p => proxyIds.push(p.id));
+    }
+    
+    const allFileIds = [...fileIds, ...proxyIds];
+
+    try {
+      if (allFileIds.length > 0) {
+        await firstValueFrom(this.driveService.batchHardDeleteFiles(allFileIds));
+      }
+      if (folderIds.length > 0) {
+        await firstValueFrom(this.driveService.batchHardDeleteFolders(folderIds));
+      }
+    } finally {
+      await this.loadTrash();
+      await this.loadQuota();
+    }
   }
 }
 

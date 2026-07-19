@@ -88,7 +88,7 @@ const CHUNK_SIZE  = 4 * 1024 * 1024; // 4 MB
  * the service schedules another chunk download. Low values increase HTTP
  * request frequency; high values increase RAM pressure.
  */
-const BUFFER_AHEAD_SECONDS = 15;
+const BUFFER_AHEAD_SECONDS = 20;
 
 /**
  * Seconds of already-played video the service retains in the SourceBuffer
@@ -128,7 +128,7 @@ interface StreamState {
 
   // Pipeline state
   nextChunkIndex: number;     // Index of the next chunk to download.
-  isFetching: boolean;        // True while an HTTP+Worker pipeline is active.
+  activeDownloads: number;    // Replaces isFetching to allow parallel downloads
   isRemoving: boolean;        // True while SourceBuffer.remove is active.
 
   /**
@@ -137,8 +137,11 @@ interface StreamState {
    */
   seekGeneration: number;
 
-  /** AbortController for the current in-flight HTTP Range request. */
-  currentFetch: AbortController | null;
+  /** Set of AbortControllers for all in-flight HTTP Range requests. */
+  currentFetches: Set<AbortController>;
+
+  /** Chain of promises to ensure chunks are decrypted and transmuxed strictly in order. */
+  processLock: Promise<void>;
 
   seekDebounceTimeout: any | null;
 
@@ -294,10 +297,11 @@ export class VideoStreamService {
         cryptoWorker,
         transmuxWorker,
         nextChunkIndex: 0,
-        isFetching: false,
+        activeDownloads: 0,
         isRemoving: false,
         seekGeneration: 0,
-        currentFetch: null,
+        currentFetches: new Set<AbortController>(),
+        processLock: Promise.resolve(),
         seekDebounceTimeout: null,
         aborted: false,
         silentRetryCount: previousRetryCount,
@@ -322,6 +326,22 @@ export class VideoStreamService {
       if (initialSeekTime !== undefined && initialSeekTime > 0) {
         if (environment.logs.transmuxer) console.log('[VideoStream] Silent retry: jumping to initialSeekTime', initialSeekTime);
         videoElement.currentTime = initialSeekTime;
+        
+        if (previousRetryCount > 0) {
+          const checkBuffer = setInterval(() => {
+            if (s.aborted) {
+              clearInterval(checkBuffer);
+              return;
+            }
+            if (videoElement.buffered.length > 0) {
+              const bufferedEnd = videoElement.buffered.end(videoElement.buffered.length - 1);
+              if (bufferedEnd >= videoElement.currentTime + 1 || videoElement.readyState >= 3) {
+                clearInterval(checkBuffer);
+                videoElement.play().catch(e => console.warn('Autoplay prevented on retry', e));
+              }
+            }
+          }, 500);
+        }
       } else {
         if (environment.logs.transmuxer) console.log('[VideoStream] Priming the pump (scheduleNextChunk)...');
         // --- Step 7: Prime the pump -- request the first content chunk. --------
@@ -346,7 +366,8 @@ export class VideoStreamService {
     const s = this.state;
 
     s.aborted = true;
-    s.currentFetch?.abort();
+    s.currentFetches.forEach(c => c.abort());
+    s.currentFetches.clear();
 
     s.removeVideoListeners?.();
 
@@ -442,19 +463,25 @@ export class VideoStreamService {
    *   2. Evict stale SourceBuffer ranges (garbage collection).
    */
   private onTimeupdateTick(s: StreamState, videoElement: HTMLVideoElement): void {
-    if (s.aborted || s.isFetching || s.nextChunkIndex >= s.totalChunks) return;
+    if (s.aborted || this.isSeeking() || s.activeDownloads >= 3 || s.nextChunkIndex >= s.totalChunks) return;
 
     const currentTime  = videoElement.currentTime;
     const bufferedAhead = this.computeBufferedAhead(s, currentTime);
 
     // -- Injection decision -------------------------------------------------
-    if (bufferedAhead < BUFFER_AHEAD_SECONDS) {
+    // While the buffer is starving and we have available network pipeline slots,
+    // queue up the next block of chunks immediately.
+    while (this.computeBufferedAhead(s, currentTime) < BUFFER_AHEAD_SECONDS && s.activeDownloads < 3) {
+      if (s.nextChunkIndex >= s.totalChunks || s.aborted) break;
       this.scheduleNextChunk(s, videoElement);
     }
 
     // -- GC decision --------------------------------------------------------
+    // Serialize GC removes through the processLock to prevent race conditions
+    // where a removeRange fires updateend that triggers a pending appendBuffer.
     if (currentTime > GC_BEHIND_SECONDS) {
-      this.evictStaleRanges(s, currentTime);
+      const evictUpTo = currentTime - GC_BEHIND_SECONDS;
+      s.processLock = s.processLock.then(() => this.evictStaleRanges(s, currentTime).catch(() => {}));
     }
   }
 
@@ -465,20 +492,37 @@ export class VideoStreamService {
   private computeBufferedAhead(s: StreamState, currentTime: number): number {
     if (s.sourceBuffers.size === 0) return 0;
 
-    let minBufferedAhead = Infinity;
+    let maxBufferedAhead = 0;
     for (const sb of s.sourceBuffers.values()) {
       const buffered = sb.buffered;
-      let trackBufferedAhead = 0;
-      if (buffered.length > 0) {
-        // Use the furthest buffered end point to avoid getting stuck on MSE micro-gaps
-        const furthestEnd = buffered.end(buffered.length - 1);
-        trackBufferedAhead = Math.max(0, furthestEnd - currentTime);
+      if (buffered.length === 0) continue;
+
+      let contiguousEnd = currentTime;
+      
+      // Find the first range that covers currentTime or is immediately after it.
+      for (let r = 0; r < buffered.length; r++) {
+        const start = buffered.start(r);
+        const end = buffered.end(r);
+        
+        // If this range is completely behind us, ignore it.
+        if (end <= contiguousEnd) continue;
+        
+        // If there's a macro-gap between our contiguous block and this range, stop.
+        // We tolerate MSE micro-gaps up to 0.5 seconds.
+        if (start - contiguousEnd > 0.5) {
+          break;
+        }
+        
+        // Extend our contiguous block.
+        contiguousEnd = Math.max(contiguousEnd, end);
       }
-      if (trackBufferedAhead < minBufferedAhead) {
-        minBufferedAhead = trackBufferedAhead;
+      
+      const trackBufferedAhead = Math.max(0, contiguousEnd - currentTime);
+      if (trackBufferedAhead > maxBufferedAhead) {
+        maxBufferedAhead = trackBufferedAhead;
       }
     }
-    return minBufferedAhead === Infinity ? 0 : minBufferedAhead;
+    return maxBufferedAhead;
   }
 
   /**
@@ -486,31 +530,69 @@ export class VideoStreamService {
    * chunk at s.nextChunkIndex. Fire-and-forget; isFetching prevents overlap.
    */
   private scheduleNextChunk(s: StreamState, videoElement: HTMLVideoElement): void {
-    if (s.isFetching || s.aborted || s.nextChunkIndex >= s.totalChunks) return;
+    if (s.activeDownloads >= 3 || s.aborted || s.nextChunkIndex >= s.totalChunks) return;
 
-    const chunkIdx      = s.nextChunkIndex;
+    const startChunkIdx = s.nextChunkIndex;
     const generation    = s.seekGeneration;
-    s.isFetching        = true;
-    s.nextChunkIndex++;
+    s.activeDownloads++;
+    
+    // We want to fetch up to 3 chunks in a single HTTP request to reduce overhead for GDrive.
+    // Local backend has a 4MB limit per request, so we only fetch 1 chunk.
+    const maxChunksToFetch = s.file.storageProvider === 'google_drive' ? 3 : 1;
+    const chunksToFetch = Math.min(maxChunksToFetch, s.totalChunks - startChunkIdx);
+    s.nextChunkIndex += chunksToFetch;
 
-    const isLastChunk    = chunkIdx === s.totalChunks - 1;
-    const plaintextBytes = isLastChunk
-      ? s.plaintextSize - chunkIdx * CHUNK_SIZE
+    // Compute rangeStart for the first chunk in the block
+    const firstChunkStart = s.dataOffset + startChunkIdx * (CHUNK_SIZE + MAC_SIZE);
+    
+    // Compute rangeEnd for the last chunk in the block (which might be smaller)
+    const endChunkIdx = startChunkIdx + chunksToFetch - 1;
+    const isEndChunkLast = endChunkIdx === s.totalChunks - 1;
+    
+    const endChunkPlaintextBytes = isEndChunkLast
+      ? s.plaintextSize - endChunkIdx * CHUNK_SIZE
       : CHUNK_SIZE;
-    const encryptedBytes = MAC_SIZE + plaintextBytes;
-    const rangeStart     = s.dataOffset + chunkIdx * (CHUNK_SIZE + MAC_SIZE);
-    const rangeEnd       = rangeStart + encryptedBytes - 1;
+    const endChunkEncryptedBytes = MAC_SIZE + endChunkPlaintextBytes;
+    
+    const endChunkStart = s.dataOffset + endChunkIdx * (CHUNK_SIZE + MAC_SIZE);
+    const rangeEnd = endChunkStart + endChunkEncryptedBytes - 1;
 
     const controller = new AbortController();
-    s.currentFetch   = controller;
+    s.currentFetches.add(controller);
 
-    this.runChunkPipeline(s, generation, chunkIdx, rangeStart, rangeEnd, isLastChunk, controller, videoElement)
+    // Fire the network request immediately (runs in parallel with other fetches).
+    // The catchall at the end prevents an unhandled rejection if this pipeline is discarded
+    // by a seek/retry generation check before runChunkPipeline gets a chance to await it.
+    const rawFetch = this.fetchRange(s.file.id, firstChunkStart, rangeEnd, controller, s.gdriveUrl, s.gdriveToken);
+    const fetchPromise = rawFetch.then(blob => blob.arrayBuffer());
+    // Register a no-op rejection handler on BOTH legs of the chain so that if seek aborts the request
+    // before the processLock lambda runs, the engine never sees an unhandled Promise rejection.
+    rawFetch.catch(() => {});
+    fetchPromise.catch(() => {});
+
+    // Chain the processing of this fetch strictly after previous chunks have been processed.
+    // The generation check at the start of runChunkPipeline ensures stale pipelines self-discard.
+    const capturedGeneration = generation;
+    const pipelinePromise = s.processLock.then(() => {
+      // If a seek/retry happened while we were waiting in the lock queue, discard silently
+      if (s.seekGeneration !== capturedGeneration || s.aborted) return;
+      return this.runChunkPipeline(s, capturedGeneration, startChunkIdx, chunksToFetch, fetchPromise, videoElement);
+    });
+
+    // Update processLock for the next chunk to chain after this one.
+    // Use a catch-suppressed version to prevent rejection from breaking the next pipeline.
+    s.processLock = pipelinePromise.then(() => {}, () => {});
+
+    pipelinePromise
       .then(() => {
-        s.isFetching = false;
+        // Guard: if a seek happened while we were processing, don't modify the new stream's counters.
+        if (s.seekGeneration !== capturedGeneration) return;
+        s.activeDownloads--;
+        s.currentFetches.delete(controller);
         // Update download progress signal (must re-enter zone for signal reactivity).
         this.ngZone.run(() => {
           this.bufferProgress.set(Math.round((s.nextChunkIndex / s.totalChunks) * 100));
-          if (s.nextChunkIndex >= s.totalChunks) {
+          if (s.nextChunkIndex >= s.totalChunks && s.activeDownloads === 0) {
             this.signalEndOfStream(s);
           }
         });
@@ -518,8 +600,12 @@ export class VideoStreamService {
         this.onTimeupdateTick(s, videoElement);
       })
       .catch((err) => {
-        s.isFetching = false;
-        if (!s.aborted && err?.name !== 'AbortError') {
+        // Guard: if a seek happened, the counter was already reset — don't double-decrement.
+        if (s.seekGeneration === capturedGeneration) {
+          s.activeDownloads--;
+          s.currentFetches.delete(controller);
+        }
+        if (!s.aborted && err?.name !== 'AbortError' && s.seekGeneration === capturedGeneration) {
           if (err?.message === 'Erro no appendBuffer.') {
             const now = Date.now();
             let newRetryCount = s.silentRetryCount;
@@ -545,38 +631,52 @@ export class VideoStreamService {
   }
 
   /**
-   * The full async pipeline for a single chunk:
-   *   HTTP Range download -> Crypto Worker -> Transmux Worker -> append queue.
+   * The full async pipeline for a batch of chunks:
+   *   HTTP Range download (N chunks) -> Slice -> (Crypto Worker -> Transmux Worker -> append queue) x N.
    */
   private async runChunkPipeline(
     s: StreamState,
     generation: number,
-    chunkIdx: number,
-    rangeStart: number,
-    rangeEnd: number,
-    isLastChunk: boolean,
-    controller: AbortController,
+    startChunkIdx: number,
+    chunksToFetch: number,
+    fetchPromise: Promise<ArrayBuffer>,
     videoElement: HTMLVideoElement,
   ): Promise<void> {
-    // Download.
-    const encBlob   = await this.fetchRange(s.file.id, rangeStart, rangeEnd, controller, s.gdriveUrl, s.gdriveToken);
-    const encBuffer = await encBlob.arrayBuffer();
+    if (s.aborted || s.seekGeneration !== generation) return; // Stale before wait
 
-    if (s.aborted || s.seekGeneration !== generation) return; // Stale -- discard.
+    // Wait for the parallel download to finish
+    const fullBuffer = await fetchPromise;
 
-    // Decrypt.
-    const decrypted = await this.sendToCryptoWorker(s, encBuffer, chunkIdx);
-    if (s.aborted || s.seekGeneration !== generation) return;
+    if (s.aborted || s.seekGeneration !== generation) return; // Stale after wait
 
-    // Transmux.
-    const { segments } = await this.sendToTransmuxWorker(s, decrypted, chunkIdx, isLastChunk);
-    if (s.aborted || s.seekGeneration !== generation) return;
+    // Process chunks sequentially inside the worker so they stay in order
+    let offset = 0;
+    for (let i = 0; i < chunksToFetch; i++) {
+      const currentChunkIdx = startChunkIdx + i;
+      const isLastChunk = currentChunkIdx === s.totalChunks - 1;
+      
+      const chunkPlaintextBytes = isLastChunk
+        ? s.plaintextSize - currentChunkIdx * CHUNK_SIZE
+        : CHUNK_SIZE;
+      const chunkEncryptedBytes = MAC_SIZE + chunkPlaintextBytes;
+      
+      const chunkBuffer = fullBuffer.slice(offset, offset + chunkEncryptedBytes);
+      offset += chunkEncryptedBytes;
+      
+      // Decrypt.
+      const decrypted = await this.sendToCryptoWorker(s, chunkBuffer, currentChunkIdx);
+      if (s.aborted || s.seekGeneration !== generation) return;
 
-    if (segments && segments.length > 0) {
-      for (const seg of segments) {
-        const sb = s.sourceBuffers.get(seg.id);
-        if (sb) {
-          await this.appendToSourceBuffer(s, sb, seg.buffer, videoElement);
+      // Transmux.
+      const { segments } = await this.sendToTransmuxWorker(s, decrypted, currentChunkIdx, isLastChunk);
+      if (s.aborted || s.seekGeneration !== generation) return;
+
+      if (segments && segments.length > 0) {
+        for (const seg of segments) {
+          const sb = s.sourceBuffers.get(seg.id);
+          if (sb) {
+            await this.appendToSourceBuffer(s, sb, seg.buffer, videoElement);
+          }
         }
       }
     }
@@ -592,25 +692,45 @@ export class VideoStreamService {
   private onSeek(s: StreamState, videoElement: HTMLVideoElement): void {
     if (s.aborted) return;
 
+    const seekTime  = videoElement.currentTime;
+
+    // Check if we are seeking within the already buffered range.
+    // If so, we do not need to abort the current pipeline or reset the transmux worker.
+    // The browser will seamlessly play from the cache and onTimeupdateTick will naturally 
+    // resume fetching from the exact chunk it left off at.
+    let alreadyBuffered = s.sourceBuffers.size > 0;
+    for (const sb of s.sourceBuffers.values()) {
+      let covered = false;
+      for (let r = 0; r < sb.buffered.length; r++) {
+        if (sb.buffered.start(r) <= seekTime + 0.5 && sb.buffered.end(r) > seekTime) {
+          covered = true;
+          break;
+        }
+      }
+      if (!covered) {
+        alreadyBuffered = false;
+        break;
+      }
+    }
+
+    if (alreadyBuffered) {
+      this.ngZone.run(() => this.isSeeking.set(false));
+      this.onTimeupdateTick(s, videoElement);
+      return;
+    }
+
+    // -- Seek target is outside buffer. Abort in-flight HTTP. ----------------
     this.ngZone.run(() => this.isSeeking.set(true));
+    s.currentFetches.forEach(c => c.abort());
+    s.currentFetches.clear();
+    s.activeDownloads = 0;
+    s.processLock = Promise.resolve();
 
-    // -- 1. Abort in-flight HTTP. -------------------------------------------
-    s.currentFetch?.abort();
-    s.currentFetch = null;
-    s.isFetching   = false;
-
-    // -- 2. Invalidate any in-flight worker callbacks. ----------------------
+    // -- Invalidate any in-flight worker callbacks. --------------------------
     s.seekGeneration++;
     const generation = s.seekGeneration;
 
-
-
-    // -- 4. Transmux worker remains alive (mp4box handles fileStart jumps natively).
-
-    const seekTime  = videoElement.currentTime;
     const duration  = s.videoDuration > 0 ? s.videoDuration : videoElement.duration;
-
-    // -- 5. Remove stale SourceBuffer ranges asynchronously. ---------------
     this.clearAndResume(s, generation, seekTime, duration, videoElement);
   }
 
@@ -621,7 +741,7 @@ export class VideoStreamService {
     duration: number,
     videoElement: HTMLVideoElement,
   ): Promise<void> {
-    if (s.sourceBuffers.size === 0 || s.mediaSource.readyState !== 'open') return;
+    if (s.sourceBuffers.size === 0 || (s.mediaSource.readyState as string) === 'closed') return;
 
     // Wait until all ongoing appendBuffer or remove operations complete on all source buffers.
     for (const sb of s.sourceBuffers.values()) {
@@ -629,27 +749,28 @@ export class VideoStreamService {
     }
     if (s.aborted || s.seekGeneration !== generation) return;
 
-    // Remove everything except a small window around the seek target from all buffers.
+    // Only remove content that is strictly behind the seek window (GC before seekTime).
+    // We deliberately PRESERVE everything that is buffered AHEAD of seekTime.
     const keepStart = Math.max(0, seekTime - GC_BEHIND_SECONDS);
-    const totalDuration = duration || s.totalChunks * CHUNK_SIZE / (1 * 1024 * 1024); // rough fallback
 
     for (const sb of s.sourceBuffers.values()) {
-      // If there is buffered content before the keep window, remove it.
       if (keepStart > 0 && sb.buffered.length > 0 && sb.buffered.start(0) < keepStart) {
         await this.removeRange(s, sb, 0, keepStart);
         if (s.aborted || s.seekGeneration !== generation) return;
       }
+    }
 
-      // If there is buffered content after the seek target, remove it too so
-      // the transmux worker can re-sync the segment timestamps cleanly.
+    // Seek target is NOT buffered — we need to re-sync the transmux worker and download
+    // chunks starting from the right chunk index.
+    // Remove forward buffer so the transmux worker can re-sync segment timestamps cleanly.
+    for (const sb of s.sourceBuffers.values()) {
       if (sb.buffered.length > 0 && sb.buffered.end(sb.buffered.length - 1) > seekTime) {
-        await this.removeRange(s, sb, seekTime, totalDuration + 1);
+        await this.removeRange(s, sb, seekTime, (duration || s.totalChunks * CHUNK_SIZE / (1 * 1024 * 1024)) + 1);
         if (s.aborted || s.seekGeneration !== generation) return;
       }
     }
 
     // -- Seeking maths -------------------------------------------------------
-    // We now ask the worker for the EXACT chunk index needed to resume playback at seekTime!
     const exactChunkIndex = await this.sendSeekToTransmuxWorker(s, seekTime, generation);
     if (s.aborted || s.seekGeneration !== generation) return;
 
@@ -734,9 +855,9 @@ export class VideoStreamService {
     if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap: downloading chunk 0...');
 
     const controller0 = new AbortController();
-    s.currentFetch    = controller0;
+    s.currentFetches.add(controller0);
     const blob0       = await this.fetchRange(s.file.id, firstRangeStart, firstRangeEnd, controller0, s.gdriveUrl, s.gdriveToken);
-    s.currentFetch    = null;
+    s.currentFetches.delete(controller0);
     if (s.aborted) return;
     const buf0 = await blob0.arrayBuffer();
     if (environment.logs.transmuxer) console.log('[VideoStream] Decrypting chunk 0 for bootstrap...');
@@ -781,9 +902,9 @@ export class VideoStreamService {
       if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap last chunk idx:', lastChunkIndex, 'rangeStart:', lastRangeStart, 'rangeEnd:', lastRangeEnd);
 
       const controller = new AbortController();
-      s.currentFetch   = controller;
+      s.currentFetches.add(controller);
       const encChunkBlob   = await this.fetchRange(s.file.id, lastRangeStart, lastRangeEnd, controller, s.gdriveUrl, s.gdriveToken);
-      s.currentFetch = null;
+      s.currentFetches.delete(controller);
       if (s.aborted) return;
       if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap last chunk download size:', encChunkBlob.size);
       const encChunkBuffer = await encChunkBlob.arrayBuffer();
@@ -1010,26 +1131,42 @@ export class VideoStreamService {
     buffer: ArrayBuffer,
     videoElement: HTMLVideoElement
   ): Promise<void> {
-    if (!sb || s.mediaSource.readyState !== 'open') {
-      throw new Error('SourceBuffer indisponivel.');
+    if (!sb || (s.mediaSource.readyState as string) === 'closed') {
+      throw new Error('SourceBuffer indisponivel (closed).');
     }
 
     while (!s.aborted) {
+      if ((s.mediaSource.readyState as string) === 'closed') {
+        throw new Error('SourceBuffer indisponivel (closed).');
+      }
       try {
         await this.appendToSourceBufferRaw(sb, buffer);
         return; // Success!
       } catch (err: any) {
-        if (err.name === 'QuotaExceededError') {
-          // RAM overflow: try aggressive eviction
+        // QuotaExceededError may be thrown synchronously by appendBuffer() or via the error event.
+        // We check both the original error and any wrapped variant.
+        const isQuota = err.name === 'QuotaExceededError' || err.isQuotaExceeded === true;
+        if (isQuota) {
+          // Try to evict old content behind the playhead first.
           const evictUpTo = Math.max(0, videoElement.currentTime - 2);
           if (evictUpTo > 0 && sb.buffered.length > 0 && sb.buffered.start(0) < evictUpTo) {
             await this.removeRangeRaw(sb, 0, evictUpTo);
             continue; // Retry append immediately after eviction
           }
-          // We can't evict yet (all data is ahead of the playhead).
-          // Wait 1 second for the video to play and free up space, then retry.
-          console.warn('[VideoStream] SourceBuffer QuotaExceeded. Awaiting playback to free space...');
-          await new Promise((r) => setTimeout(r, 1000));
+          // Nothing to evict yet — the playhead is still at the beginning.
+          // Wait for the video to play forward, then retry every 500ms for up to 30s.
+          console.warn('[VideoStream] SourceBuffer QuotaExceeded. Waiting for playback to free space...');
+          let waited = 0;
+          while (!s.aborted && waited < 30000) {
+            await new Promise((r) => setTimeout(r, 500));
+            waited += 500;
+            if ((s.mediaSource.readyState as string) === 'closed') break;
+            const canEvict = videoElement.currentTime - 2;
+            if (canEvict > 0 && sb.buffered.length > 0 && sb.buffered.start(0) < canEvict) {
+              await this.removeRangeRaw(sb, 0, canEvict);
+              break; // Retry the outer while loop
+            }
+          }
         } else {
           throw err;
         }
@@ -1039,24 +1176,37 @@ export class VideoStreamService {
 
   private appendToSourceBufferRaw(sb: SourceBuffer, buffer: ArrayBuffer): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      const onEnd = () => {
-        sb.removeEventListener('updateend', onEnd);
-        sb.removeEventListener('error',     onErr);
-        resolve();
+      // If already updating, wait for updateend before attempting append
+      const doAppend = () => {
+        const onEnd = () => {
+          sb.removeEventListener('updateend', onEnd);
+          sb.removeEventListener('error',     onErr);
+          resolve();
+        };
+        const onErr = () => {
+          sb.removeEventListener('updateend', onEnd);
+          sb.removeEventListener('error',     onErr);
+          // Propagate with isQuotaExceeded flag if we can detect it
+          const e = new Error('Erro no appendBuffer.');
+          reject(e);
+        };
+        sb.addEventListener('updateend', onEnd, { once: true });
+        sb.addEventListener('error',     onErr, { once: true });
+        try {
+          sb.appendBuffer(buffer);
+        } catch (err: any) {
+          sb.removeEventListener('updateend', onEnd);
+          sb.removeEventListener('error',     onErr);
+          // Propagate original error — preserves QuotaExceededError.name for the outer handler.
+          reject(err);
+        }
       };
-      const onErr = () => {
-        sb.removeEventListener('updateend', onEnd);
-        sb.removeEventListener('error',     onErr);
-        reject(new Error('Erro no appendBuffer.'));
-      };
-      sb.addEventListener('updateend', onEnd, { once: true });
-      sb.addEventListener('error',     onErr, { once: true });
-      try {
-        sb.appendBuffer(buffer);
-      } catch (err: any) {
-        sb.removeEventListener('updateend', onEnd);
-        sb.removeEventListener('error',     onErr);
-        reject(new Error('Erro no appendBuffer.'));
+
+      if (sb.updating) {
+        // Wait for current operation to finish, then append
+        sb.addEventListener('updateend', doAppend, { once: true });
+      } else {
+        doAppend();
       }
     });
   }

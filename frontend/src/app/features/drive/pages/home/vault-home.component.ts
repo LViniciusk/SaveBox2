@@ -155,7 +155,7 @@ import { CommonModule } from '@angular/common';
           <!-- Empty Trash Banner -->
           @if (currentView() === 'trash' && driveStore.trashFiles().length > 0) {
             <div class="trash-banner">
-              <span class="trash-banner-text">Os itens da lixeira serão excluídos definitivamente após 30 dias</span>
+              <span class="trash-banner-text">Os itens da lixeira serão excluídos permanentemente após 30 dias</span>
               <button class="empty-trash-btn" (click)="onEmptyTrash()">
                 Esvaziar lixeira
               </button>
@@ -273,7 +273,7 @@ import { CommonModule } from '@angular/common';
             </div>
           } @else {
             <app-file-list 
-              [files]="driveStore.currentFolderFiles()" 
+              [files]="currentView() === 'storage' ? currentStorageFiles() : driveStore.currentFolderFiles()" 
               [viewMode]="currentView() === 'storage' ? 'storage' : 'drive'" 
               [quota]="driveStore.quota()"
               (createFolderRequested)="createNewFolder()"
@@ -1555,9 +1555,9 @@ export class VaultHomeComponent implements OnInit {
 
   async onEmptyTrash() {
     const confirmed = await this.dialogService.confirm(
-      'Excluir definitivamente?',
-      'Todos os itens na lixeira serão excluídos definitivamente. Não é possível desfazer essa ação.',
-      'Excluir definitivamente',
+      'Excluir permanentemente?',
+      'Todos os itens na lixeira serão excluídos permanentemente. Não é possível desfazer essa ação.',
+      'Excluir permanentemente',
       true
     );
     if (!confirmed) return;

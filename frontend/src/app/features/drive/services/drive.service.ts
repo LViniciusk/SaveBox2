@@ -195,6 +195,20 @@ export class DriveService {
     });
   }
 
+  batchSoftDeleteFiles(fileIds: number[]): Observable<void> {
+    return this.http.request<void>('delete', `${environment.apiUrl}/files/batch-delete`, {
+      body: { file_ids: fileIds },
+      withCredentials: true
+    });
+  }
+
+  batchHardDeleteFiles(fileIds: number[]): Observable<void> {
+    return this.http.request<void>('delete', `${environment.apiUrl}/trash/files/batch-delete`, {
+      body: { file_ids: fileIds },
+      withCredentials: true
+    });
+  }
+
   updateFile(fileId: number, body: { encrypted_name?: string; name_hash?: string; folder_id?: number | null }): Observable<any> {
     return this.http.put(`${environment.apiUrl}/files/${fileId}`, body, {
       withCredentials: true,
@@ -210,6 +224,13 @@ export class DriveService {
   trashFolder(folderId: number): Observable<void> {
     return this.http.delete<void>(`${environment.apiUrl}/folders/${folderId}`, {
       withCredentials: true,
+    });
+  }
+
+  batchSoftDeleteFolders(folderIds: number[]): Observable<void> {
+    return this.http.request<void>('delete', `${environment.apiUrl}/folders/batch-delete`, {
+      body: { folder_ids: folderIds },
+      withCredentials: true
     });
   }
 
@@ -234,6 +255,13 @@ export class DriveService {
   hardDeleteFolder(folderId: number): Observable<void> {
     return this.http.delete<void>(`${environment.apiUrl}/trash/folders/${folderId}`, {
       withCredentials: true,
+    });
+  }
+
+  batchHardDeleteFolders(folderIds: number[]): Observable<void> {
+    return this.http.request<void>('delete', `${environment.apiUrl}/trash/folders/batch-delete`, {
+      body: { folder_ids: folderIds },
+      withCredentials: true
     });
   }
 

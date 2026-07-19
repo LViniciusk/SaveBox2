@@ -16,6 +16,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: 'verify',
+    loadComponent: () =>
+      import('./features/auth/pages/login/login.component').then(
+        (m) => m.LoginComponent,
+      ),
+  },
+  {
     path: 'auth/callback',
     loadComponent: () =>
       import('./features/auth/pages/callback/auth-callback.component').then(

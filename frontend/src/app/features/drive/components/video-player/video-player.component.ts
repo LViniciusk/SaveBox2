@@ -21,7 +21,7 @@ import { DriveFile } from '../../state/drive.store';
 
         <!-- Video Display Container -->
         <div class="video-wrapper">
-          <video #videoElement controls autoplay playsinline class="video-node"></video>
+          <video #videoElement controls playsinline class="video-node"></video>
 
           <!-- Loading Overlay -->
           @if (isInitialLoad()) {
@@ -257,7 +257,18 @@ export class VideoPlayerComponent implements AfterViewInit, OnDestroy {
     this.startStream();
     if (this.videoElement?.nativeElement) {
       this.videoElement.nativeElement.addEventListener('canplay', () => {
-        this.isInitialLoad.set(false);
+        // Wait for at least 5 seconds of buffer (or end of video) before starting playback to avoid early stalls
+        const checkBuffer = setInterval(() => {
+          const video = this.videoElement.nativeElement;
+          if (video.buffered.length > 0) {
+            const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+            if (bufferedEnd >= 5 || video.duration <= 5) {
+              clearInterval(checkBuffer);
+              this.isInitialLoad.set(false);
+              video.play().catch(e => console.warn('Autoplay prevented by browser', e));
+            }
+          }
+        }, 500);
       }, { once: true });
     }
   }
