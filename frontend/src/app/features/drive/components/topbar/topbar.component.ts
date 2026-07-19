@@ -255,62 +255,50 @@ import { firstValueFrom } from 'rxjs';
 
               <!-- Configurações de Mídia -->
               <div class="settings-section" style="margin-top: 24px; border-top: 1px solid #e2e8f0; padding-top: 16px;">
-                <h4 class="section-title">Upload de Vídeos</h4>
-                <p class="section-desc">Escolha como o SaveBox deve processar seus vídeos pesados.</p>
-                
-                <div class="storage-switch-container" style="flex-direction: column; gap: 8px;">
-                  <!-- Mode: Smart -->
-                  <button 
-                    class="switch-option" 
-                    [class.active]="driveStore.videoUploadMode() === 'smart'"
-                    (click)="driveStore.setVideoUploadMode('smart')"
-                    style="width: 100%;">
-                    <span class="material-symbols-outlined option-icon">auto_awesome</span>
-                    <div class="option-details">
-                      <span class="option-name">Compressão Inteligente (Recomendado)</span>
-                      <span class="option-sub">Analisa o vídeo e otimiza apenas se for muito pesado (>5 Mbps).</span>
-                    </div>
-                  </button>
-
-                  <!-- Mode: Original -->
-                  <button 
-                    class="switch-option" 
-                    [class.active]="driveStore.videoUploadMode() === 'original'"
-                    (click)="driveStore.setVideoUploadMode('original')"
-                    style="width: 100%;">
-                    <span class="material-symbols-outlined option-icon">movie</span>
-                    <div class="option-details">
-                      <span class="option-name">Apenas Original (Mais rápido)</span>
-                      <span class="option-sub">Salva apenas o arquivo original. Pode travar no streaming web.</span>
-                    </div>
-                  </button>
-
-                  <!-- Mode: Dual -->
-                  <button 
-                    class="switch-option" 
-                    [class.active]="driveStore.videoUploadMode() === 'dual'"
-                    (click)="driveStore.setVideoUploadMode('dual')"
-                    style="width: 100%;">
-                    <span class="material-symbols-outlined option-icon">hdr_auto</span>
-                    <div class="option-details">
-                      <span class="option-name">Armazenamento Duplo</span>
-                      <span class="option-sub">Salva o original e gera uma cópia leve para streaming rápido. Usa mais espaço.</span>
-                    </div>
-                  </button>
-
-                  <!-- Mode: Optimized -->
-                  <button 
-                    class="switch-option" 
-                    [class.active]="driveStore.videoUploadMode() === 'optimized'"
-                    (click)="driveStore.setVideoUploadMode('optimized')"
-                    style="width: 100%;">
-                    <span class="material-symbols-outlined option-icon">compress</span>
-                    <div class="option-details">
-                      <span class="option-name">Apenas Otimizado (Economiza espaço)</span>
-                      <span class="option-sub">Converte para web, e salva espaço na nuvem.</span>
-                    </div>
-                  </button>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                  <div>
+                    <h4 class="section-title" style="margin-bottom: 4px;">Conversão de Vídeos Incompatíveis</h4>
+                    <p class="section-desc" style="margin-bottom: 0; line-height: 1.4;">Arquivos como MKV e AVI não tocam nativamente na web. Converter garante reprodução instantânea.</p>
+                  </div>
+                  <!-- Switch simples -->
+                  <label class="toggle-switch">
+                    <input type="checkbox" 
+                           [checked]="driveStore.convertIncompatibleVideos()"
+                           (change)="driveStore.setConvertIncompatibleVideos($any($event.target).checked)">
+                    <span class="toggle-slider"></span>
+                  </label>
                 </div>
+                
+                <!-- Mode Selection -->
+                @if (driveStore.convertIncompatibleVideos()) {
+                  <div class="fade-in" style="margin-top: 16px;">
+                    <div class="storage-switch-container">
+                      <!-- Mode: Pure -->
+                      <button 
+                        class="switch-option" 
+                        [class.active]="driveStore.incompatibleVideoConversionMode() === 'pure'"
+                        (click)="driveStore.setIncompatibleVideoConversionMode('pure')">
+                        <span class="material-symbols-outlined option-icon">high_quality</span>
+                        <div class="option-details">
+                          <span class="option-name">Pura</span>
+                          <span class="option-sub">Mantém resolução original e qualidade sem perdas perceptíveis.</span>
+                        </div>
+                      </button>
+
+                      <!-- Mode: Compressed -->
+                      <button 
+                        class="switch-option" 
+                        [class.active]="driveStore.incompatibleVideoConversionMode() === 'compressed'"
+                        (click)="driveStore.setIncompatibleVideoConversionMode('compressed')">
+                        <span class="material-symbols-outlined option-icon">compress</span>
+                        <div class="option-details">
+                          <span class="option-name">Comprimida</span>
+                          <span class="option-sub">Reduz drasticamente o tamanho e otimiza para internet lenta.</span>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+                }
               </div>
 
               <!-- Alterar Frase de Segurança -->
@@ -1119,6 +1107,50 @@ import { firstValueFrom } from 'rxjs';
       @keyframes fadeIn {
         from { opacity: 0; transform: translateY(8px); }
         to { opacity: 1; transform: translateY(0); }
+      }
+
+      /* Toggle Switch */
+      .toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 44px;
+        height: 24px;
+        flex-shrink: 0;
+        margin-left: 12px;
+      }
+      .toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+      .toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background-color: #cbd5e1;
+        transition: .3s;
+        border-radius: 24px;
+      }
+      .toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 18px;
+        width: 18px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: .3s;
+        border-radius: 50%;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      }
+      .toggle-switch input:checked + .toggle-slider {
+        background-color: #3b82f6;
+      }
+      .toggle-switch input:focus + .toggle-slider {
+        box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4);
+      }
+      .toggle-switch input:checked + .toggle-slider:before {
+        transform: translateX(20px);
       }
 
       .warning-box {

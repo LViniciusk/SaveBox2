@@ -1,4 +1,4 @@
-import { Injectable, signal, computed, inject, untracked } from '@angular/core';
+import { Injectable, signal, computed, inject, untracked, effect } from '@angular/core';
 import { DriveService } from '../services/drive.service';
 import { CryptoService } from '../../../core/crypto/crypto.service';
 import { firstValueFrom, Subscription } from 'rxjs';
@@ -7,6 +7,7 @@ import { HttpClient, HttpEventType } from '@angular/common/http';
 import { DialogService } from '../../../core/dialog/dialog.service';
 import { VideoTranscoderService } from '../services/video-transcoder.service';
 import { environment } from '../../../../environments/environment';
+import { AppStateService, AppStatus } from '../../../core/state/app-state.service';
 
 export interface TransferItem {
   id: string;
@@ -71,6 +72,17 @@ export class DriveStore {
   private readonly http = inject(HttpClient);
   private readonly dialogService = inject(DialogService);
   private readonly videoTranscoder = inject(VideoTranscoderService);
+  private readonly appState = inject(AppStateService);
+
+  constructor() {
+    effect(() => {
+      if (this.appState.status() === AppStatus.Locked) {
+        untracked(() => {
+          this.thumbnails.set({});
+        });
+      }
+    });
+  }
 
   readonly files = signal<DriveFile[]>([]);
   readonly quota = signal<QuotaState>({ usedBytes: 0, maxBytes: 10 * 1024 * 1024 * 1024 });
@@ -97,7 +109,8 @@ export class DriveStore {
   private readonly kasumi = inject(KasumiCryptoService);
 
   readonly storageProvider = signal<'local' | 'google_drive'>((localStorage.getItem('preferred_storage_provider') as 'local' | 'google_drive') || 'local');
-  readonly videoUploadMode = signal<'original' | 'dual' | 'optimized' | 'smart'>((localStorage.getItem('preferred_video_upload_mode') as 'original' | 'dual' | 'optimized' | 'smart') || 'smart');
+  readonly convertIncompatibleVideos = signal<boolean>(localStorage.getItem('preferred_convert_incompatible') !== 'false');
+  readonly incompatibleVideoConversionMode = signal<'pure' | 'compressed'>((localStorage.getItem('preferred_incompatible_mode') as 'pure' | 'compressed') || 'pure');
 
   readonly selectedFileIds = signal<Set<number>>(new Set());
 
@@ -218,9 +231,14 @@ export class DriveStore {
     localStorage.setItem('preferred_storage_provider', provider);
   }
 
-  setVideoUploadMode(mode: 'original' | 'dual' | 'optimized' | 'smart'): void {
-    this.videoUploadMode.set(mode);
-    localStorage.setItem('preferred_video_upload_mode', mode);
+  setConvertIncompatibleVideos(value: boolean): void {
+    this.convertIncompatibleVideos.set(value);
+    localStorage.setItem('preferred_convert_incompatible', value ? 'true' : 'false');
+  }
+
+  setIncompatibleVideoConversionMode(mode: 'pure' | 'compressed'): void {
+    this.incompatibleVideoConversionMode.set(mode);
+    localStorage.setItem('preferred_incompatible_mode', mode);
   }
 
   setDisplayMode(mode: 'list' | 'grid'): void {
@@ -549,7 +567,6 @@ export class DriveStore {
 
   private async _doUpload(originalFile: File, folderId: number | null = null): Promise<void> {
     const isVideo = this.videoTranscoder.isVideo(originalFile);
-    const mode = this.videoUploadMode();
     
     const filesToUpload: { file: File, isHiddenProxy: boolean }[] = [];
     const transferId = 'up_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
@@ -562,66 +579,27 @@ export class DriveStore {
       progress: 0
     });
 
-    let finalMode = mode;
+    let fileToEncrypt = originalFile;
 
-    if (isVideo && mode === 'smart') {
-      try {
-        this.updateTransfer(transferId, { statusMessage: 'Analisando vídeo...' });
-        const duration = await this.videoTranscoder.getVideoDuration(originalFile);
-        if (duration && duration > 0) {
-          const bitrate = (originalFile.size * 8) / duration;
-          if (bitrate > 5_000_000) { // > 5 Mbps -> Dual
-            finalMode = 'dual';
-          } else {
-            finalMode = 'original';
+    if (isVideo && this.convertIncompatibleVideos()) {
+       const isSupported = this.videoTranscoder.isFormatNativelySupported(originalFile);
+       if (!isSupported) {
+          const conversionMode = this.incompatibleVideoConversionMode();
+          try {
+            this.updateTransfer(transferId, { statusMessage: 'Convertendo vídeo incompatível...' });
+            const proxyFile = await this.videoTranscoder.transcodeToProxy(originalFile, conversionMode, (p, statusMessage) => {
+              this.updateTransfer(transferId, { statusMessage: statusMessage });
+              this.updateTransferProgress(transferId, Math.round(p * 100), 0, 100);
+            });
+            fileToEncrypt = new File([proxyFile], originalFile.name, { type: proxyFile.type });
+          } catch (e: any) {
+            console.error('Erro na transcodificação, enviando original', e);
+            fileToEncrypt = originalFile;
           }
-        } else {
-          finalMode = 'original'; // fallback changed to original
-        }
-      } catch (e) {
-        finalMode = 'original'; // fallback changed to original
-      }
+       }
     }
 
-    if (isVideo && (finalMode === 'optimized' || finalMode === 'dual')) {
-      if (finalMode === 'dual') {
-        // Envia o original imediatamente sem aguardar o proxy
-        this._uploadSingleFile(originalFile, folderId, false, transferId).catch(e => {
-          console.error('Falha no upload do original (dual)', e);
-        });
-
-        // Gera o proxy em background
-        this.videoTranscoder.transcodeToProxy(originalFile, (p, statusMessage) => {
-          // Não atualizamos o statusMessage principal para não sobrescrever o progresso do original,
-          // mas a conversão está acontecendo em background.
-        }).then(proxyFile => {
-          const hiddenProxy = new File([proxyFile], originalFile.name + '.proxy.mp4', { type: proxyFile.type });
-          // Inicia o upload silencioso do proxy
-          this._uploadSingleFile(hiddenProxy, folderId, true, transferId).catch(e => {
-            console.error('Falha no upload do proxy (dual)', e);
-          });
-        }).catch(e => {
-          console.error('Erro na transcodificação do proxy (dual)', e);
-        });
-
-        return; // Retorna imediatamente, os envios acontecem de forma assíncrona
-      } else {
-        // Optimized mode aguarda a transcodificação antes de subir
-        try {
-          const proxyFile = await this.videoTranscoder.transcodeToProxy(originalFile, (p, statusMessage) => {
-            this.updateTransfer(transferId, { statusMessage: statusMessage });
-            this.updateTransferProgress(transferId, Math.round(p * 100), 0, 100);
-          });
-          const renamedProxy = new File([proxyFile], originalFile.name, { type: proxyFile.type });
-          filesToUpload.push({ file: renamedProxy, isHiddenProxy: false });
-        } catch (e: any) {
-          console.error('Erro na transcodificação, enviando apenas original', e);
-          filesToUpload.push({ file: originalFile, isHiddenProxy: false });
-        }
-      }
-    } else {
-      filesToUpload.push({ file: originalFile, isHiddenProxy: false });
-    }
+    filesToUpload.push({ file: fileToEncrypt, isHiddenProxy: false });
 
     for (const item of filesToUpload) {
       await this._uploadSingleFile(item.file, folderId, item.isHiddenProxy, transferId);
@@ -1169,18 +1147,6 @@ export class DriveStore {
 
     this.updateTransfer(id, { statusMessage: 'Retomando upload...' });
 
-    // Disparar geração de proxy SE for vídeo e não tivermos proxy? 
-    // Na recuperação o proxy sobe invisivelmente do zero!
-    const isVideo = this.videoTranscoder.isVideo(file);
-    const mode = this.videoUploadMode();
-    if (isVideo && mode === 'dual') {
-      this.videoTranscoder.transcodeToProxy(file, (p, msg) => {}).then(proxyFile => {
-        const hiddenProxy = new File([proxyFile], file.name + '.proxy.mp4', { type: proxyFile.type });
-        // Envia como NOVO upload oculto (vai gerar novo ID no backend)
-        this._uploadSingleFile(hiddenProxy, pendingData.folder_id, true, id).catch(console.error);
-      }).catch(console.error);
-    }
-
     // Retomar upload do original via chunking
     try {
       await this.runUploadLoop(uploadId, id, fileId, encryptedBlob, totalChunks, activeProvider, initRes, false);
@@ -1501,7 +1467,7 @@ async function generateThumbnail(file: File): Promise<string | null> {
       const onLoad = () => {
         const width = isVideo ? (element as HTMLVideoElement).videoWidth : (element as HTMLImageElement).width;
         const height = isVideo ? (element as HTMLVideoElement).videoHeight : (element as HTMLImageElement).height;
-        const max = 256;
+        const max = 1280;
         let w = width, h = height;
         if (w > max || h > max) {
           if (w > h) { h = Math.round((h * max) / w); w = max; }
@@ -1509,7 +1475,7 @@ async function generateThumbnail(file: File): Promise<string | null> {
         }
         canvas.width = w; canvas.height = h;
         ctx.drawImage(element, 0, 0, w, h);
-        const dataUrl = canvas.toDataURL('image/webp', 0.6);
+        const dataUrl = canvas.toDataURL('image/webp', 0.5);
         URL.revokeObjectURL(url);
         resolve(dataUrl);
       };
@@ -1519,7 +1485,7 @@ async function generateThumbnail(file: File): Promise<string | null> {
         element.muted = true;
         element.playsInline = true;
         element.onloadeddata = () => {
-          (element as HTMLVideoElement).currentTime = 1;
+          (element as HTMLVideoElement).currentTime = 0.1;
         };
         element.onseeked = onLoad;
         element.onerror = () => resolve(null);

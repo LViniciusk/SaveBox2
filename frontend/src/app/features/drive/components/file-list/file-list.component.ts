@@ -874,7 +874,7 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
         gap: 16px;
       }
       .folders-grid, .files-grid, .mixed-grid {
-        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(220px, 300px));
       }
       .grid-card {
         background: #f8f9fa;
@@ -934,7 +934,7 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
       .file-card {
         display: flex;
         flex-direction: column;
-        height: 200px;
+        height: 240px;
       }
       .file-card-header {
         display: flex;
@@ -1021,6 +1021,7 @@ export class FileListComponent implements OnInit, OnDestroy {
   @Output() createFolderRequested = new EventEmitter<void>();
   @Output() uploadFileRequested = new EventEmitter<void>();
   @Output() videoSelected = new EventEmitter<DriveFile>();
+  @Output() imageSelected = new EventEmitter<{file: DriveFile, playlist: DriveFile[]}>();
 
   readonly isLocked = this.appState.isLocked;
   readonly activeMenuFileId = signal<number | null>(null);
@@ -1639,6 +1640,9 @@ export class FileListComponent implements OnInit, OnDestroy {
     this.selectionBox.set({ startX: 0, startY: 0, x: 0, y: 0, w: 0, h: 0 }); // reset box
   }
 
+  private selectionMouseMoveListener?: (e: MouseEvent) => void;
+  private selectionMouseUpListener?: (e: MouseEvent) => void;
+
   onContainerMouseDown(event: MouseEvent) {
     if (this.isLocked() || event.button !== 0) return;
     
@@ -1663,10 +1667,15 @@ export class FileListComponent implements OnInit, OnDestroy {
       this.driveStore.selectedFileIds.set(new Set());
     }
     
+    // Dynamically bind mouse events to avoid global change detection thrashing
+    this.selectionMouseMoveListener = (e: MouseEvent) => this.onWindowMouseMove(e);
+    this.selectionMouseUpListener = (e: MouseEvent) => this.onWindowMouseUp(e);
+    window.addEventListener('mousemove', this.selectionMouseMoveListener);
+    window.addEventListener('mouseup', this.selectionMouseUpListener);
+    
     event.preventDefault(); // prevent text selection
   }
 
-  @HostListener('window:mousemove', ['$event'])
   onWindowMouseMove(event: MouseEvent) {
     if (!this.isDraggingSelection()) return;
 
@@ -1683,10 +1692,18 @@ export class FileListComponent implements OnInit, OnDestroy {
     this.updateSelectionFromDragBox(newX, newY, newW, newH);
   }
 
-  @HostListener('window:mouseup', ['$event'])
   onWindowMouseUp(event: MouseEvent) {
     if (this.isDraggingSelection()) {
       this.isDraggingSelection.set(false);
+    }
+    // Cleanup dynamic listeners
+    if (this.selectionMouseMoveListener) {
+      window.removeEventListener('mousemove', this.selectionMouseMoveListener);
+      this.selectionMouseMoveListener = undefined;
+    }
+    if (this.selectionMouseUpListener) {
+      window.removeEventListener('mouseup', this.selectionMouseUpListener);
+      this.selectionMouseUpListener = undefined;
     }
   }
 
@@ -1723,8 +1740,9 @@ export class FileListComponent implements OnInit, OnDestroy {
     }
     if (file.isFolder) {
       this.driveStore.navigateTo(file.id);
-    } else if (file.type === 'video') {
-      this.videoSelected.emit(file);
+    } else if (file.type === 'video' || file.type === 'image') {
+      const playlist = this.sortedFiles().filter(f => f.type === 'image' || f.type === 'video');
+      this.imageSelected.emit({ file, playlist });
     } else {
       this.driveStore.selectedFileIds.set(new Set());
     }

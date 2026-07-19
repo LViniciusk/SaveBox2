@@ -8,6 +8,7 @@ import { FileListComponent } from '../../components/file-list/file-list.componen
 import { TopbarComponent } from '../../components/topbar/topbar.component';
 import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal.component';
 import { VideoPlayerComponent } from '../../components/video-player/video-player.component';
+import { ImagePlayerComponent } from '../../components/image-player/image-player.component';
 import { CommonModule } from '@angular/common';
 
 /**
@@ -30,7 +31,7 @@ import { CommonModule } from '@angular/common';
 @Component({
   selector: 'app-vault-home',
   standalone: true,
-  imports: [FileListComponent, TopbarComponent, UnlockModalComponent, VideoPlayerComponent, CommonModule],
+  imports: [FileListComponent, TopbarComponent, UnlockModalComponent, VideoPlayerComponent, ImagePlayerComponent, CommonModule],
   template: `
     <div class="vault-layout">
       <!-- ===== TOPBAR ===== -->
@@ -164,7 +165,7 @@ import { CommonModule } from '@angular/common';
 
           <!-- File List / Transfers View -->
           @if (currentView() === 'trash') {
-            <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" (videoSelected)="activeVideoFile.set($event)" />
+            <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" (videoSelected)="activeVideoFile.set($event)" (imageSelected)="onImageSelected($event)" />
           } @else if (currentView() === 'transfers') {
             <div class="transfers-container">
               <div class="transfers-header">
@@ -278,7 +279,8 @@ import { CommonModule } from '@angular/common';
               [quota]="driveStore.quota()"
               (createFolderRequested)="createNewFolder()"
               (uploadFileRequested)="fileInput.click()"
-              (videoSelected)="activeVideoFile.set($event)" />
+              (videoSelected)="activeVideoFile.set($event)"
+              (imageSelected)="onImageSelected($event)" />
           }
 
           <!-- Transfers Mini Popup -->
@@ -379,9 +381,14 @@ import { CommonModule } from '@angular/common';
             </div>
           }
 
+          <!-- Image Player Modal -->
+          @if (activeImageFile()) {
+            <app-image-player [file]="activeImageFile()!" [playlist]="activeImagePlaylist()" [isVideoPlaying]="!!activeVideoFile()" (fileChange)="activeImageFile.set($event)" (close)="activeImageFile.set(null); activeVideoFile.set(null)" (closeVideo)="activeVideoFile.set(null)" (playVideo)="activeVideoFile.set($event)" />
+          }
+
           <!-- Video Player Modal -->
           @if (activeVideoFile()) {
-            <app-video-player [file]="activeVideoFile()!" (close)="activeVideoFile.set(null)" />
+            <app-video-player [file]="activeVideoFile()!" [seamless]="!!activeImageFile()" (close)="activeVideoFile.set(null)" />
           }
         </div>
       </main>
@@ -1495,6 +1502,13 @@ export class VaultHomeComponent implements OnInit {
 
   readonly isNewMenuOpen = signal(false);
   readonly activeVideoFile = signal<DriveFile | null>(null);
+  readonly activeImageFile = signal<DriveFile | null>(null);
+  readonly activeImagePlaylist = signal<DriveFile[]>([]);
+
+  onImageSelected(payload: { file: DriveFile, playlist: DriveFile[] }) {
+    this.activeImagePlaylist.set(payload.playlist);
+    this.activeImageFile.set(payload.file);
+  }
 
   toggleNewMenu() {
     this.isNewMenuOpen.set(!this.isNewMenuOpen());

@@ -89,6 +89,7 @@ export class VideoTranscoderService {
    */
   async transcodeToProxy(
     inputFile: File,
+    mode: 'pure' | 'compressed',
     onProgress?: (ratio: number, statusMessage: string) => void
   ): Promise<File> {
     if (environment.logs.ffmpeg) console.log('[VideoTranscoder] Transcoding started for:', inputFile.name);
@@ -110,19 +111,23 @@ export class VideoTranscoderService {
     ffmpeg.on('progress', progressHandler);
 
     try {
-      // Executa o transcode. 
-      if (onProgress) onProgress(0, 'Comprimindo vídeo (2/3)...');
-      await ffmpeg.exec([
+      // Executa o transcode baseado no modo
+      if (onProgress) onProgress(0, 'Convertendo vídeo (2/3)...');
+      const args = [
         '-i', inputName,
-        '-c:v', 'libx264',
-        '-crf', '28',
-        '-preset', 'veryfast',
-        '-vf', `scale='trunc(oh*a/2)*2':'min(720,ih)'`,
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-movflags', '+faststart',
-        outputName
-      ]);
+        '-c:v', 'libx264'
+      ];
+
+      if (mode === 'compressed') {
+        args.push('-crf', '28', '-preset', 'veryfast', '-vf', `scale='trunc(oh*a/2)*2':'min(720,ih)'`);
+      } else {
+        // pure mode (high quality, original size)
+        args.push('-crf', '18', '-preset', 'fast');
+      }
+
+      args.push('-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', outputName);
+
+      await ffmpeg.exec(args);
 
       if (onProgress) onProgress(1, 'Finalizando otimização (3/3)...');
       const proxyData = await ffmpeg.readFile(outputName);
@@ -150,6 +155,13 @@ export class VideoTranscoderService {
            file.name.toLowerCase().endsWith('.mp4') || 
            file.name.toLowerCase().endsWith('.mov') ||
            file.name.toLowerCase().endsWith('.mkv') ||
-           file.name.toLowerCase().endsWith('.avi');
+           file.name.toLowerCase().endsWith('.avi') ||
+           file.name.toLowerCase().endsWith('.mpg');
+  }
+
+  isFormatNativelySupported(file: File): boolean {
+    const ext = file.name.toLowerCase().split('.').pop();
+    if (!ext) return false;
+    return ['mp4', 'webm'].includes(ext);
   }
 }
