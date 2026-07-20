@@ -1344,7 +1344,7 @@ export class TopbarComponent {
     }
     const user = this.appState.user();
     if (!user) return;
-    
+
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
@@ -1354,10 +1354,10 @@ export class TopbarComponent {
 
       // Mostra um loading rápido (opcional, pode ser via transfer ou só trocando no front dps)
       const loadingMsg = 'Fazendo upload da imagem...';
-      
+
       try {
         await this.uploadProfilePic(file);
-        
+
         // Agora que o backend atualizou o DB com a nova imagem, atualizamos nosso estado local e o JWT
         await firstValueFrom(this.authService.restoreSession());
       } catch (err) {
@@ -1382,7 +1382,7 @@ export class TopbarComponent {
     });
 
     const data = await response.json();
-    
+
     if (!response.ok) {
       throw new Error(data.error || 'Falha ao atualizar foto de perfil');
     }

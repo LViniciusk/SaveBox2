@@ -383,12 +383,12 @@ import { CommonModule } from '@angular/common';
 
           <!-- Image Player Modal -->
           @if (activeImageFile()) {
-            <app-image-player [file]="activeImageFile()!" [playlist]="activeImagePlaylist()" [isVideoPlaying]="!!activeVideoFile()" (fileChange)="activeImageFile.set($event)" (close)="activeImageFile.set(null); activeVideoFile.set(null)" (closeVideo)="activeVideoFile.set(null)" (playVideo)="activeVideoFile.set($event)" />
+            <app-image-player [file]="activeImageFile()!" [playlist]="activeImagePlaylist()" [isVideoPlaying]="isVideoReady()" [isVideoLoading]="!!activeVideoFile() && !isVideoReady()" (fileChange)="activeImageFile.set($event)" (close)="activeImageFile.set(null); activeVideoFile.set(null); isVideoReady.set(false)" (closeVideo)="activeVideoFile.set(null); isVideoReady.set(false)" (playVideo)="activeVideoFile.set($event)" />
           }
 
           <!-- Video Player Modal -->
           @if (activeVideoFile()) {
-            <app-video-player [file]="activeVideoFile()!" [seamless]="!!activeImageFile()" (close)="activeVideoFile.set(null)" />
+            <app-video-player [file]="activeVideoFile()!" [seamless]="!!activeImageFile()" (close)="activeVideoFile.set(null); isVideoReady.set(false)" (videoReady)="isVideoReady.set(true)" />
           }
         </div>
       </main>
@@ -1437,6 +1437,7 @@ export class VaultHomeComponent implements OnInit {
 
   readonly isUnlockModalOpen = signal(false);
   readonly currentView = signal<'drive' | 'storage' | 'trash' | 'transfers'>('drive');
+  readonly isVideoReady = signal(false);
   readonly isTransfersPopupMinimized = signal(false);
 
   constructor() {

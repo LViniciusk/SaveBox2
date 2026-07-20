@@ -295,6 +295,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
   file = input.required<DriveFile>();
   seamless = input<boolean>(false);
   close = output<void>();
+  videoReady = output<void>();
 
   @ViewChild('videoElement') videoElement!: ElementRef<HTMLVideoElement>;
 
@@ -315,6 +316,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
             if (bufferedEnd >= 5 || video.duration <= 5) {
               clearInterval(checkBuffer);
               this.isInitialLoad.set(false);
+              this.videoReady.emit();
               video.play().catch(e => console.warn('Autoplay prevented by browser', e));
             }
           }

@@ -1021,7 +1021,7 @@ export class FileListComponent implements OnInit, OnDestroy {
   @Output() createFolderRequested = new EventEmitter<void>();
   @Output() uploadFileRequested = new EventEmitter<void>();
   @Output() videoSelected = new EventEmitter<DriveFile>();
-  @Output() imageSelected = new EventEmitter<{file: DriveFile, playlist: DriveFile[]}>();
+  @Output() imageSelected = new EventEmitter<{ file: DriveFile, playlist: DriveFile[] }>();
 
   readonly isLocked = this.appState.isLocked;
   readonly activeMenuFileId = signal<number | null>(null);
@@ -1062,16 +1062,16 @@ export class FileListComponent implements OnInit, OnDestroy {
   toggleMenu(file: DriveFile, event: MouseEvent) {
     event.stopPropagation();
     this.isContainerMenuOpen.set(false);
-    
+
     if (this.activeMenuFileId() === file.id) {
       this.activeMenuFileId.set(null);
       this.contextMenuPosition.set(null);
     } else {
       this.activeMenuFileId.set(file.id);
-      
+
       const target = event.currentTarget as HTMLElement;
       const rect = target.getBoundingClientRect();
-      
+
       this.contextMenuPosition.set({
         x: rect.right - 180, // Align menu to right edge of button (approx width 180)
         y: rect.bottom + 4
@@ -1104,7 +1104,7 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   onContainerContextMenu(event: MouseEvent) {
     if (this.isLocked() || this.viewMode() !== 'drive') return;
-    
+
     // Do not show menu when right clicking header
     const target = event.target as HTMLElement;
     if (target.closest('.file-list-header')) {
@@ -1149,22 +1149,22 @@ export class FileListComponent implements OnInit, OnDestroy {
       event.preventDefault();
       return;
     }
-    
+
     let filesToDrag = [file];
     const selection = this.driveStore.selectedFileIds();
     if (selection.has(file.id)) {
       filesToDrag = this.getSelectedFiles();
     }
     this.draggedFiles.set(filesToDrag);
-    
+
     // Synchronously update drag preview card element in DOM
     const iconEl = previewEl.querySelector('.drag-icon') as HTMLElement;
     const nameEl = previewEl.querySelector('.drag-name') as HTMLElement;
-    
+
     if (iconEl) {
       iconEl.textContent = this.getFileIcon(file);
       iconEl.style.color = this.getFileIconColor(file);
-      
+
       // If it's a folder, fill it
       if (file.type === 'folder') {
         iconEl.style.fontVariationSettings = "'FILL' 1";
@@ -1184,7 +1184,7 @@ export class FileListComponent implements OnInit, OnDestroy {
         nameEl.textContent = this.getDisplayName(file);
       }
     }
-    
+
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = 'move';
       event.dataTransfer.setData('text/plain', filesToDrag.map(f => f.id).join(','));
@@ -1208,7 +1208,7 @@ export class FileListComponent implements OnInit, OnDestroy {
       } else {
         // Cannot drop an item into itself
         if (dragged.id === targetFile.id) return;
-        
+
         // Cannot drop into its own parent folder
         if (dragged.parentId === targetFile.id || dragged.folderId === targetFile.id) return;
       }
@@ -1234,19 +1234,19 @@ export class FileListComponent implements OnInit, OnDestroy {
     if (this.isLocked()) return;
     event.preventDefault();
     this.dragOverFolderId.set(null);
-    
+
     const draggedItems = this.draggedFiles();
     if (draggedItems.length === 0) return;
-    
+
     const targetFolderId = (targetFile.id === -9999 ? targetFile.parentId : targetFile.id) ?? null;
-    
+
     try {
       const movePromises = draggedItems.map(f => this.driveStore.moveItem(f, targetFolderId));
       await Promise.all(movePromises);
     } catch (e: any) {
       alert(e?.message || 'Erro ao mover item(ns)');
     }
-    
+
     this.draggedFiles.set([]);
     this.clearSelection();
   }
@@ -1339,7 +1339,7 @@ export class FileListComponent implements OnInit, OnDestroy {
     const wrapper = event.currentTarget as HTMLElement;
     const submenu = wrapper.querySelector('.submenu') as HTMLElement;
     if (!submenu) return;
-    
+
     // Se o mouse estiver na metade direita da tela, abre o submenu para a esquerda
     if (event.clientX > window.innerWidth / 2) {
       submenu.style.left = 'auto';
@@ -1530,17 +1530,17 @@ export class FileListComponent implements OnInit, OnDestroy {
     event.stopPropagation();
     const willOpen = !this.isSortMenuOpen();
     this.isSortMenuOpen.set(willOpen);
-    
+
     if (willOpen) {
       const target = event.currentTarget as HTMLElement;
       const rect = target.getBoundingClientRect();
       const menuWidth = 220; // approximate width of the sort menu
-      
+
       let x = rect.left;
       if (x + menuWidth > window.innerWidth) {
         x = window.innerWidth - menuWidth - 16;
       }
-      
+
       this.sortMenuPosition.set({
         x: x,
         y: rect.bottom + 4
@@ -1616,7 +1616,7 @@ export class FileListComponent implements OnInit, OnDestroy {
   onFileClick(file: DriveFile, event: MouseEvent) {
     event.stopPropagation();
     if (this.isLocked()) return;
-    
+
     const currentSelection = new Set(this.driveStore.selectedFileIds());
     if (event.ctrlKey || event.metaKey) {
       if (currentSelection.has(file.id)) {
@@ -1645,7 +1645,7 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   onContainerMouseDown(event: MouseEvent) {
     if (this.isLocked() || event.button !== 0) return;
-    
+
     // Don't start drag selection if clicking on an item or a button
     const target = event.target as HTMLElement;
     if (target.closest('.selectable-item') || target.closest('button')) return;
@@ -1659,20 +1659,20 @@ export class FileListComponent implements OnInit, OnDestroy {
       w: 0,
       h: 0
     });
-    
+
     if (event.ctrlKey || event.metaKey) {
       this.dragSelectionInitialSet = new Set(this.driveStore.selectedFileIds());
     } else {
       this.dragSelectionInitialSet = new Set();
       this.driveStore.selectedFileIds.set(new Set());
     }
-    
+
     // Dynamically bind mouse events to avoid global change detection thrashing
     this.selectionMouseMoveListener = (e: MouseEvent) => this.onWindowMouseMove(e);
     this.selectionMouseUpListener = (e: MouseEvent) => this.onWindowMouseUp(e);
     window.addEventListener('mousemove', this.selectionMouseMoveListener);
     window.addEventListener('mouseup', this.selectionMouseUpListener);
-    
+
     event.preventDefault(); // prevent text selection
   }
 
@@ -1710,18 +1710,18 @@ export class FileListComponent implements OnInit, OnDestroy {
   private updateSelectionFromDragBox(bx: number, by: number, bw: number, bh: number) {
     const items = this.elRef.nativeElement.querySelectorAll('.selectable-item');
     const newSelection = new Set(this.dragSelectionInitialSet);
-    
+
     const dragRect = { left: bx, top: by, right: bx + bw, bottom: by + bh };
 
     items.forEach((item: HTMLElement) => {
       const rect = item.getBoundingClientRect();
       const intersects = !(
-        rect.right < dragRect.left || 
-        rect.left > dragRect.right || 
-        rect.bottom < dragRect.top || 
+        rect.right < dragRect.left ||
+        rect.left > dragRect.right ||
+        rect.bottom < dragRect.top ||
         rect.top > dragRect.bottom
       );
-      
+
       const id = parseInt(item.getAttribute('data-id') || '-1', 10);
       if (intersects) {
         if (!newSelection.has(id)) newSelection.add(id);
@@ -1769,7 +1769,7 @@ export class FileListComponent implements OnInit, OnDestroy {
           console.error('Erro no download', e);
         }
       });
-      
+
     await Promise.all(downloadPromises);
     this.clearSelection();
   }

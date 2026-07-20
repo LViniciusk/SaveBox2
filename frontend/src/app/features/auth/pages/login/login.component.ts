@@ -478,17 +478,17 @@ export class LoginComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
 
   readonly cardVisible = signal(false);
-  
+
   view = signal<'login' | 'register' | 'avatar' | 'verify'>('login');
   isLoading = signal(false);
-  
+
   username = signal('');
   email = signal('');
   password = signal('');
   verificationCode = signal('');
   selectedAvatar = signal('');
   selectedAvatarFile = signal<File | null>(null);
-  
+
   localError = signal<string | null>(null);
 
   constructor() {
@@ -515,7 +515,7 @@ export class LoginComponent implements OnInit {
   signInWithGoogle(): void {
     this.authService.loginWithGoogle();
   }
-  
+
   onAvatarSelected(event: any) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -538,13 +538,13 @@ export class LoginComponent implements OnInit {
   finishAvatarUpload() {
     this.localError.set(null);
     const file = this.selectedAvatarFile();
-    
+
     if (!file) {
       const isVaultInit = this.appState.status() !== AppStatus.Onboarding;
       this.router.navigate([isVaultInit ? '/drive/home' : '/drive/setup']);
       return;
     }
-    
+
     this.isLoading.set(true);
     this.authService.uploadProfilePic(file).subscribe({
       next: () => {
@@ -608,7 +608,7 @@ export class LoginComponent implements OnInit {
   doLogin() {
     this.localError.set(null);
     if (!this.username() || !this.password()) return;
-    
+
     this.isLoading.set(true);
     this.authService.loginWithCredentials(this.username(), this.password()).subscribe({
       next: () => {

@@ -68,23 +68,25 @@ import { firstValueFrom } from 'rxjs';
            (mouseleave)="onMouseUp()">
         @if (file().type === 'video') {
           <div class="video-preview-container">
-            @if (thumbnailData()) {
-              <img [src]="thumbnailData()" 
-                   class="video-thumbnail" 
-                   [class.dragging]="isDragging"
-                   alt="Video thumbnail" 
-                   [style.transform]="'translate(' + translateX() + 'px, ' + translateY() + 'px) scale(' + currentZoom() + ')'" 
-                   draggable="false"
-                   (click)="onVideoClick($event)" />
-            } @else {
-              <div class="no-thumbnail" (click)="onVideoClick($event)">
-                <span class="material-symbols-outlined">movie</span>
-              </div>
-            }
             @if (!isVideoPlaying()) {
-              <button class="play-overlay-btn" (click)="$event.stopPropagation(); playVideo.emit(file())">
-                <span class="material-symbols-outlined">play_arrow</span>
-              </button>
+              @if (thumbnailData()) {
+                <img [src]="thumbnailData()" 
+                     class="video-thumbnail" 
+                     [class.dragging]="isDragging"
+                     alt="Video thumbnail" 
+                     [style.transform]="'translate(' + translateX() + 'px, ' + translateY() + 'px) scale(' + currentZoom() + ')'" 
+                     draggable="false"
+                     (click)="onVideoClick($event)" />
+              } @else {
+                <div class="no-thumbnail" (click)="onVideoClick($event)">
+                  <span class="material-symbols-outlined">movie</span>
+                </div>
+              }
+              @if (!isVideoPlaying() && !isVideoLoading()) {
+                <button class="play-overlay-btn" (click)="$event.stopPropagation(); playVideo.emit(file())">
+                  <span class="material-symbols-outlined">play_arrow</span>
+                </button>
+              }
             }
           </div>
         } @else {
@@ -305,8 +307,7 @@ import { firstValueFrom } from 'rxjs';
         max-width: 100%;
         max-height: 100%;
         display: block;
-        opacity: 0.7;
-        transition: opacity 200ms, transform 150ms ease-out;
+        transition: transform 150ms ease-out;
       }
       /* removed container hover effects */
       .no-thumbnail {
@@ -425,6 +426,7 @@ export class ImagePlayerComponent implements OnDestroy {
   readonly file = input.required<DriveFile>();
   readonly playlist = input<DriveFile[]>([]);
   readonly isVideoPlaying = input<boolean>(false);
+  readonly isVideoLoading = input<boolean>(false);
   readonly fileChange = output<DriveFile>();
   readonly playVideo = output<DriveFile>();
   readonly close = output<void>();
