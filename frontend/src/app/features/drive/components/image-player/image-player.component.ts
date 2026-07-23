@@ -30,10 +30,10 @@ import { firstValueFrom } from 'rxjs';
           </button>
           @if (playlist().length > 1) {
             <div class="nav-controls">
-              <button class="icon-btn" (click)="prevImage($event)" [disabled]="currentIndex() === 0 || isVideoPlaying()">
+              <button class="icon-btn" (click)="prevImage($event)" [disabled]="currentIndex() === 0 || isVideoPlaying() || isVideoLoading()">
                 <span class="material-symbols-outlined">arrow_back</span>
               </button>
-              <button class="icon-btn" (click)="nextImage($event)" [disabled]="currentIndex() === playlist().length - 1 || isVideoPlaying()">
+              <button class="icon-btn" (click)="nextImage($event)" [disabled]="currentIndex() === playlist().length - 1 || isVideoPlaying() || isVideoLoading()">
                 <span class="material-symbols-outlined">arrow_forward</span>
               </button>
             </div>
@@ -61,11 +61,11 @@ import { firstValueFrom } from 'rxjs';
       <!-- Main Content Area -->
       <div class="media-clip-container">
         <div class="image-wrapper" 
-           (wheel)="onWheel($event)"
-           (mousedown)="onMouseDown($event)"
-           (mousemove)="onMouseMove($event)"
-           (mouseup)="onMouseUp()"
-           (mouseleave)="onMouseUp()">
+             (wheel)="onWheel($event)"
+             (mousedown)="onMouseDown($event)"
+             (mousemove)="onMouseMove($event)"
+             (mouseup)="onMouseUp()"
+             (mouseleave)="onMouseUp()">
         @if (file().type === 'video') {
           <div class="video-preview-container">
             @if (!isVideoPlaying()) {
@@ -541,7 +541,11 @@ export class ImagePlayerComponent implements OnDestroy {
     const idx = this.currentIndex();
     if (idx === -1) return;
 
-    const indicesToPrefetch = [idx - 1, idx + 1, idx - 2, idx + 2];
+    const indicesToPrefetch: number[] = [];
+    for (let offset = 1; offset <= 6; offset++) {
+      indicesToPrefetch.push(idx - offset);
+      indicesToPrefetch.push(idx + offset);
+    }
 
     for (const i of indicesToPrefetch) {
       if (i >= 0 && i < pl.length) {
@@ -552,7 +556,7 @@ export class ImagePlayerComponent implements OnDestroy {
       }
     }
 
-    const keepRadius = 3;
+    const keepRadius = 7;
     for (const [id, url] of this.imageCache.entries()) {
       const fileIdx = pl.findIndex(f => f.id === id);
       if (fileIdx === -1 || Math.abs(fileIdx - idx) > keepRadius) {
@@ -721,6 +725,7 @@ export class ImagePlayerComponent implements OnDestroy {
 
   prevImage(event?: Event) {
     event?.stopPropagation();
+    if (this.isVideoPlaying() || this.isVideoLoading()) return;
     const idx = this.currentIndex();
     if (idx > 0) {
       this.fileChange.emit(this.playlist()[idx - 1]);
@@ -729,6 +734,7 @@ export class ImagePlayerComponent implements OnDestroy {
 
   nextImage(event?: Event) {
     event?.stopPropagation();
+    if (this.isVideoPlaying() || this.isVideoLoading()) return;
     const idx = this.currentIndex();
     if (idx >= 0 && idx < this.playlist().length - 1) {
       this.fileChange.emit(this.playlist()[idx + 1]);
@@ -749,10 +755,10 @@ export class ImagePlayerComponent implements OnDestroy {
         this.onClose();
         break;
       case 'ArrowLeft':
-        if (!this.isVideoPlaying()) this.prevImage();
+        if (!this.isVideoPlaying() && !this.isVideoLoading()) this.prevImage();
         break;
       case 'ArrowRight':
-        if (!this.isVideoPlaying()) this.nextImage();
+        if (!this.isVideoPlaying() && !this.isVideoLoading()) this.nextImage();
         break;
       case 'ArrowUp':
       case 'ArrowDown':
