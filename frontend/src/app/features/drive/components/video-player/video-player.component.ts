@@ -20,17 +20,23 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
         <!-- Top Header Bar -->
         <div class="player-header-bar" [class.hidden]="!showControls() && isPlaying()" (click)="$event.stopPropagation()">
           <div class="header-left">
-            <button class="icon-btn" (click)="onClose()" aria-label="Voltar" title="Voltar">
-              <span class="material-symbols-outlined">arrow_back</span>
-            </button>
+            @if (!isPublicShare()) {
+              <button class="icon-btn" (click)="onClose()" aria-label="Voltar" title="Voltar">
+                <span class="material-symbols-outlined">arrow_back</span>
+              </button>
+            }
             <app-file-icon [fileType]="file().type" [locked]="false" class="header-icon"></app-file-icon>
             <span class="file-title">{{ file().decryptedName || file().encryptedName }}</span>
           </div>
           
           <div class="header-right">
-            <button class="share-btn">
-              <span class="material-symbols-outlined">group</span> Compartilhar
-            </button>
+            @if (isPublicShare()) {
+              <span class="file-size-badge">{{ file().sizeFormatted }}</span>
+            } @else {
+              <button class="share-btn">
+                <span class="material-symbols-outlined">group</span> Compartilhar
+              </button>
+            }
           </div>
         </div>
       }
@@ -38,8 +44,15 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
       @if (!seamless()) {
         <!-- Secondary Toolbar (Left) -->
         <div class="toolbar-left" [class.hidden]="!showControls() && isPlaying()" (click)="$event.stopPropagation()">
-          <button class="icon-btn" aria-label="Baixar" (click)="downloadVideo()" title="Baixar Vídeo">
-            <span class="material-symbols-outlined">download</span>
+          <button class="icon-btn progress-btn" aria-label="Baixar" (click)="downloadVideo()" title="Baixar Vídeo" [disabled]="isDownloading()">
+            @if (isDownloading()) {
+              <span class="material-symbols-outlined spinning">sync</span>
+              @if (downloadProgress() !== null) {
+                <span class="progress-text">{{ downloadProgress() }}%</span>
+              }
+            } @else {
+              <span class="material-symbols-outlined">download</span>
+            }
           </button>
         </div>
       }
@@ -197,6 +210,9 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
       }
       
       .player-backdrop.seamless {
+        position: relative;
+        width: 100%;
+        height: 100%;
         background: transparent;
         animation: none;
         pointer-events: none;
@@ -286,6 +302,21 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
         cursor: not-allowed;
       }
 
+      .progress-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding-right: 12px;
+        border-radius: 20px;
+      }
+
+      .progress-text {
+        font-family: 'Inter', sans-serif;
+        font-size: 13px;
+        font-weight: 500;
+        color: #f8fafc;
+      }
+
       .share-btn {
         display: flex;
         align-items: center;
@@ -306,6 +337,17 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
       }
       .share-btn .material-symbols-outlined {
         font-size: 18px;
+      }
+
+      .file-size-badge {
+        font-family: 'Inter', sans-serif;
+        font-size: 13px;
+        font-weight: 600;
+        color: #f8fafc;
+        background: rgba(255, 255, 255, 0.1);
+        padding: 6px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
       }
 
       .toolbar-left {
@@ -336,6 +378,18 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
         overflow: hidden;
         z-index: 1;
         pointer-events: none;
+      }
+
+      .player-backdrop.seamless .video-wrapper {
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      .player-backdrop.seamless .video-node {
+        height: 100%;
+        max-height: 100%;
       }
 
       .video-node {
@@ -690,15 +744,19 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
 export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
   file = input.required<DriveFile>();
   seamless = input<boolean>(false);
+  isPublicShare = input<boolean>(false);
+  isDownloading = input<boolean>(false);
+  downloadProgress = input<number | null>(null);
   close = output<void>();
   videoReady = output<void>();
+  download = output<void>();
 
   @ViewChild('videoElement') videoElement!: ElementRef<HTMLVideoElement>;
   @ViewChild('playerBackdrop') playerBackdrop!: ElementRef<HTMLDivElement>;
 
   protected readonly streamService = inject(VideoStreamService);
   readonly isInitialLoad = signal(true);
-  
+
   // Custom Controls State
   readonly isPlaying = signal(false);
   readonly currentTime = signal(0);
@@ -723,7 +781,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     return Math.min(100, Math.max(0, (this.currentTime() / dur) * 100));
   });
 
-  ngOnInit() {}
+  ngOnInit() { }
 
   ngAfterViewInit() {
     this.startStream();
@@ -1011,7 +1069,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   downloadVideo() {
-    alert('A funcionalidade de baixar vídeos pelo player será adicionada em breve!');
+    this.download.emit();
   }
 
   onClose() {

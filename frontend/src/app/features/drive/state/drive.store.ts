@@ -56,6 +56,8 @@ export interface DriveFile {
   proxyEncryptedFdk?: string;
   isHidden?: boolean;
   forceOriginal?: boolean;
+  shareUuid?: string;
+  shareFdk?: Uint8Array;
 }
 
 export interface QuotaState {
@@ -834,12 +836,17 @@ export class DriveStore {
 
     try {
       setProgress(5, 0, file.sizeBytes);
-      const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
-      
-      const fdkString = atob(fdkBase64);
-      const fdk = new Uint8Array(fdkString.length);
-      for (let i = 0; i < fdkString.length; i++) {
-        fdk[i] = fdkString.charCodeAt(i);
+      let fdk: Uint8Array;
+      if (file.shareFdk) {
+        fdk = file.shareFdk;
+      } else {
+        if (!file.encryptedFdk) throw new Error('FDK ausente nos metadados');
+        const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
+        const fdkString = atob(fdkBase64);
+        fdk = new Uint8Array(fdkString.length);
+        for (let i = 0; i < fdkString.length; i++) {
+          fdk[i] = fdkString.charCodeAt(i);
+        }
       }
 
       setProgress(10, 0, file.sizeBytes);
@@ -854,11 +861,10 @@ export class DriveStore {
       } else {
         // Local file chunked download
         setProgress(15, 0, file.sizeBytes);
-        const headerBlob = await firstValueFrom(this.driveService.downloadFileRange(file.id, 0, 31));
-        const headerBuffer = await headerBlob.arrayBuffer();
-        const baseNonce = new Uint8Array(headerBuffer, 0, 24);
-        const headerView = new DataView(headerBuffer);
-        const expectedSize = Number(headerView.getBigUint64(24, true));
+        const initialHeaderSize = 1024 * 128;
+        const headerBlob = await firstValueFrom(this.driveService.downloadFileRange(file.id, 0, initialHeaderSize - 1));
+        const { dataOffset, expectedSize } = await this.kasumi.extractMetadata(headerBlob, fdk);
+        const baseNonce = new Uint8Array(await headerBlob.slice(0, 24).arrayBuffer());
 
         const plaintextChunks: Blob[] = [];
         const state = {
@@ -868,7 +874,7 @@ export class DriveStore {
           expectedSize,
           plaintextChunks,
           decryptedBytes: 0,
-          currentOffset: 32,
+          currentOffset: dataOffset,
           chunkIndex: 0
         };
         this.activeDownloads.set(transferId, state);

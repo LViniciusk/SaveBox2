@@ -587,3 +587,159 @@ std::pair<uint64_t, uint64_t> GoogleDriveService::get_total_quota(uint64_t user_
 
     return {total_virtual_used, total_virtual_max};
 }
+
+void GoogleDriveService::make_file_public(uint64_t user_id, const std::string& external_file_id) {
+    if (external_file_id.empty()) return;
+    uint64_t storage_id = 0;
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+        auto res = txn.exec(
+            "SELECT external_storage_id FROM files WHERE external_file_id = $1 AND user_id = $2",
+            pqxx::params{external_file_id, user_id}
+        );
+        if (!res.empty() && !res[0][0].is_null()) {
+            storage_id = res[0][0].as<uint64_t>();
+        } else {
+            auto res_storage = txn.exec(
+                "SELECT id FROM user_external_storages WHERE user_id = $1 AND provider = 'google_drive' AND is_unlinking = FALSE LIMIT 1",
+                pqxx::params{user_id}
+            );
+            if (!res_storage.empty()) {
+                storage_id = res_storage[0][0].as<uint64_t>();
+            }
+        }
+    }
+    if (storage_id == 0) throw std::runtime_error("STORAGE_NOT_FOUND");
+
+    std::string access_token = get_access_token_for_storage(storage_id);
+    std::string url = "https://www.googleapis.com/drive/v3/files/" + external_file_id + "/permissions";
+    std::string payload = R"({"role":"reader","type":"anyone"})";
+
+    cpr::Response r = make_post_request(
+        url,
+        payload,
+        cpr::Header{
+            {"Authorization", "Bearer " + access_token},
+            {"Content-Type", "application/json"}
+        }
+    );
+
+    if (r.status_code != 200 && r.status_code != 201) {
+        std::cerr << "[GoogleDrive] make_file_public falhou. Status=" << r.status_code << " Body=" << r.text << std::endl;
+        throw std::runtime_error("GOOGLE_MAKE_PUBLIC_FAILED");
+    }
+}
+
+void GoogleDriveService::revoke_file_public(uint64_t user_id, const std::string& external_file_id) {
+    if (external_file_id.empty()) return;
+    uint64_t storage_id = 0;
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+        auto res = txn.exec(
+            "SELECT external_storage_id FROM files WHERE external_file_id = $1 AND user_id = $2",
+            pqxx::params{external_file_id, user_id}
+        );
+        if (!res.empty() && !res[0][0].is_null()) {
+            storage_id = res[0][0].as<uint64_t>();
+        } else {
+            auto res_storage = txn.exec(
+                "SELECT id FROM user_external_storages WHERE user_id = $1 AND provider = 'google_drive' AND is_unlinking = FALSE LIMIT 1",
+                pqxx::params{user_id}
+            );
+            if (!res_storage.empty()) {
+                storage_id = res_storage[0][0].as<uint64_t>();
+            }
+        }
+    }
+    if (storage_id == 0) return;
+
+    std::string access_token;
+    try {
+        access_token = get_access_token_for_storage(storage_id);
+    } catch (...) {
+        return;
+    }
+
+    std::string list_url = "https://www.googleapis.com/drive/v3/files/" + external_file_id + "/permissions";
+    cpr::Response r = make_get_request(
+        list_url,
+        cpr::Header{{"Authorization", "Bearer " + access_token}}
+    );
+
+    if (r.status_code == 200) {
+        picojson::value json_val;
+        std::string err = picojson::parse(json_val, r.text);
+        if (err.empty() && json_val.is<picojson::object>()) {
+            auto& obj = json_val.get<picojson::object>();
+            auto perms_it = obj.find("permissions");
+            if (perms_it != obj.end() && perms_it->second.is<picojson::array>()) {
+                for (const auto& item : perms_it->second.get<picojson::array>()) {
+                    if (item.is<picojson::object>()) {
+                        auto& perm_obj = item.get<picojson::object>();
+                        auto type_it = perm_obj.find("type");
+                        auto id_it = perm_obj.find("id");
+                        if (type_it != perm_obj.end() && type_it->second.is<std::string>() && type_it->second.get<std::string>() == "anyone" &&
+                            id_it != perm_obj.end() && id_it->second.is<std::string>()) {
+                            std::string perm_id = id_it->second.get<std::string>();
+                            std::string del_url = "https://www.googleapis.com/drive/v3/files/" + external_file_id + "/permissions/" + perm_id;
+                            cpr::Delete(
+                                cpr::Url{del_url},
+                                cpr::Header{{"Authorization", "Bearer " + access_token}},
+                                cpr::Timeout{5000}
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+std::string GoogleDriveService::get_access_token_for_user_file(uint64_t file_id) {
+    uint64_t storage_id = 0;
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+        auto res = txn.exec(
+            "SELECT external_storage_id, user_id FROM files WHERE id = $1",
+            pqxx::params{file_id}
+        );
+        if (!res.empty()) {
+            if (!res[0][0].is_null()) {
+                storage_id = res[0][0].as<uint64_t>();
+            } else {
+                uint64_t user_id = res[0][1].as<uint64_t>();
+                auto res_storage = txn.exec(
+                    "SELECT id FROM user_external_storages WHERE user_id = $1 AND provider = 'google_drive' AND is_unlinking = FALSE LIMIT 1",
+                    pqxx::params{user_id}
+                );
+                if (!res_storage.empty()) {
+                    storage_id = res_storage[0][0].as<uint64_t>();
+                }
+            }
+        }
+    }
+    if (storage_id == 0) throw std::runtime_error("STORAGE_NOT_FOUND");
+    return get_access_token_for_storage(storage_id);
+}
+
+std::string GoogleDriveService::fetch_file_media(uint64_t file_id, const std::string& external_file_id, const std::string& range_header) {
+    std::string token = get_access_token_for_user_file(file_id);
+    std::string url = "https://www.googleapis.com/drive/v3/files/" + external_file_id + "?alt=media";
+    cpr::Header headers{{"Authorization", "Bearer " + token}};
+    if (!range_header.empty()) {
+        headers.insert({"Range", range_header});
+    }
+    cpr::Response r = cpr::Get(
+        cpr::Url{url},
+        headers,
+        cpr::Timeout{300000}
+    );
+    if (r.status_code != 200 && r.status_code != 206) {
+        std::cerr << "[GoogleDrive] fetch_file_media failed for external_file_id=" << external_file_id << " Status=" << r.status_code << " Text=" << r.text << std::endl;
+        throw std::runtime_error("GOOGLE_DRIVE_FETCH_FAILED");
+    }
+    return r.text;
+}

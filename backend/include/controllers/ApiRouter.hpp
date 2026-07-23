@@ -61,6 +61,9 @@ public:
     crow::response handle_update_folder(const crow::request& req, int folder_id);
     crow::response handle_share_file(const crow::request& req, int file_id);
     crow::response handle_get_shared_file(const crow::request& req, const std::string& uuid);
+    crow::response handle_list_shares(const crow::request& req, int file_id);
+    crow::response handle_revoke_share(const crow::request& req, const std::string& uuid);
+    crow::response handle_get_share_metadata(const crow::request& req, const std::string& uuid);
     crow::response handle_link_google_drive(const crow::request& req);
     crow::response handle_get_google_accounts(const crow::request& req);
     crow::response handle_unlink_google_account(const crow::request& req, int account_id);

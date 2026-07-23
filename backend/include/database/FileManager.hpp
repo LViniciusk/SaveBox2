@@ -72,8 +72,20 @@ public:
     BatchHardDeleteResult batch_hard_delete_files(uint64_t user_id, const std::vector<int>& file_ids, class FileChunker* chunker);
     int batch_delete_files(uint64_t user_id, const std::vector<int>& file_ids);
     crow::json::wvalue update_file(uint64_t file_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& folder_id);
-    std::string share_file(uint64_t file_id, uint64_t user_id);
-    std::pair<uint64_t, std::string> get_shared_file_info(const std::string& uuid);
+    std::string share_file(uint64_t file_id, uint64_t user_id, const std::string& encrypted_name_fdk = "");
+    std::pair<std::string, std::string> get_file_storage_info(uint64_t file_id, uint64_t user_id);
+    std::pair<std::string, std::string> get_share_storage_info(const std::string& share_uuid, uint64_t user_id);
+    struct SharedFileInfo {
+        uint64_t file_id;
+        std::string encrypted_name;
+        std::string storage_provider;
+        std::string external_file_id;
+        size_t size_bytes;
+    };
+    SharedFileInfo get_shared_file_info(const std::string& uuid);
+    std::vector<crow::json::wvalue> list_shares(uint64_t file_id, uint64_t user_id);
+    void revoke_share(const std::string& share_uuid, uint64_t user_id);
+    crow::json::wvalue get_shared_file_metadata(const std::string& uuid);
     crow::json::wvalue get_trash(uint64_t user_id);
     std::optional<std::string> restore_file(uint64_t file_id, uint64_t user_id);
     std::vector<std::string> empty_trash(uint64_t user_id, class FileChunker* chunker);

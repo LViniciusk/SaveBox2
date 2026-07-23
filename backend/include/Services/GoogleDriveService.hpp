@@ -45,6 +45,12 @@ public:
     
     uint64_t select_best_storage(uint64_t user_id, int64_t file_size_bytes, std::string& out_access_token, std::string& out_root_folder_id);
 
+    std::string get_access_token_for_user_file(uint64_t file_id);
+    virtual std::string fetch_file_media(uint64_t file_id, const std::string& external_file_id, const std::string& range_header = "");
+
+    virtual void make_file_public(uint64_t user_id, const std::string& external_file_id);
+    virtual void revoke_file_public(uint64_t user_id, const std::string& external_file_id);
+
 protected:
     std::string client_id_;
     std::string client_secret_;

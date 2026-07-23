@@ -2,15 +2,19 @@ import { Component, input, output, inject, OnDestroy, signal, effect, untracked,
 import { CommonModule } from '@angular/common';
 import { DriveStore, DriveFile } from '../../state/drive.store';
 import { DriveService } from '../../services/drive.service';
+import { ShareService } from '../../services/share.service';
 import { KasumiCryptoService } from '../../../../core/crypto/kasumi-crypto.service';
 import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.component';
-import { firstValueFrom } from 'rxjs';
+import { VideoPlayerComponent } from '../video-player/video-player.component';
+import { HttpClient, HttpEvent, HttpEventType } from '@angular/common/http';
+import { environment } from '../../../../../environments/environment';
+import { Observable, firstValueFrom } from 'rxjs';
 
 @Component({
   selector: 'app-image-player',
   standalone: true,
-  imports: [CommonModule, FileIconComponent],
+  imports: [CommonModule, FileIconComponent, VideoPlayerComponent],
   template: `
     <div class="player-backdrop" (click)="onClose()">
       
@@ -43,17 +47,24 @@ import { firstValueFrom } from 'rxjs';
 
       <!-- Secondary Toolbar (Left) -->
       <div class="toolbar-left" (click)="$event.stopPropagation()">
-        <button class="icon-btn" aria-label="Baixar" (click)="downloadFile()">
-          <span class="material-symbols-outlined">download</span>
+        <button class="icon-btn progress-btn" aria-label="Baixar" (click)="downloadFile()" title="Baixar Arquivo" [disabled]="isDownloading()">
+          @if (isDownloading()) {
+            <span class="material-symbols-outlined spinning">sync</span>
+            @if (downloadProgress() !== null) {
+              <span class="progress-text">{{ downloadProgress() }}%</span>
+            }
+          } @else {
+            <span class="material-symbols-outlined">download</span>
+          }
         </button>
         <div class="divider"></div>
-        <button class="icon-btn" (click)="zoomOut()" [disabled]="currentZoom() <= 0.25 || file().type === 'video'" title="Diminuir Zoom">
+        <button class="icon-btn" (click)="zoomOut()" [disabled]="currentZoom() <= 0.25 || file().type !== 'image'" title="Diminuir Zoom">
           <span class="material-symbols-outlined">remove</span>
         </button>
-        <button class="icon-btn" aria-label="Zoom" (click)="resetZoom()" title="Resetar Zoom" [disabled]="file().type === 'video'" [class.active-zoom]="currentZoom() !== 1">
+        <button class="icon-btn" aria-label="Zoom" (click)="resetZoom()" title="Resetar Zoom" [disabled]="file().type !== 'image'" [class.active-zoom]="currentZoom() !== 1">
           <span class="material-symbols-outlined">search</span>
         </button>
-        <button class="icon-btn" (click)="zoomIn()" [disabled]="currentZoom() >= 3 || file().type === 'video'" title="Aumentar Zoom">
+        <button class="icon-btn" (click)="zoomIn()" [disabled]="currentZoom() >= 3 || file().type !== 'image'" title="Aumentar Zoom">
           <span class="material-symbols-outlined">add</span>
         </button>
       </div>
@@ -82,15 +93,26 @@ import { firstValueFrom } from 'rxjs';
                   <span class="material-symbols-outlined">movie</span>
                 </div>
               }
-              @if (!isVideoPlaying() && !isVideoLoading()) {
-                <button class="play-overlay-btn" (click)="$event.stopPropagation(); playVideo.emit(file())">
-                  <span class="material-symbols-outlined">play_arrow</span>
-                </button>
-              }
+            }
+
+            @if (!isVideoPlaying() && !isVideoLoading()) {
+              <button class="play-overlay-btn" (click)="$event.stopPropagation(); playVideo.emit(file())">
+                <span class="material-symbols-outlined">play_arrow</span>
+              </button>
+            } @else {
+              <app-video-player 
+                class="seamless-video"
+                [file]="file()" 
+                [seamless]="true" 
+                [isDownloading]="isDownloading()"
+                [downloadProgress]="downloadProgress()"
+                (download)="downloadFile()"
+                (close)="closeVideo.emit()" 
+                (videoReady)="videoReady.emit()" />
             }
           </div>
         } @else {
-          @if (imageUrl()) {
+          @if (file().type === 'image' && imageUrl()) {
             <img [src]="imageUrl()" 
                  class="image-node" 
                  [class.dragging]="isDragging"
@@ -98,6 +120,29 @@ import { firstValueFrom } from 'rxjs';
                  [style.transform]="'translate(' + translateX() + 'px, ' + translateY() + 'px) scale(' + currentZoom() + ')'" 
                  draggable="false"
                  (click)="$event.stopPropagation()" />
+          } @else if (file().type !== 'image' && !isLoading()) {
+            <!-- No Preview Available -->
+            <div class="no-preview-wrapper">
+              <div class="share-card-dark" (click)="$event.stopPropagation()">
+                <div class="brand-header">
+                  <span class="brand-title">Nenhuma visualização disponível</span>
+                </div>
+                <div class="file-details-container">
+                  <div class="file-icon-wrapper">
+                    <app-file-icon [fileType]="file().type" [locked]="false" class="file-large-icon"></app-file-icon>
+                  </div>
+                  <h1 class="file-name" [title]="file().decryptedName || file().encryptedName">{{ file().decryptedName || file().encryptedName }}</h1>
+                  <p class="file-size">Tamanho: {{ file().sizeFormatted }}</p>
+                  
+                  <div class="actions-container">
+                    <button class="download-btn" (click)="downloadFile()">
+                      <span class="material-symbols-outlined btn-icon">download</span>
+                      Baixar Arquivo
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           }
         }
         </div>
@@ -299,17 +344,134 @@ import { firstValueFrom } from 'rxjs';
         display: flex;
         align-items: center;
         justify-content: center;
-        /* cursor: pointer; removed to not trigger on empty space */
+      }
+      .spinning {
+        animation: spin 1s linear infinite;
+      }
+
+      .progress-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding-right: 12px;
+        border-radius: 20px;
+      }
+
+      .progress-text {
+        font-family: 'Inter', sans-serif;
+        font-size: 13px;
+        font-weight: 500;
+        color: #f8fafc;
+      }
+
+      .seamless-video {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        z-index: 5;
       }
       .video-thumbnail {
         height: 100vh;
         width: auto;
         max-width: 100%;
         max-height: 100%;
+        object-fit: contain;
         display: block;
-        transition: transform 150ms ease-out;
+        transition: opacity 150ms ease-out;
       }
-      /* removed container hover effects */
+
+      .no-preview-wrapper {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 24px;
+      }
+
+      .share-card-dark {
+        background: #4C494C;
+        border-radius: 14px;
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+        width: 100%;
+        max-width: 460px;
+        padding: 32px;
+        box-sizing: border-box;
+      }
+      .brand-header {
+        text-align: center;
+        margin-bottom: 28px;
+      }
+      .brand-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #f8fafc;
+        letter-spacing: -0.025em;
+      }
+      .file-details-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+      }
+      .file-icon-wrapper {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 20px;
+      }
+      .file-large-icon {
+        font-size: 40px;
+      }
+      .file-name {
+        font-size: 18px;
+        font-weight: 600;
+        color: #f8fafc;
+        margin: 0 0 6px;
+        word-break: break-all;
+        max-width: 100%;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .file-size {
+        font-size: 14px;
+        color: #94a3b8;
+        margin: 0 0 28px;
+      }
+      .actions-container {
+        width: 100%;
+      }
+      .download-btn {
+        width: 100%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        background: #2563eb;
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 8px;
+        font-weight: 500;
+        cursor: pointer;
+        font-size: 15px;
+        transition: background 0.2s;
+      }
+      .download-btn:hover {
+        background: #1d4ed8;
+      }
+
       .no-thumbnail {
         display: flex;
         align-items: center;
@@ -431,11 +593,17 @@ export class ImagePlayerComponent implements OnDestroy {
   readonly playVideo = output<DriveFile>();
   readonly close = output<void>();
   readonly closeVideo = output<void>();
+  readonly videoReady = output<void>();
 
   private readonly driveStore = inject(DriveStore);
   private readonly driveService = inject(DriveService);
+  private readonly shareService = inject(ShareService);
   private readonly cryptoService = inject(CryptoService);
   private readonly kasumi = inject(KasumiCryptoService);
+  private readonly http = inject(HttpClient);
+
+  readonly isDownloading = computed(() => this.driveStore.isDownloading());
+  readonly downloadProgress = computed(() => this.driveStore.downloadProgress() > 0 ? this.driveStore.downloadProgress() : null);
 
   readonly isLoading = signal(true);
   readonly error = signal<string | null>(null);
@@ -483,6 +651,8 @@ export class ImagePlayerComponent implements OnDestroy {
             this.imageUrl.set(null);
             this.driveStore.loadThumbnail(current);
             this.triggerPrefetch();
+          } else {
+            this.isLoading.set(false);
           }
         });
       }
@@ -582,24 +752,30 @@ export class ImagePlayerComponent implements OnDestroy {
   }
 
   private async downloadAndDecrypt(file: DriveFile, signal: AbortSignal): Promise<string> {
-    if (!file.encryptedFdk) throw new Error('Chave de criptografia não encontrada (FDK)');
-
-    const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
-    const fdkString = atob(fdkBase64);
-    const fdk = new Uint8Array(fdkString.length);
-    for (let i = 0; i < fdkString.length; i++) {
-      fdk[i] = fdkString.charCodeAt(i);
-    }
-
     let encryptedBlob: Blob;
+    let fdk: Uint8Array;
 
-    if (file.storageProvider === 'google_drive') {
-      const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
-      const gdriveUrl = `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`;
-      const extReq$ = this.driveService.downloadExternalFileRange(gdriveUrl, meta.access_token, 0, file.sizeBytes - 1);
-      encryptedBlob = await firstValueFrom(extReq$);
+    if (file.shareUuid && file.shareFdk) {
+      encryptedBlob = await firstValueFrom(this.shareService.downloadSharedFile(file.shareUuid));
+      fdk = file.shareFdk;
     } else {
-      encryptedBlob = await firstValueFrom(this.driveService.downloadFile(file.id));
+      if (!file.encryptedFdk) throw new Error('Chave de criptografia nao encontrada (FDK)');
+
+      const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
+      const fdkString = atob(fdkBase64);
+      fdk = new Uint8Array(fdkString.length);
+      for (let i = 0; i < fdkString.length; i++) {
+        fdk[i] = fdkString.charCodeAt(i);
+      }
+
+      if (file.storageProvider === 'google_drive') {
+        const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
+        const gdriveUrl = `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`;
+        const extReq$ = this.driveService.downloadExternalFileRange(gdriveUrl, meta.access_token, 0, file.sizeBytes - 1);
+        encryptedBlob = await firstValueFrom(extReq$);
+      } else {
+        encryptedBlob = await firstValueFrom(this.driveService.downloadFile(file.id));
+      }
     }
 
     if (signal.aborted) throw new Error('Aborted');
@@ -612,7 +788,7 @@ export class ImagePlayerComponent implements OnDestroy {
   }
 
   onClose() {
-    if (this.isVideoPlaying()) {
+    if (this.isVideoPlaying() || this.isVideoLoading()) {
       this.closeVideo.emit();
     } else {
       this.close.emit();
@@ -698,7 +874,7 @@ export class ImagePlayerComponent implements OnDestroy {
         const clickY = event.clientY - rect.top;
 
         if (clickX < emptyX - 5 || clickX > clientW - emptyX + 5 ||
-            clickY < emptyY - 5 || clickY > clientH - emptyY + 5) {
+          clickY < emptyY - 5 || clickY > clientH - emptyY + 5) {
           this.onClose();
           return;
         }
@@ -712,14 +888,22 @@ export class ImagePlayerComponent implements OnDestroy {
     this.playVideo.emit(this.file());
   }
 
-  downloadFile() {
-    if (this.file().type === 'image' && this.imageUrl()) {
-      const a = document.createElement('a');
-      a.href = this.imageUrl()!;
-      a.download = this.file().decryptedName || 'download';
-      a.click();
-    } else {
-      alert('A funcionalidade de baixar vídeos diretamente pela galeria será adicionada em breve!');
+  async downloadFile() {
+    if (this.isDownloading()) return;
+
+    const file = this.file();
+    try {
+      if (this.imageUrl()) {
+        const a = document.createElement('a');
+        a.href = this.imageUrl()!;
+        a.download = file.decryptedName || 'download';
+        a.click();
+        return;
+      }
+
+      await this.driveStore.downloadFile(file);
+    } catch (e) {
+      console.error('[ImagePlayer] Erro no download do arquivo:', e);
     }
   }
 

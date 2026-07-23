@@ -67,6 +67,10 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
                 <span class="material-symbols-outlined">download</span>
                 Baixar
               </button>
+              <button class="menu-item" (click)="onShare(file, $event)">
+                <span class="material-symbols-outlined">share</span>
+                Compartilhar
+              </button>
             }
             <button class="menu-item" (click)="onRename(file, $event)">
               <span class="material-symbols-outlined">edit</span>
@@ -1022,6 +1026,7 @@ export class FileListComponent implements OnInit, OnDestroy {
   @Output() uploadFileRequested = new EventEmitter<void>();
   @Output() videoSelected = new EventEmitter<DriveFile>();
   @Output() imageSelected = new EventEmitter<{ file: DriveFile, playlist: DriveFile[] }>();
+  @Output() shareRequested = new EventEmitter<DriveFile>();
 
   readonly isLocked = this.appState.isLocked;
   readonly activeMenuFileId = signal<number | null>(null);
@@ -1740,11 +1745,9 @@ export class FileListComponent implements OnInit, OnDestroy {
     }
     if (file.isFolder) {
       this.driveStore.navigateTo(file.id);
-    } else if (file.type === 'video' || file.type === 'image') {
-      const playlist = this.sortedFiles().filter(f => f.type === 'image' || f.type === 'video');
-      this.imageSelected.emit({ file, playlist });
     } else {
-      this.driveStore.selectedFileIds.set(new Set());
+      const playlist = this.sortedFiles().filter(f => !f.isFolder);
+      this.imageSelected.emit({ file, playlist });
     }
   }
 
@@ -1817,5 +1820,11 @@ export class FileListComponent implements OnInit, OnDestroy {
       console.error('Erro ao apagar permanentemente', e);
     }
     this.clearSelection();
+  }
+
+  onShare(file: DriveFile, event: MouseEvent) {
+    event.stopPropagation();
+    this.closeMenu();
+    this.shareRequested.emit(file);
   }
 }

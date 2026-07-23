@@ -30,6 +30,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: 'share/:id',
+    loadComponent: () =>
+      import('./features/share/shared-file.component').then(
+        (m) => m.SharedFileComponent
+      ),
+  },
+  {
     path: 'drive',
     canActivate: [authGuard],
     children: [

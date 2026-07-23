@@ -1,6 +1,6 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Observable, map } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 
 export interface QuotaResponse {
@@ -268,6 +268,27 @@ export class DriveService {
   emptyTrash(): Observable<any> {
     return this.http.delete(`${environment.apiUrl}/trash/empty`, {
       withCredentials: true,
+    });
+  }
+
+  createShareLink(fileId: number, encryptedNameFdk?: string): Observable<{ share_id: string }> {
+    const body = encryptedNameFdk ? { encrypted_name_fdk: encryptedNameFdk } : {};
+    return this.http.post<{ share_uuid: string }>(`${environment.apiUrl}/files/${fileId}/share`, body, {
+      withCredentials: true
+    }).pipe(
+      map(res => ({ share_id: res.share_uuid }))
+    );
+  }
+
+  listShares(fileId: number): Observable<{ id: number, share_id: string, created_at: string }[]> {
+    return this.http.get<{ id: number, share_id: string, created_at: string }[]>(`${environment.apiUrl}/files/${fileId}/shares`, {
+      withCredentials: true
+    });
+  }
+
+  revokeShare(shareId: string): Observable<void> {
+    return this.http.delete<void>(`${environment.apiUrl}/shares/${shareId}`, {
+      withCredentials: true
     });
   }
 }

@@ -9,6 +9,7 @@ import { TopbarComponent } from '../../components/topbar/topbar.component';
 import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal.component';
 import { VideoPlayerComponent } from '../../components/video-player/video-player.component';
 import { ImagePlayerComponent } from '../../components/image-player/image-player.component';
+import { ShareModalComponent } from '../../components/share-modal/share-modal.component';
 import { CommonModule } from '@angular/common';
 
 /**
@@ -31,7 +32,7 @@ import { CommonModule } from '@angular/common';
 @Component({
   selector: 'app-vault-home',
   standalone: true,
-  imports: [FileListComponent, TopbarComponent, UnlockModalComponent, VideoPlayerComponent, ImagePlayerComponent, CommonModule],
+  imports: [FileListComponent, TopbarComponent, UnlockModalComponent, VideoPlayerComponent, ImagePlayerComponent, ShareModalComponent, CommonModule],
   template: `
     <div class="vault-layout">
       <!-- ===== TOPBAR ===== -->
@@ -280,7 +281,8 @@ import { CommonModule } from '@angular/common';
               (createFolderRequested)="createNewFolder()"
               (uploadFileRequested)="fileInput.click()"
               (videoSelected)="activeVideoFile.set($event)"
-              (imageSelected)="onImageSelected($event)" />
+              (imageSelected)="onImageSelected($event)"
+              (shareRequested)="onShareRequested($event)" />
           }
 
           <!-- Transfers Mini Popup -->
@@ -387,8 +389,13 @@ import { CommonModule } from '@angular/common';
           }
 
           <!-- Video Player Modal -->
-          @if (activeVideoFile()) {
-            <app-video-player [file]="activeVideoFile()!" [seamless]="!!activeImageFile()" (close)="activeVideoFile.set(null); isVideoReady.set(false)" (videoReady)="isVideoReady.set(true)" />
+          @if (activeVideoFile() && !activeImageFile()) {
+            <app-video-player [file]="activeVideoFile()!" (close)="activeVideoFile.set(null); isVideoReady.set(false)" (videoReady)="isVideoReady.set(true)" />
+          }
+
+          <!-- Share Modal -->
+          @if (shareFile()) {
+            <app-share-modal [file]="shareFile()!" (close)="shareFile.set(null)" />
           }
         </div>
       </main>
@@ -1505,6 +1512,11 @@ export class VaultHomeComponent implements OnInit {
   readonly activeVideoFile = signal<DriveFile | null>(null);
   readonly activeImageFile = signal<DriveFile | null>(null);
   readonly activeImagePlaylist = signal<DriveFile[]>([]);
+  readonly shareFile = signal<DriveFile | null>(null);
+
+  onShareRequested(file: DriveFile) {
+    this.shareFile.set(file);
+  }
 
   onImageSelected(payload: { file: DriveFile, playlist: DriveFile[] }) {
     this.activeImagePlaylist.set(payload.playlist);

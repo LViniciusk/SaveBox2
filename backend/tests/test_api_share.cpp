@@ -323,6 +323,60 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         REQUIRE(res_recovered.code == 200);
     }
 
+    SECTION("Novos Endpoints: Listar, Revogar e Metadados") {
+        std::string token_user_a = auth.generate_token(user_a_id);
+
+        // 1. Criar link
+        crow::request req_create;
+        req_create.url = "/files/" + std::to_string(file_a_1_id) + "/share";
+        req_create.method = crow::HTTPMethod::Post;
+        req_create.add_header("Authorization", "Bearer " + token_user_a);
+        crow::response res_create = router.handle_share_file(req_create, file_a_1_id);
+        REQUIRE(res_create.code == 200);
+
+        auto body_create = crow::json::load(res_create.body);
+        std::string share_uuid = body_create["share_uuid"].s();
+
+        // 2. Listar links
+        crow::request req_list;
+        req_list.url = "/files/" + std::to_string(file_a_1_id) + "/shares";
+        req_list.method = crow::HTTPMethod::Get;
+        req_list.add_header("Authorization", "Bearer " + token_user_a);
+        crow::response res_list = router.handle_list_shares(req_list, file_a_1_id);
+        REQUIRE(res_list.code == 200);
+        auto body_list = crow::json::load(res_list.body);
+        REQUIRE(body_list.size() == 1);
+        REQUIRE(body_list[0]["share_id"].s() == share_uuid);
+
+        // 3. Obter metadados publicos
+        crow::request req_meta;
+        req_meta.url = "/share/" + share_uuid + "/metadata";
+        req_meta.method = crow::HTTPMethod::Get;
+        crow::response res_meta = router.handle_get_share_metadata(req_meta, share_uuid);
+        REQUIRE(res_meta.code == 200);
+        auto body_meta = crow::json::load(res_meta.body);
+        REQUIRE(body_meta["encrypted_name"].s() == "file_share");
+        REQUIRE(body_meta["size_bytes"].i() == 15);
+
+        // 4. Revogar link
+        crow::request req_revoke;
+        req_revoke.url = "/shares/" + share_uuid;
+        req_revoke.method = crow::HTTPMethod::Delete;
+        req_revoke.add_header("Authorization", "Bearer " + token_user_a);
+        crow::response res_revoke = router.handle_revoke_share(req_revoke, share_uuid);
+        REQUIRE(res_revoke.code == 200);
+
+        // 5. Verificar que sumiu da lista
+        crow::response res_list2 = router.handle_list_shares(req_list, file_a_1_id);
+        REQUIRE(res_list2.code == 200);
+        auto body_list2 = crow::json::load(res_list2.body);
+        REQUIRE(body_list2.size() == 0);
+
+        // 6. Verificar que metadados publicos retornam 404 agora
+        crow::response res_meta2 = router.handle_get_share_metadata(req_meta, share_uuid);
+        REQUIRE(res_meta2.code == 404);
+    }
+
     {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);

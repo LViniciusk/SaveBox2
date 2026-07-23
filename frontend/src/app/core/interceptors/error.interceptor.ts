@@ -22,9 +22,10 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
   return next(req).pipe(
     tap({
       error: (error) => {
-        if (error.status === 401 && !req.context.get(BYPASS_LOGOUT)) {
+        const isPublicShare = req.url.includes('/share/');
+        if (error.status === 401 && !req.context.get(BYPASS_LOGOUT) && !isPublicShare) {
           authService.logout();
-        } else if (error.status === 403) {
+        } else if (error.status === 403 && !isPublicShare) {
           appState.lock();
         }
       },

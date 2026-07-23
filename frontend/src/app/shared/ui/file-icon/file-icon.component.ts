@@ -63,7 +63,7 @@ export class FileIconComponent {
       image: 'image',
       doc: 'description',
       spreadsheet: 'table_chart',
-      video: 'videocam',
+      video: 'movie',
       audio: 'audio_file',
     };
 

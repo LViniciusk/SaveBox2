@@ -66,6 +66,7 @@ import { retry } from 'rxjs/operators';
 import { environment } from '../../../../environments/environment';
 import { CryptoService } from '../../../core/crypto/crypto.service';
 import { DriveService }  from '../services/drive.service';
+import { ShareService }  from './share.service';
 import { DriveFile, DriveStore } from '../state/drive.store';
 
 // ---------------------------------------------------------------------------
@@ -156,6 +157,7 @@ interface StreamState {
   videoUrl: string;
   gdriveUrl: string | null;
   gdriveToken: string | null;
+  shareUuid: string | null;
 
   // Event listener cleanup handles
   removeVideoListeners: (() => void) | null;
@@ -170,6 +172,7 @@ export class VideoStreamService {
   private readonly cryptoService = inject(CryptoService);
   private readonly kasumi        = inject(KasumiCryptoService);
   private readonly driveService  = inject(DriveService);
+  private readonly shareService  = inject(ShareService);
   private readonly ngZone        = inject(NgZone);
   private readonly driveStore    = inject(DriveStore);
 
@@ -200,7 +203,7 @@ export class VideoStreamService {
     this.isBuffering.set(true);
     this.originalBitrateWarning.set(false);
 
-    if (!this.cryptoService.isVaultUnlocked()) {
+    if (!file.shareFdk && !this.cryptoService.isVaultUnlocked()) {
       this.error.set('Drive trancado. Desbloqueie o drive antes de reproduzir.');
       this.isStreaming.set(false);
       return;
@@ -208,7 +211,7 @@ export class VideoStreamService {
     
     // Procura por versão otimizada (proxy) do vídeo
     let fileToPlay = file;
-    if (this.driveStore && !file.forceOriginal) {
+    if (!file.shareFdk && this.driveStore && !file.forceOriginal) {
       // Tenta achar a versão proxy (otimizada H.264 720p) caso exista
       const allFiles = this.driveStore.files();
       const proxyName = file.decryptedName + '.proxy.mp4';
@@ -220,7 +223,7 @@ export class VideoStreamService {
       }
     }
     
-    if (!fileToPlay.encryptedFdk) {
+    if (!fileToPlay.shareFdk && !fileToPlay.encryptedFdk) {
       this.error.set('FDK ausente nos metadados do arquivo.');
       this.isStreaming.set(false);
       return;
@@ -229,15 +232,20 @@ export class VideoStreamService {
     try {
       if (environment.logs.transmuxer) console.log('[VideoStream] initializeStream started', fileToPlay);
       // --- Step 1: Decrypt the File Data Key from the Vault. -----------------
-      const fdkBase64 = await this.cryptoService.decryptName(fileToPlay.encryptedFdk);
-      const fdkString = atob(fdkBase64);
-      const fdk       = new Uint8Array(fdkString.length);
-      for (let i = 0; i < fdkString.length; i++) fdk[i] = fdkString.charCodeAt(i);
+      let fdk: Uint8Array;
+      if (fileToPlay.shareFdk) {
+        fdk = fileToPlay.shareFdk;
+      } else {
+        const fdkBase64 = await this.cryptoService.decryptName(fileToPlay.encryptedFdk!);
+        const fdkString = atob(fdkBase64);
+        fdk       = new Uint8Array(fdkString.length);
+        for (let i = 0; i < fdkString.length; i++) fdk[i] = fdkString.charCodeAt(i);
+      }
 
       let gdriveUrl: string | null = null;
       let gdriveToken: string | null = null;
 
-      if (fileToPlay.storageProvider === 'google_drive') {
+      if (!fileToPlay.shareFdk && fileToPlay.storageProvider === 'google_drive') {
         if (environment.logs.transmuxer) console.log('[VideoStream] Loading Google Drive metadata for file ID:', fileToPlay.id);
         const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(fileToPlay.id));
         gdriveUrl = `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`;
@@ -248,7 +256,7 @@ export class VideoStreamService {
       // --- Step 2: Download the file header and extract metadata. ------------
       // Download up to 128KB to safely include Kasumi v2 metadata if it exists.
       const initialFetchSize = 1024 * 128;
-      const headerBlob    = await this.fetchRange(fileToPlay.id, 0, initialFetchSize - 1, new AbortController(), gdriveUrl, gdriveToken);
+      const headerBlob    = await this.fetchRange(fileToPlay.id, 0, initialFetchSize - 1, new AbortController(), gdriveUrl, gdriveToken, fileToPlay.shareUuid);
       if (environment.logs.transmuxer) console.log('[VideoStream] Header blob fetched size:', headerBlob.size);
       
       const { dataOffset, expectedSize } = await this.kasumi.extractMetadata(headerBlob, fdk);
@@ -310,6 +318,7 @@ export class VideoStreamService {
         videoUrl,
         gdriveUrl,
         gdriveToken,
+        shareUuid: fileToPlay.shareUuid ?? null,
         removeVideoListeners: null,
       };
       this.state = s;
@@ -563,7 +572,7 @@ export class VideoStreamService {
     // Fire the network request immediately (runs in parallel with other fetches).
     // The catchall at the end prevents an unhandled rejection if this pipeline is discarded
     // by a seek/retry generation check before runChunkPipeline gets a chance to await it.
-    const rawFetch = this.fetchRange(s.file.id, firstChunkStart, rangeEnd, controller, s.gdriveUrl, s.gdriveToken);
+    const rawFetch = this.fetchRange(s.file.id, firstChunkStart, rangeEnd, controller, s.gdriveUrl, s.gdriveToken, s.file.shareUuid);
     const fetchPromise = rawFetch.then(blob => blob.arrayBuffer());
     // Register a no-op rejection handler on BOTH legs of the chain so that if seek aborts the request
     // before the processLock lambda runs, the engine never sees an unhandled Promise rejection.
@@ -856,7 +865,7 @@ export class VideoStreamService {
 
     const controller0 = new AbortController();
     s.currentFetches.add(controller0);
-    const blob0       = await this.fetchRange(s.file.id, firstRangeStart, firstRangeEnd, controller0, s.gdriveUrl, s.gdriveToken);
+    const blob0       = await this.fetchRange(s.file.id, firstRangeStart, firstRangeEnd, controller0, s.gdriveUrl, s.gdriveToken, s.shareUuid);
     s.currentFetches.delete(controller0);
     if (s.aborted) return;
     const buf0 = await blob0.arrayBuffer();
@@ -903,7 +912,7 @@ export class VideoStreamService {
 
       const controller = new AbortController();
       s.currentFetches.add(controller);
-      const encChunkBlob   = await this.fetchRange(s.file.id, lastRangeStart, lastRangeEnd, controller, s.gdriveUrl, s.gdriveToken);
+      const encChunkBlob   = await this.fetchRange(s.file.id, lastRangeStart, lastRangeEnd, controller, s.gdriveUrl, s.gdriveToken, s.shareUuid);
       s.currentFetches.delete(controller);
       if (s.aborted) return;
       if (environment.logs.transmuxer) console.log('[VideoStream] Bootstrap last chunk download size:', encChunkBlob.size);
@@ -1270,6 +1279,7 @@ export class VideoStreamService {
     controller: AbortController,
     gdriveUrl: string | null = null,
     gdriveToken: string | null = null,
+    shareUuid: string | null = null,
   ): Promise<Blob> {
     if (environment.logs.transmuxer) console.log('[VideoStream] fetchRange start:', start, 'end:', end);
     return new Promise<Blob>((resolve, reject) => {
@@ -1284,7 +1294,9 @@ export class VideoStreamService {
       }
       controller.signal.addEventListener('abort', abortHandler, { once: true });
 
-      const request$ = (gdriveUrl && gdriveToken)
+      const request$ = shareUuid
+        ? this.shareService.downloadSharedFileRange(shareUuid, start, end)
+        : (gdriveUrl && gdriveToken)
         ? this.driveService.downloadExternalFileRange(gdriveUrl, gdriveToken, start, end)
         : this.driveService.downloadFileRange(fileId, start, end);
 

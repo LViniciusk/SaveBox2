@@ -109,6 +109,10 @@ bool DatabaseMigration::run(DatabasePool& pool) {
             );
         )");
 
+        w.exec(R"(
+            ALTER TABLE shared_links ADD COLUMN IF NOT EXISTS encrypted_name_fdk TEXT DEFAULT '';
+        )");
+
         // TABELA DE CHUNKS ENVIADOS
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS file_chunks (

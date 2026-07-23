@@ -1582,17 +1582,89 @@ crow::response ApiRouter::handle_share_file(const crow::request& req, int file_i
     if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
     uint64_t user_id = *user_id_opt;
 
+    std::string encrypted_name_fdk = "";
+    if (!req.body.empty()) {
+        try {
+            auto body = crow::json::load(req.body);
+            if (body && body.has("encrypted_name_fdk")) {
+                encrypted_name_fdk = body["encrypted_name_fdk"].s();
+            }
+        } catch (...) {
+            // Se falhar o parse (ex: corpo vazio ou malformado), prossegue sem erro para compatibilidade
+        }
+    }
+
     try {
-        std::string uuid = file_mgr_->share_file(static_cast<uint64_t>(file_id), user_id);
+        if (gdrive_) {
+            try {
+                auto [provider, ext_id] = file_mgr_->get_file_storage_info(static_cast<uint64_t>(file_id), user_id);
+                if (provider == "google_drive" && !ext_id.empty()) {
+                    gdrive_->make_file_public(user_id, ext_id);
+                }
+            } catch (...) {}
+        }
+
+        std::string uuid = file_mgr_->share_file(static_cast<uint64_t>(file_id), user_id, encrypted_name_fdk);
         crow::json::wvalue res;
         res["share_uuid"] = uuid;
+        res["uuid"] = uuid;
         return crow::response(200, res);
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
-        if (msg == "EXTERNAL_SHARE_NOT_SUPPORTED") return crow::response(400, R"({"error":"Compartilhamento publico apenas para arquivos locais"})");
         if (msg == "TOO_MANY_REQUESTS") return crow::response(429, R"({"error":"Muitas alteracoes de compartilhamento. Tente novamente mais tarde."})");
         std::cerr << "Exception in handle_share_file: " << msg << std::endl;
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_list_shares(const crow::request& req, int file_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        auto shares = file_mgr_->list_shares(static_cast<uint64_t>(file_id), user_id);
+        crow::json::wvalue res = std::move(shares);
+        return crow::response(200, res);
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_revoke_share(const crow::request& req, const std::string& uuid) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    uint64_t user_id = *user_id_opt;
+
+    try {
+        if (gdrive_) {
+            try {
+                auto [provider, ext_id] = file_mgr_->get_share_storage_info(uuid, user_id);
+                if (provider == "google_drive" && !ext_id.empty()) {
+                    gdrive_->revoke_file_public(user_id, ext_id);
+                }
+            } catch (...) {}
+        }
+
+        file_mgr_->revoke_share(uuid, user_id);
+        return crow::response(200, R"({"success":true})");
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Link nao encontrado ou nao pertence ao utilizador"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_get_share_metadata(const crow::request& req, const std::string& uuid) {
+    try {
+        auto meta = file_mgr_->get_shared_file_metadata(uuid);
+        return crow::response(200, meta);
+    } catch (const std::exception& e) {
+        std::string msg = e.what();
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Link de compartilhamento expirado ou inexistente"})");
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -1622,17 +1694,49 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
     };
 
     try {
-        auto [file_id, encrypted_name] = file_mgr_->get_shared_file_info(uuid);
+        auto info = file_mgr_->get_shared_file_info(uuid);
+        size_t total_size = (info.storage_provider == "google_drive") ? info.size_bytes : chunker_->get_file_size(info.file_id);
 
-        size_t total_size = chunker_->get_file_size(file_id);
+        if (info.storage_provider == "google_drive" && !info.external_file_id.empty()) {
+            if (!gdrive_) {
+                return crow::response(500, R"({"error":"Servico do Google Drive nao disponivel"})");
+            }
+            std::string range_header = req.get_header_value("Range");
+            std::string content = gdrive_->fetch_file_media(info.file_id, info.external_file_id, range_header);
+            
+            if (!range_header.empty()) {
+                size_t start = 0;
+                size_t end = total_size > 0 ? (total_size - 1) : 0;
+                std::string prefix = "bytes=";
+                if (range_header.find(prefix) == 0) {
+                    std::string range_val = range_header.substr(prefix.length());
+                    size_t dash_pos = range_val.find('-');
+                    if (dash_pos != std::string::npos) {
+                        std::string s_str = range_val.substr(0, dash_pos);
+                        std::string e_str = range_val.substr(dash_pos + 1);
+                        if (!s_str.empty()) start = std::stoull(s_str);
+                        if (!e_str.empty()) end = std::stoull(e_str);
+                    }
+                }
+                crow::response res(206, content);
+                res.set_header("Content-Range", "bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" + std::to_string(total_size));
+                set_share_headers(res, info.encrypted_name, content.size(), total_size);
+                return res;
+            } else {
+                crow::response res(200, content);
+                set_share_headers(res, info.encrypted_name, content.size(), total_size);
+                return res;
+            }
+        }
+
+        uint64_t file_id = info.file_id;
+        std::string encrypted_name = info.encrypted_name;
+
         std::string range_header = req.get_header_value("Range");
 
         constexpr size_t MAX_FULL_DOWNLOAD_SIZE = 4 * 1024 * 1024; // 4MB
 
         if (range_header.empty()) {
-            if (total_size > MAX_FULL_DOWNLOAD_SIZE) {
-                return crow::response(400, R"({"error":"Arquivo muito grande para download sincrono. Use Range requests."})");
-            }
             std::string content = chunker_->read_entire_file(static_cast<uint64_t>(file_id));
             crow::response res(200, content);
             set_share_headers(res, encrypted_name, content.size(), total_size);
@@ -1713,7 +1817,9 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
 
     } catch (const std::exception& e) {
         std::string msg = e.what();
-        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Link invalido ou expirado"})");
+        if (msg == "NOT_FOUND" || msg == "NOT_FOUND_ON_DISK") {
+            return crow::response(404, R"({"error":"Link invalido ou arquivo nao encontrado no armazenamento"})");
+        }
         if (msg.find("IO_RESOURCE_EXHAUSTED") != std::string::npos) {
             return crow::response(503, R"({"error":"Service Unavailable - IO Resource Exhausted"})");
         }
@@ -2164,10 +2270,85 @@ void ApiRouter::setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware
         return res;
     });
 
+    CROW_ROUTE(app, "/api/files/<int>/share").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req, int file_id) {
+        auto res = handle_share_file(req, file_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/files/<int>/shares").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, int file_id) {
+        auto res = handle_list_shares(req, file_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/files/<int>/shares").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, int file_id) {
+        auto res = handle_list_shares(req, file_id);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/shares/<string>").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req, std::string uuid) {
+        auto res = handle_revoke_share(req, uuid);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/shares/<string>").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req, std::string uuid) {
+        auto res = handle_revoke_share(req, uuid);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/files/<int>/share/<string>").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req, int file_id, std::string uuid) {
+        auto res = handle_revoke_share(req, uuid);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
     CROW_ROUTE(app, "/share/<string>").methods(crow::HTTPMethod::Get)
     ([this](const crow::request& req, std::string uuid) {
-        auto res = handle_get_shared_file(req, uuid);
+        auto res = handle_get_share_metadata(req, uuid);
         res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/share/<string>").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, std::string uuid) {
+        auto res = handle_get_share_metadata(req, uuid);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/share/<string>/metadata").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, std::string uuid) {
+        auto res = handle_get_share_metadata(req, uuid);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/share/<string>/metadata").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, std::string uuid) {
+        auto res = handle_get_share_metadata(req, uuid);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/share/<string>/download").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, std::string uuid) {
+        auto res = handle_get_shared_file(req, uuid);
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/share/<string>/download").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, std::string uuid) {
+        auto res = handle_get_shared_file(req, uuid);
         return res;
     });
 
