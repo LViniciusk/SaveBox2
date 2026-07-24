@@ -79,7 +79,7 @@ import { Observable, firstValueFrom } from 'rxjs';
              (mouseleave)="onMouseUp()">
         @if (file().type === 'video') {
           <div class="video-preview-container">
-            @if (!isVideoPlaying()) {
+            @if (!isVideoReady()) {
               @if (thumbnailData()) {
                 <img [src]="thumbnailData()" 
                      class="video-thumbnail" 
@@ -107,8 +107,8 @@ import { Observable, firstValueFrom } from 'rxjs';
                 [isDownloading]="isDownloading()"
                 [downloadProgress]="downloadProgress()"
                 (download)="downloadFile()"
-                (close)="closeVideo.emit()" 
-                (videoReady)="videoReady.emit()" />
+                (close)="closeVideo.emit(); isVideoReady.set(false)" 
+                (videoReady)="isVideoReady.set(true); videoReady.emit()" />
             }
           </div>
         } @else {
@@ -244,8 +244,8 @@ import { Observable, firstValueFrom } from 'rxjs';
         opacity: 0.3;
         cursor: not-allowed;
       }
-      
       .active-zoom {
+        
         color: #0ea5e9;
       }
 
@@ -258,9 +258,9 @@ import { Observable, firstValueFrom } from 'rxjs';
         border: none;
         padding: 8px 16px;
         border-radius: 20px;
-        font-family: 'Outfit', sans-serif;
         font-weight: 500;
         font-size: 14px;
+        font-family: 'Outfit', sans-serif;
         cursor: pointer;
         transition: background 200ms;
       }
@@ -611,6 +611,7 @@ export class ImagePlayerComponent implements OnDestroy {
   readonly currentZoom = signal(1);
   readonly translateX = signal(0);
   readonly translateY = signal(0);
+  readonly isVideoReady = signal(false);
 
   isDragging = false;
   private hasDragged = false;
@@ -636,12 +637,30 @@ export class ImagePlayerComponent implements OnDestroy {
 
   constructor() {
     effect(() => {
+      console.log('[DEBUG ImagePlayer] State changed:', {
+        isVideoReady: this.isVideoReady(),
+        isVideoPlaying: this.isVideoPlaying(),
+        isVideoLoading: this.isVideoLoading(),
+        hasThumbnail: !!this.thumbnailData()
+      });
+    });
+
+    effect(() => {
+      if (!this.isVideoPlaying()) {
+        untracked(() => {
+          this.isVideoReady.set(false);
+        });
+      }
+    });
+
+    effect(() => {
       const current = this.file();
       if (current) {
         untracked(() => {
           this.currentZoom.set(1);
           this.translateX.set(0);
           this.translateY.set(0);
+          this.isVideoReady.set(false);
           this.isDragging = false;
           if (current.type === 'image') {
             this.loadImage(current);
@@ -669,7 +688,7 @@ export class ImagePlayerComponent implements OnDestroy {
     this.prefetchAbortController.abort();
   }
 
-  async loadImage(currentFile = this.file()) {
+  protected async loadImage(currentFile = this.file()) {
     if (this.abortController) {
       this.abortController.abort();
     }
@@ -787,7 +806,7 @@ export class ImagePlayerComponent implements OnDestroy {
     return URL.createObjectURL(decryptedBlob);
   }
 
-  onClose() {
+  protected onClose() {
     if (this.isVideoPlaying() || this.isVideoLoading()) {
       this.closeVideo.emit();
     } else {
@@ -795,17 +814,17 @@ export class ImagePlayerComponent implements OnDestroy {
     }
   }
 
-  resetZoom() {
+  protected resetZoom() {
     this.currentZoom.set(1);
     this.translateX.set(0);
     this.translateY.set(0);
   }
 
-  zoomIn() {
+  protected zoomIn() {
     this.currentZoom.update(z => Math.min(z + 0.25, 3));
   }
 
-  zoomOut() {
+  protected zoomOut() {
     this.currentZoom.update(z => {
       const newZoom = Math.max(z - 0.25, 0.25);
       if (newZoom <= 1) {
@@ -816,7 +835,7 @@ export class ImagePlayerComponent implements OnDestroy {
     });
   }
 
-  onWheel(event: WheelEvent) {
+  protected onWheel(event: WheelEvent) {
     if (this.file().type === 'video') return;
     if (event.deltaY < 0) {
       this.zoomIn();
@@ -825,7 +844,7 @@ export class ImagePlayerComponent implements OnDestroy {
     }
   }
 
-  onMouseDown(event: MouseEvent) {
+  protected onMouseDown(event: MouseEvent) {
     if (this.currentZoom() > 1) {
       this.isDragging = true;
       this.hasDragged = false;
@@ -834,7 +853,7 @@ export class ImagePlayerComponent implements OnDestroy {
     }
   }
 
-  onMouseMove(event: MouseEvent) {
+  protected onMouseMove(event: MouseEvent) {
     if (this.isDragging && this.currentZoom() > 1) {
       this.hasDragged = true;
       this.translateX.set(event.clientX - this.dragStartX);
@@ -842,11 +861,11 @@ export class ImagePlayerComponent implements OnDestroy {
     }
   }
 
-  onMouseUp() {
+  protected onMouseUp() {
     this.isDragging = false;
   }
 
-  onVideoClick(event: MouseEvent) {
+  protected onVideoClick(event: MouseEvent) {
     event.stopPropagation();
     if (this.hasDragged) {
       this.hasDragged = false;
@@ -888,7 +907,7 @@ export class ImagePlayerComponent implements OnDestroy {
     this.playVideo.emit(this.file());
   }
 
-  async downloadFile() {
+  protected async downloadFile() {
     if (this.isDownloading()) return;
 
     const file = this.file();
@@ -907,7 +926,7 @@ export class ImagePlayerComponent implements OnDestroy {
     }
   }
 
-  prevImage(event?: Event) {
+  protected prevImage(event?: Event) {
     event?.stopPropagation();
     if (this.isVideoPlaying() || this.isVideoLoading()) return;
     const idx = this.currentIndex();
@@ -916,7 +935,7 @@ export class ImagePlayerComponent implements OnDestroy {
     }
   }
 
-  nextImage(event?: Event) {
+  protected nextImage(event?: Event) {
     event?.stopPropagation();
     if (this.isVideoPlaying() || this.isVideoLoading()) return;
     const idx = this.currentIndex();
@@ -926,17 +945,29 @@ export class ImagePlayerComponent implements OnDestroy {
   }
 
   @HostListener('window:keydown', ['$event'])
-  onKeyDown(event: KeyboardEvent) {
+  protected onKeyDown(event: KeyboardEvent) {
     // Avoid intercepting keys if the user is interacting with a native input or video
     const targetName = (event.target as HTMLElement)?.tagName?.toLowerCase();
     if (targetName === 'input' || targetName === 'textarea' || targetName === 'video') {
-      if (event.key === 'Escape') this.close.emit();
+      if (event.key === 'Escape') {
+        if (this.isVideoPlaying() || this.isVideoLoading()) {
+          this.closeVideo.emit();
+          this.isVideoReady.set(false);
+        } else {
+          this.close.emit();
+        }
+      }
       return;
     }
 
     switch (event.key) {
       case 'Escape':
-        this.onClose();
+        if (this.isVideoPlaying() || this.isVideoLoading()) {
+          this.closeVideo.emit();
+          this.isVideoReady.set(false);
+        } else {
+          this.onClose();
+        }
         break;
       case 'ArrowLeft':
         if (!this.isVideoPlaying() && !this.isVideoLoading()) this.prevImage();

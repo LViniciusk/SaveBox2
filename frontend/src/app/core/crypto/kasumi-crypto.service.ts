@@ -8,22 +8,8 @@ const KEY_SIZE = 32;
 
 @Injectable({ providedIn: 'root' })
 export class KasumiCryptoService {
-  private sodiumLoaded = false;
-
   constructor() {
-    this.initSodium();
-  }
-
-  private async initSodium() {
-    await _sodium.ready;
-    this.sodiumLoaded = true;
-  }
-
-  private async ensureSodium() {
-    if (!this.sodiumLoaded) {
-      await _sodium.ready;
-      this.sodiumLoaded = true;
-    }
+    _sodium.ready.catch(e => console.error('Libsodium init error', e));
   }
 
   /**
@@ -82,7 +68,7 @@ export class KasumiCryptoService {
    * Hashes a string using Blake2b (for name_hash) and returns a Base64 string.
    */
   async hashName(name: string): Promise<string> {
-    await this.ensureSodium();
+    await _sodium.ready;
     const encoder = new TextEncoder();
     const hash = _sodium.crypto_generichash(32, encoder.encode(name), null);
     return _sodium.to_base64(hash, _sodium.base64_variants.URLSAFE_NO_PADDING);
@@ -93,7 +79,7 @@ export class KasumiCryptoService {
    * Format: base64( nonce(24) || mac(16) || ciphertext )
    */
   async encryptName(name: string, key: Uint8Array): Promise<string> {
-    await this.ensureSodium();
+    await _sodium.ready;
     if (key.length !== KEY_SIZE) throw new Error('Key must be 32 bytes');
     
     const encoder = new TextEncoder();
@@ -117,7 +103,7 @@ export class KasumiCryptoService {
    * Throws on decryption failure (e.g. wrong key / corrupted ciphertext).
    */
   async decryptName(ciphertextBase64: string, key: Uint8Array): Promise<string> {
-    await this.ensureSodium();
+    await _sodium.ready;
     if (key.length !== KEY_SIZE) throw new Error('Key must be 32 bytes');
 
     const data = _sodium.from_base64(ciphertextBase64, _sodium.base64_variants.URLSAFE_NO_PADDING);
@@ -144,7 +130,7 @@ export class KasumiCryptoService {
    * @param metadata Optional metadata string to embed in the Kasumi v2 header
    */
   async encryptFile(file: File, key: Uint8Array, fixedBaseNonce?: Uint8Array, metadata?: string): Promise<Blob> {
-    await this.ensureSodium();
+    await _sodium.ready;
 
     if (key.length !== KEY_SIZE) {
       throw new Error(`Key must be ${KEY_SIZE} bytes`);
@@ -235,7 +221,7 @@ export class KasumiCryptoService {
    * @param key 32-byte FDK
    */
   async decryptFile(encryptedBlob: Blob, key: Uint8Array): Promise<Blob> {
-    await this.ensureSodium();
+    await _sodium.ready;
 
     if (key.length !== KEY_SIZE) {
       throw new Error(`Key must be ${KEY_SIZE} bytes`);
@@ -336,7 +322,7 @@ export class KasumiCryptoService {
     chunkIndex: number,
     key: Uint8Array
   ): Promise<Uint8Array> {
-    await this.ensureSodium();
+    await _sodium.ready;
     const chunkNonce = this.deriveChunkNonce(baseNonce, chunkIndex);
     try {
       const plaintext = _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt_detached(
@@ -359,7 +345,7 @@ export class KasumiCryptoService {
    * Returns { metadata: string | null, dataOffset: number }
    */
   async extractMetadata(partialBlob: Blob, key: Uint8Array): Promise<{ metadata: string | null, dataOffset: number, expectedSize: number }> {
-    await this.ensureSodium();
+    await _sodium.ready;
     if (key.length !== KEY_SIZE) throw new Error('Key must be 32 bytes');
 
     const initialHeaderSize = NONCE_SIZE + 8;

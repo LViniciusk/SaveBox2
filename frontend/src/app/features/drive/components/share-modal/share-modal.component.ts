@@ -5,7 +5,7 @@ import { DriveService } from '../../services/drive.service';
 import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { KasumiCryptoService } from '../../../../core/crypto/kasumi-crypto.service';
 import { DriveFile } from '../../state/drive.store';
-
+import { firstValueFrom } from 'rxjs';
 @Component({
   selector: 'app-share-modal',
   standalone: true,
@@ -357,26 +357,24 @@ export class ShareModalComponent implements OnInit {
     this.loadActiveShares();
   }
 
-  loadActiveShares() {
+  async loadActiveShares() {
     this.loading.set(true);
     this.error.set(null);
-    this.driveService.listShares(this.file().id).subscribe({
-      next: async (shares) => {
-        this.activeShares.set(shares);
-        if (shares.length > 0) {
-          // A share already exists, rebuild the final URL with the decrypted FDK
-          await this.buildShareUrl(shares[0].share_id);
-        } else {
-          this.generatedLink.set(null);
-        }
-        this.loading.set(false);
-      },
-      error: (err) => {
-        console.error('Erro ao buscar compartilhamentos', err);
-        this.error.set(err?.error?.error || 'Nao foi possivel carregar a lista de compartilhamentos.');
-        this.loading.set(false);
+    try {
+      const shares = await firstValueFrom(this.driveService.listShares(this.file().id));
+      this.activeShares.set(shares);
+      if (shares.length > 0) {
+        // A share already exists, rebuild the final URL with the decrypted FDK
+        await this.buildShareUrl(shares[0].share_id);
+      } else {
+        this.generatedLink.set(null);
       }
-    });
+      this.loading.set(false);
+    } catch (err: any) {
+      console.error('Erro ao buscar compartilhamentos', err);
+      this.error.set(err?.error?.error || 'Nao foi possivel carregar a lista de compartilhamentos.');
+      this.loading.set(false);
+    }
   }
 
   async generateLink() {
@@ -398,26 +396,22 @@ export class ShareModalComponent implements OnInit {
       const filename = this.file().decryptedName || this.file().encryptedName;
       const encryptedNameFdk = await this.kasumi.encryptName(filename, fdkArray);
 
-      this.driveService.createShareLink(this.file().id, encryptedNameFdk).subscribe({
-        next: async (res) => {
-          await this.buildShareUrl(res.share_id);
-          // Refresh the list of active shares
-          this.driveService.listShares(this.file().id).subscribe({
-            next: (shares) => {
-              this.activeShares.set(shares);
-              this.loading.set(false);
-            },
-            error: () => {
-              this.loading.set(false);
-            }
-          });
-        },
-        error: (err) => {
-          console.error('Erro ao gerar link de compartilhamento', err);
-          this.error.set(err?.error?.error || 'Nao foi possivel gerar o link de compartilhamento.');
+      try {
+        const res = await firstValueFrom(this.driveService.createShareLink(this.file().id, encryptedNameFdk));
+        await this.buildShareUrl(res.share_id);
+        
+        try {
+          const shares = await firstValueFrom(this.driveService.listShares(this.file().id));
+          this.activeShares.set(shares);
+          this.loading.set(false);
+        } catch {
           this.loading.set(false);
         }
-      });
+      } catch (err: any) {
+        console.error('Erro ao gerar link de compartilhamento', err);
+        this.error.set(err?.error?.error || 'Nao foi possivel gerar o link de compartilhamento.');
+        this.loading.set(false);
+      }
     } catch (e: any) {
       console.error('Erro ao preparar FDK ou nome criptografado', e);
       this.error.set(e?.message || 'Falha ao descriptografar chave do arquivo.');
@@ -453,21 +447,19 @@ export class ShareModalComponent implements OnInit {
     }
   }
 
-  revokeShare(shareId: string) {
+  async revokeShare(shareId: string) {
     this.revokingId.set(shareId);
     this.error.set(null);
-    this.driveService.revokeShare(shareId).subscribe({
-      next: () => {
-        this.generatedLink.set(null);
-        this.activeShares.update(shares => shares.filter(s => s.share_id !== shareId));
-        this.revokingId.set(null);
-      },
-      error: (err) => {
-        console.error('Erro ao revogar compartilhamento', err);
-        this.error.set(err?.error?.error || 'Nao foi possivel revogar o link de compartilhamento.');
-        this.revokingId.set(null);
-      }
-    });
+    try {
+      await firstValueFrom(this.driveService.revokeShare(shareId));
+      this.generatedLink.set(null);
+      this.activeShares.update(shares => shares.filter(s => s.share_id !== shareId));
+      this.revokingId.set(null);
+    } catch (err: any) {
+      console.error('Erro ao revogar compartilhamento', err);
+      this.error.set(err?.error?.error || 'Nao foi possivel revogar o link de compartilhamento.');
+      this.revokingId.set(null);
+    }
   }
 
   copyToClipboard(inputElement: HTMLInputElement) {

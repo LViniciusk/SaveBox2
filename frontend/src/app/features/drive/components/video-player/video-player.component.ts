@@ -774,6 +774,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   private idleTimer: any = null;
   private flashTimeout: any = null;
+  private checkBufferInterval: any = null;
 
   readonly progressPercent = computed(() => {
     const dur = this.duration();
@@ -787,12 +788,14 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     this.startStream();
     if (this.videoElement?.nativeElement) {
       this.videoElement.nativeElement.addEventListener('canplay', () => {
-        const checkBuffer = setInterval(() => {
+        if (this.checkBufferInterval) clearInterval(this.checkBufferInterval);
+        this.checkBufferInterval = setInterval(() => {
           const video = this.videoElement.nativeElement;
-          if (video.buffered.length > 0) {
+          if (video && video.buffered && video.buffered.length > 0) {
             const bufferedEnd = video.buffered.end(video.buffered.length - 1);
             if (bufferedEnd >= 5 || video.duration <= 5) {
-              clearInterval(checkBuffer);
+              clearInterval(this.checkBufferInterval);
+              this.checkBufferInterval = null;
               this.isInitialLoad.set(false);
               this.videoReady.emit();
               video.play().catch(e => console.warn('Autoplay prevented by browser', e));
@@ -807,10 +810,11 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     this.streamService.destroyStream();
     if (this.idleTimer) clearTimeout(this.idleTimer);
     if (this.flashTimeout) clearTimeout(this.flashTimeout);
+    if (this.checkBufferInterval) clearInterval(this.checkBufferInterval);
   }
 
   @HostListener('window:keydown', ['$event'])
-  handleKeyDown(event: KeyboardEvent) {
+  protected handleKeyDown(event: KeyboardEvent) {
     const target = event.target as HTMLElement;
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
 
@@ -850,8 +854,12 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
+  onVideoPlay() {
+    this.isPlaying.set(true);
+  }
+
   @HostListener('document:fullscreenchange')
-  onFullscreenChange() {
+  protected onFullscreenChange() {
     const isFS = !!document.fullscreenElement;
     this.isFullscreen.set(isFS);
     setTimeout(() => {
@@ -859,7 +867,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }, 100);
   }
 
-  onMouseMove(event?: MouseEvent) {
+  protected onMouseMove(event?: MouseEvent) {
     if (event && this.videoElement?.nativeElement) {
       const rect = this.videoElement.nativeElement.getBoundingClientRect();
       const x = event.clientX;
@@ -888,20 +896,20 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  onMouseLeave() {
+  protected onMouseLeave() {
     if (this.isPlaying()) {
       this.showControls.set(false);
       this.isSpeedMenuOpen.set(false);
     }
   }
 
-  onVideoClick(event: MouseEvent) {
+  protected onVideoClick(event: MouseEvent) {
     event.stopPropagation();
     this.togglePlay();
     this.triggerCenterFlash(this.isPlaying() ? 'play_arrow' : 'pause');
   }
 
-  triggerCenterFlash(icon: string) {
+  protected triggerCenterFlash(icon: string) {
     this.centerFlashIcon.set(icon);
     if (this.flashTimeout) clearTimeout(this.flashTimeout);
     this.flashTimeout = setTimeout(() => {
@@ -910,7 +918,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   @HostListener('window:resize')
-  updateVideoDimensions() {
+  protected updateVideoDimensions() {
     if (this.videoElement?.nativeElement) {
       const rect = this.videoElement.nativeElement.getBoundingClientRect();
       if (rect.width > 0) {
@@ -919,14 +927,14 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  onVolumeChange() {
+  protected onVolumeChange() {
     if (!this.videoElement?.nativeElement) return;
     const video = this.videoElement.nativeElement;
     this.volume.set(video.volume);
     this.isMuted.set(video.muted);
   }
 
-  onTimeUpdate() {
+  protected onTimeUpdate() {
     if (!this.videoElement?.nativeElement) return;
     const video = this.videoElement.nativeElement;
     this.currentTime.set(video.currentTime);
@@ -936,7 +944,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  onLoadedMetadata() {
+  protected onLoadedMetadata() {
     if (!this.videoElement?.nativeElement) return;
     const video = this.videoElement.nativeElement;
     this.duration.set(video.duration || 0);
@@ -945,7 +953,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     this.updateVideoDimensions();
   }
 
-  updateBuffer() {
+  protected updateBuffer() {
     if (!this.videoElement?.nativeElement) return;
     const video = this.videoElement.nativeElement;
     if (video.buffered.length > 0) {
@@ -955,7 +963,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  togglePlay() {
+  protected togglePlay() {
     if (!this.videoElement?.nativeElement) return;
     const video = this.videoElement.nativeElement;
     if (video.paused) {
@@ -965,7 +973,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  onSeek(event: Event) {
+  protected onSeek(event: Event) {
     const input = event.target as HTMLInputElement;
     const time = parseFloat(input.value);
     if (this.videoElement?.nativeElement) {
@@ -974,7 +982,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  skip(seconds: number) {
+  protected skip(seconds: number) {
     if (!this.videoElement?.nativeElement) return;
     const video = this.videoElement.nativeElement;
     const newTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + seconds));
@@ -982,13 +990,13 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     this.currentTime.set(newTime);
   }
 
-  onVolumeInput(event: Event) {
+  protected onVolumeInput(event: Event) {
     const input = event.target as HTMLInputElement;
     const val = parseFloat(input.value);
     this.changeVolumeTo(val);
   }
 
-  changeVolume(delta: number) {
+  protected changeVolume(delta: number) {
     const newVol = Math.max(0, Math.min(1, this.volume() + delta));
     this.changeVolumeTo(newVol);
   }
@@ -1002,20 +1010,20 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     this.isMuted.set(val === 0);
   }
 
-  toggleMute() {
+  protected toggleMute() {
     if (!this.videoElement?.nativeElement) return;
     const video = this.videoElement.nativeElement;
     video.muted = !video.muted;
     this.isMuted.set(video.muted);
   }
 
-  getVolumeIcon(): string {
+  protected getVolumeIcon(): string {
     if (this.isMuted() || this.volume() === 0) return 'volume_off';
     if (this.volume() < 0.5) return 'volume_down';
     return 'volume_up';
   }
 
-  setSpeed(speed: number) {
+  protected setSpeed(speed: number) {
     if (this.videoElement?.nativeElement) {
       this.videoElement.nativeElement.playbackRate = speed;
       this.playbackSpeed.set(speed);
@@ -1023,7 +1031,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  toggleFullscreen() {
+  protected toggleFullscreen() {
     const elem = this.playerBackdrop?.nativeElement || document.documentElement;
     if (!document.fullscreenElement) {
       elem.requestFullscreen().catch(err => console.warn('Fullscreen error:', err));
@@ -1032,7 +1040,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  togglePiP() {
+  protected togglePiP() {
     if (!this.videoElement?.nativeElement) return;
     const video = this.videoElement.nativeElement;
     if (document.pictureInPictureElement) {
@@ -1042,7 +1050,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  formatTime(val: number): string {
+  protected formatTime(val: number): string {
     if (isNaN(val) || !isFinite(val) || val < 0) return '0:00';
     const h = Math.floor(val / 3600);
     const m = Math.floor((val % 3600) / 60);
@@ -1064,15 +1072,15 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  retryPlayback() {
+  protected retryPlayback() {
     this.startStream();
   }
 
-  downloadVideo() {
+  protected downloadVideo() {
     this.download.emit();
   }
 
-  onClose() {
+  protected onClose() {
     this.close.emit();
   }
 }

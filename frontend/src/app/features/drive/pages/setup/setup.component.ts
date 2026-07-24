@@ -4,7 +4,7 @@ import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { AppStateService } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
 import { FormsModule } from '@angular/forms';
-
+import { firstValueFrom } from 'rxjs';
 @Component({
   selector: 'app-setup',
   standalone: true,
@@ -222,17 +222,14 @@ export class SetupComponent {
       this.downloadRecoveryFile();
 
       // Força um refresh para pegar o novo JWT com is_vault_initialized = true
-      this.authService.restoreSession().subscribe({
-        next: () => {
-          // Transita do estado de Onboarding para Unlocked
-          this.appState.unlock();
-          this.router.navigate(['/drive/home']);
-        },
-        error: () => {
-          this.appState.unlock();
-          this.router.navigate(['/drive/home']);
-        }
-      });
+      try {
+        await firstValueFrom(this.authService.restoreSession());
+      } catch (err) {
+        // Ignora erro de refresh
+      }
+      
+      this.appState.unlock();
+      this.router.navigate(['/drive/home']);
     } catch (e) {
       console.error(e);
       this.error.set('Erro ao inicializar o drive.');

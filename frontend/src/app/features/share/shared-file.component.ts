@@ -4,6 +4,7 @@ import { ActivatedRoute } from '@angular/router';
 import { ShareService, EncryptedFileMetadata } from '../drive/services/share.service';
 import { KasumiCryptoService } from '../../core/crypto/kasumi-crypto.service';
 import { PublicMediaPlayerComponent } from './public-media-player.component';
+import { firstValueFrom } from 'rxjs';
 
 @Component({
   selector: 'app-shared-file',
@@ -284,34 +285,31 @@ export class SharedFileComponent implements OnInit {
     return bytes;
   }
 
-  loadMetadata() {
+  async loadMetadata() {
     this.loading.set(true);
     this.error.set(null);
 
-    this.shareService.getSharedFileMetadata(this.shareId).subscribe({
-      next: async (meta) => {
-        try {
-          if (!this.fdkUint8) {
-            throw new Error('Chave FDK ausente no escopo.');
-          }
-          this.metadata.set(meta);
-          const name = await this.kasumi.decryptName(meta.encrypted_name, this.fdkUint8);
-          this.decryptedName.set(name);
-          this.sizeBytes.set(meta.size_bytes);
-          this.loading.set(false);
-        } catch (e: any) {
-          console.error('Erro ao descriptografar nome do arquivo', e);
-          this.error.set('Nao foi possivel descriptografar os metadados do arquivo com a chave fornecida.');
-          this.loading.set(false);
-        }
-      },
-      error: (err) => {
+    try {
+      const meta = await firstValueFrom(this.shareService.getSharedFileMetadata(this.shareId));
+      if (!this.fdkUint8) {
+        throw new Error('Chave FDK ausente no escopo.');
+      }
+      this.metadata.set(meta);
+      const name = await this.kasumi.decryptName(meta.encrypted_name, this.fdkUint8);
+      this.decryptedName.set(name);
+      this.sizeBytes.set(meta.size_bytes);
+      this.loading.set(false);
+    } catch (err: any) {
+      if (err instanceof Error && err.message === 'Chave FDK ausente no escopo.') {
+        console.error('Erro ao descriptografar nome do arquivo', err);
+        this.error.set('Nao foi possivel descriptografar os metadados do arquivo com a chave fornecida.');
+      } else {
         console.error('Erro ao buscar metadados do compartilhamento', err);
         const msg = err?.error?.error || 'Link de compartilhamento expirou ou nao existe mais.';
         this.error.set(msg);
-        this.loading.set(false);
       }
-    });
+      this.loading.set(false);
+    }
   }
 
   async downloadAndDecryptFile() {
@@ -319,33 +317,32 @@ export class SharedFileComponent implements OnInit {
     this.downloading.set(true);
     this.error.set(null);
 
-    this.shareService.downloadSharedFile(this.shareId).subscribe({
-      next: async (encryptedBlob) => {
-        try {
-          if (!this.fdkUint8) return;
-          const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdkUint8);
-          const url = URL.createObjectURL(rawDecrypted);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = this.decryptedName();
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          this.downloading.set(false);
-        } catch (e: any) {
-          console.error('Erro ao descriptografar arquivo', e);
-          this.error.set('Falha na descriptografia do arquivo. A chave pode estar incorreta.');
-          this.downloading.set(false);
-        }
-      },
-      error: (err) => {
-        console.error('Erro ao descarregar arquivo compartilhado', err);
-        const msg = err?.error?.error || 'Nao foi possivel descarregar o arquivo do servidor.';
-        this.error.set(msg);
+    try {
+      const encryptedBlob = await firstValueFrom(this.shareService.downloadSharedFile(this.shareId));
+      if (!this.fdkUint8) return;
+      
+      try {
+        const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdkUint8);
+        const url = URL.createObjectURL(rawDecrypted);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = this.decryptedName();
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        this.downloading.set(false);
+      } catch (e: any) {
+        console.error('Erro ao descriptografar arquivo', e);
+        this.error.set('Falha na descriptografia do arquivo. A chave pode estar incorreta.');
         this.downloading.set(false);
       }
-    });
+    } catch (err: any) {
+      console.error('Erro ao descarregar arquivo compartilhado', err);
+      const msg = err?.error?.error || 'Nao foi possivel descarregar o arquivo do servidor.';
+      this.error.set(msg);
+      this.downloading.set(false);
+    }
   }
 
   isImage(): boolean {

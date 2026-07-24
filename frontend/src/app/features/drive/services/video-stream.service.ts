@@ -149,8 +149,6 @@ interface StreamState {
   /** Whether the stream has been fully destroyed. */
   aborted: boolean;
 
-  silentRetryCount: number;
-  lastSilentRetryTime: number;
 
   // Video element binding references
   videoElement: HTMLVideoElement;
@@ -194,7 +192,7 @@ export class VideoStreamService {
    * Attaches a secure streaming session to the given HTMLVideoElement.
    * Safe to call multiple times -- destroys any previous session first.
    */
-  async initializeStream(videoElement: HTMLVideoElement, file: DriveFile, initialSeekTime?: number, previousRetryCount = 0, previousRetryTime = 0): Promise<void> {
+  async initializeStream(videoElement: HTMLVideoElement, file: DriveFile, initialSeekTime?: number): Promise<void> {
     this.destroyStream();
     this.error.set(null);
     this.isStreaming.set(true);
@@ -312,8 +310,6 @@ export class VideoStreamService {
         processLock: Promise.resolve(),
         seekDebounceTimeout: null,
         aborted: false,
-        silentRetryCount: previousRetryCount,
-        lastSilentRetryTime: previousRetryTime,
         videoElement,
         videoUrl,
         gdriveUrl,
@@ -336,21 +332,19 @@ export class VideoStreamService {
         if (environment.logs.transmuxer) console.log('[VideoStream] Silent retry: jumping to initialSeekTime', initialSeekTime);
         videoElement.currentTime = initialSeekTime;
         
-        if (previousRetryCount > 0) {
-          const checkBuffer = setInterval(() => {
-            if (s.aborted) {
+        const checkBuffer = setInterval(() => {
+          if (s.aborted) {
+            clearInterval(checkBuffer);
+            return;
+          }
+          if (videoElement.buffered.length > 0) {
+            const bufferedEnd = videoElement.buffered.end(videoElement.buffered.length - 1);
+            if (bufferedEnd >= videoElement.currentTime + 1 || videoElement.readyState >= 3) {
               clearInterval(checkBuffer);
-              return;
+              videoElement.play().catch(e => console.warn('Autoplay prevented on retry', e));
             }
-            if (videoElement.buffered.length > 0) {
-              const bufferedEnd = videoElement.buffered.end(videoElement.buffered.length - 1);
-              if (bufferedEnd >= videoElement.currentTime + 1 || videoElement.readyState >= 3) {
-                clearInterval(checkBuffer);
-                videoElement.play().catch(e => console.warn('Autoplay prevented on retry', e));
-              }
-            }
-          }, 500);
-        }
+          }
+        }, 500);
       } else {
         if (environment.logs.transmuxer) console.log('[VideoStream] Priming the pump (scheduleNextChunk)...');
         // --- Step 7: Prime the pump -- request the first content chunk. --------
@@ -616,22 +610,8 @@ export class VideoStreamService {
         }
         if (!s.aborted && err?.name !== 'AbortError' && s.seekGeneration === capturedGeneration) {
           if (err?.message === 'Erro no appendBuffer.') {
-            const now = Date.now();
-            let newRetryCount = s.silentRetryCount;
-            
-            if (now - s.lastSilentRetryTime < 10000) {
-              newRetryCount++;
-            } else {
-              newRetryCount = 1;
-            }
-
-            if (newRetryCount > 3) {
-              console.warn('[VideoStream] Silent retry loop detected! Adding playhead by 1 second to bypass corrupted chunk.', err);
-              this.initializeStream(videoElement, s.file, videoElement.currentTime + 1, 0, now);
-            } else {
-              console.warn(`[VideoStream] Append error detected! Attempting silent retry ${newRetryCount}/3 at currentTime:`, videoElement.currentTime);
-              this.initializeStream(videoElement, s.file, videoElement.currentTime, newRetryCount, now);
-            }
+            console.warn('[VideoStream] Append error detected! Advancing playhead by 1 second to bypass corrupted chunk.', err);
+            this.initializeStream(videoElement, s.file, videoElement.currentTime + 1);
           } else {
             this.ngZone.run(() => this.error.set(err?.message ?? 'Erro no pipeline de chunk.'));
           }

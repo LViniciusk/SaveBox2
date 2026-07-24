@@ -8,7 +8,7 @@ import { environment } from '../../../environments/environment';
 import { DriveFile } from '../drive/state/drive.store';
 import { VideoPlayerComponent } from '../drive/components/video-player/video-player.component';
 import { FileIconComponent } from '../../shared/ui/file-icon/file-icon.component';
-
+import { firstValueFrom } from 'rxjs';
 @Component({
   selector: 'app-public-media-player',
   standalone: true,
@@ -606,6 +606,7 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
   readonly isDownloading = signal(false);
   readonly downloadProgress = signal<number | null>(null);
 
+  private abortController: AbortController | null = null;
   private readonly http = inject(HttpClient);
 
   readonly publicDriveFile = signal<DriveFile>({
@@ -687,12 +688,12 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     this.isLoading.set(false);
   }
 
-  onThumbnailError() {
+  protected onThumbnailError() {
     console.warn('[PublicMediaPlayer] Erro ao renderizar elemento <img> da miniatura.');
     this.thumbnailUrl.set(null);
   }
 
-  async startVideoStreaming() {
+  protected async startVideoStreaming() {
     this.isPlayingVideo.set(true);
   }
 
@@ -703,40 +704,32 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     }
   }
 
-  async loadImage() {
+  protected async loadImage() {
     this.isLoading.set(true);
     this.error.set(null);
 
-    this.shareService.downloadSharedFile(this.shareId()).subscribe({
-      next: async (encryptedBlob) => {
-        try {
-          const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdk());
-          const mimeType = this.getMimeType(this.filename());
-          this.decryptedBlob = new Blob([rawDecrypted], { type: mimeType });
+    try {
+      const encryptedBlob = await firstValueFrom(this.shareService.downloadSharedFile(this.shareId()));
+      const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdk());
+      const mimeType = this.getMimeType(this.filename());
+      this.decryptedBlob = new Blob([rawDecrypted], { type: mimeType });
 
-          if (this.mediaUrl()) {
-            URL.revokeObjectURL(this.mediaUrl()!);
-          }
-
-          const url = URL.createObjectURL(this.decryptedBlob);
-          this.mediaUrl.set(url);
-          this.isLoading.set(false);
-        } catch (e: any) {
-          console.error('[PublicMediaPlayer] Erro ao descriptografar imagem', e);
-          this.error.set('Falha na descriptografia da imagem.');
-          this.isLoading.set(false);
-        }
-      },
-      error: (err) => {
-        console.error('[PublicMediaPlayer] Erro ao descarregar imagem', err);
-        const msg = err?.error?.error || 'Nao foi possivel descarregar a imagem.';
-        this.error.set(msg);
-        this.isLoading.set(false);
+      if (this.mediaUrl()) {
+        URL.revokeObjectURL(this.mediaUrl()!);
       }
-    });
+
+      const url = URL.createObjectURL(this.decryptedBlob);
+      this.mediaUrl.set(url);
+      this.isLoading.set(false);
+    } catch (err: any) {
+      console.error('[PublicMediaPlayer] Erro ao carregar imagem', err);
+      const msg = err?.error?.error || 'Falha ao descarregar ou descriptografar a imagem.';
+      this.error.set(msg);
+      this.isLoading.set(false);
+    }
   }
 
-  downloadFile() {
+  protected downloadFile() {
     console.log('[PublicMediaPlayer] Iniciando download...', {
       shareId: this.shareId(),
       sizeBytes: this.sizeBytes(),
@@ -817,25 +810,25 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     });
   }
 
-  onClose() {
+  protected onClose() {
     this.close.emit();
   }
 
-  zoomIn() {
+  protected zoomIn() {
     this.currentZoom.update(z => Math.min(3, z + 0.25));
   }
 
-  zoomOut() {
+  protected zoomOut() {
     this.currentZoom.update(z => Math.max(0.25, z - 0.25));
   }
 
-  resetZoom() {
+  protected resetZoom() {
     this.currentZoom.set(1);
     this.translateX.set(0);
     this.translateY.set(0);
   }
 
-  onWheel(event: WheelEvent) {
+  protected onWheel(event: WheelEvent) {
     if (this.isVideo()) return;
     if (event.deltaY < 0) {
       this.zoomIn();
@@ -844,7 +837,7 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     }
   }
 
-  onMouseDown(event: MouseEvent) {
+  protected onMouseDown(event: MouseEvent) {
     if (this.currentZoom() > 1) {
       this.isDragging = true;
       this.dragStartX = event.clientX - this.translateX();
@@ -852,14 +845,14 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     }
   }
 
-  onMouseMove(event: MouseEvent) {
+  protected onMouseMove(event: MouseEvent) {
     if (this.isDragging && this.currentZoom() > 1) {
       this.translateX.set(event.clientX - this.dragStartX);
       this.translateY.set(event.clientY - this.dragStartY);
     }
   }
 
-  onMouseUp() {
+  protected onMouseUp() {
     this.isDragging = false;
   }
 
@@ -891,7 +884,7 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
   }
 
   @HostListener('window:keydown', ['$event'])
-  onKeyDown(event: KeyboardEvent) {
+  protected onKeyDown(event: KeyboardEvent) {
     if (event.key === 'Escape') {
       this.onClose();
     }

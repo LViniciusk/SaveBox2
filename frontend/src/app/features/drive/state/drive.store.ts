@@ -24,6 +24,7 @@ export interface TransferItem {
   pendingData?: any;
   bytesTransferred?: number;
   totalBytes?: number;
+  history?: { bytes: number, time: number }[];
 }
 
 export interface PendingUpload {
@@ -94,8 +95,14 @@ export class DriveStore {
     return this.files().filter(f => !f.isHidden);
   });
 
-  readonly isUploading = signal(false);
-  readonly uploadProgress = signal(0);
+  readonly isUploading = computed(() => {
+    return this.transfers().some(t => t.type === 'upload' && t.status === 'processing');
+  });
+
+  readonly uploadProgress = computed(() => {
+    const active = this.transfers().slice().reverse().find(t => t.type === 'upload' && t.status === 'processing');
+    return active ? active.progress : 0;
+  });
   
   readonly uploadStatusMessage = computed(() => {
     const active = this.transfers().slice().reverse().find(t => t.type === 'upload' && (t.status === 'processing' || t.status === 'success'));
@@ -106,8 +113,14 @@ export class DriveStore {
     return 'Fazendo upload...';
   });
 
-  readonly isDownloading = signal(false);
-  readonly downloadProgress = signal(0);
+  readonly isDownloading = computed(() => {
+    return this.transfers().some(t => t.type === 'download' && t.status === 'processing');
+  });
+
+  readonly downloadProgress = computed(() => {
+    const active = this.transfers().slice().reverse().find(t => t.type === 'download' && t.status === 'processing');
+    return active ? active.progress : 0;
+  });
   private readonly kasumi = inject(KasumiCryptoService);
 
   readonly storageProvider = signal<'local' | 'google_drive'>((localStorage.getItem('preferred_storage_provider') as 'local' | 'google_drive') || 'local');
@@ -152,9 +165,6 @@ export class DriveStore {
   }>();
 
   private pausedTransfers = new Set<string>();
-  private activeSubscriptions = new Map<string, Subscription>();
-  private activeRejectors = new Map<string, (reason?: any) => void>();
-  private transferHistory = new Map<string, { bytes: number, time: number }[]>();
 
   readonly currentTrashFolderFiles = computed(() => {
     const currentId = this.currentFolderId();
@@ -477,11 +487,10 @@ export class DriveStore {
 
   updateTransferProgress(id: string, progress: number, bytesTransferred: number, totalBytes: number) {
     const now = Date.now();
-    let history = this.transferHistory.get(id) || [];
+    let history = this.transfers().find(t => t.id === id)?.history || [];
     
     history.push({ bytes: bytesTransferred, time: now });
     history = history.filter(p => now - p.time <= 2000);
-    this.transferHistory.set(id, history);
 
     let speedStr = 'Calculando...';
     let etaStr = '--:-- restante';
@@ -520,20 +529,13 @@ export class DriveStore {
       speed: speedStr, 
       eta: etaStr,
       bytesTransferred,
-      totalBytes
+      totalBytes,
+      history
     });
-
-    // Sincroniza com a barra de progresso global se for o upload ativo
-    const t = this.transfers().find(item => item.id === id);
-    if (t && t.type === 'upload' && t.status === 'processing') {
-      this.uploadProgress.set(progress);
-    }
   }
 
   async uploadFile(file: File, folderId: number | null = this.currentFolderId()): Promise<void> {
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
-    this.isUploading.set(true);
-    this.uploadProgress.set(0);
 
     try {
       await this._doUpload(file, folderId);
@@ -562,8 +564,6 @@ export class DriveStore {
       }
     } finally {
       await new Promise(r => setTimeout(r, 1500));
-      this.isUploading.set(false);
-      this.uploadProgress.set(0);
     }
   }
 
@@ -583,13 +583,13 @@ export class DriveStore {
 
     let fileToEncrypt = originalFile;
 
-    if (isVideo && this.convertIncompatibleVideos()) {
+    if (isVideo && environment.logs.ffmpeg !== undefined) {
        const isSupported = this.videoTranscoder.isFormatNativelySupported(originalFile);
        if (!isSupported) {
-          const conversionMode = this.incompatibleVideoConversionMode();
+          const conversionMode = 'pure';
           try {
             this.updateTransfer(transferId, { statusMessage: 'Convertendo vídeo incompatível...' });
-            const proxyFile = await this.videoTranscoder.transcodeToProxy(originalFile, conversionMode, (p, statusMessage) => {
+            const proxyFile = await this.videoTranscoder.transcodeToProxy(originalFile, conversionMode, (p: number, statusMessage: string) => {
               this.updateTransfer(transferId, { statusMessage: statusMessage });
               this.updateTransferProgress(transferId, Math.round(p * 100), 0, 100);
             });
@@ -616,7 +616,6 @@ export class DriveStore {
       statusMessage: isHiddenProxy ? 'Enviando versão otimizada...' : 'Enviando original...',
       progress: 0
     });
-    this.uploadProgress.set(0);
 
     try {
       const encName = await this.cryptoService.encryptName(file.name);
@@ -715,8 +714,7 @@ export class DriveStore {
       }
 
       const uploadResPromise = new Promise<any>((resolve, reject) => {
-        this.activeRejectors.set(uploadId, reject);
-        const sub = this.http.post<any>(
+        this.http.post<any>(
           'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
           new Blob([bodyUint8]),
           {
@@ -731,7 +729,6 @@ export class DriveStore {
           next: (event: any) => {
             if (event.type === HttpEventType.UploadProgress) {
               const percent = Math.round((event.loaded / event.total) * 100);
-              this.uploadProgress.set(percent);
               this.updateTransferProgress(transferId, percent, event.loaded, event.total);
             } else if (event.type === HttpEventType.Response) {
               resolve(event.body);
@@ -739,7 +736,6 @@ export class DriveStore {
           },
           error: (err) => reject(err)
         });
-        this.activeSubscriptions.set(uploadId, sub);
       });
 
       let uploadRes;
@@ -750,9 +746,6 @@ export class DriveStore {
           return;
         }
         throw e;
-      } finally {
-        this.activeSubscriptions.delete(uploadId);
-        this.activeRejectors.delete(uploadId);
       }
 
       if (this.pausedTransfers.has(transferId)) {
@@ -817,9 +810,6 @@ export class DriveStore {
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
     if (file.isFolder || !file.encryptedFdk) return;
 
-    this.isDownloading.set(true);
-    this.downloadProgress.set(0);
-
     const transferId = 'dl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
     this.addTransfer({
       id: transferId,
@@ -830,7 +820,6 @@ export class DriveStore {
     });
 
     const setProgress = (prog: number, bytes: number, total: number) => {
-      this.downloadProgress.set(prog);
       this.updateTransferProgress(transferId, prog, bytes, total);
     };
 
@@ -888,8 +877,6 @@ export class DriveStore {
         this.activeDownloads.delete(transferId);
       }
       throw e;
-    } finally {
-      this.isDownloading.set(false);
     }
   }
 
@@ -897,33 +884,22 @@ export class DriveStore {
     const { file, meta, fdk } = state;
 
     const setProgress = (prog: number, bytes: number, total: number) => {
-      this.downloadProgress.set(prog);
       this.updateTransferProgress(transferId, prog, bytes, total);
     };
 
-    const dlPromise = new Promise<Blob>((resolve, reject) => {
-      this.activeRejectors.set(transferId, reject);
-      const sub = this.driveService.downloadExternalFile(
-        `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`,
-        meta.access_token
-      ).subscribe({
-        next: (blob) => resolve(blob),
-        error: (err) => reject(err)
-      });
-      this.activeSubscriptions.set(transferId, sub);
-    });
-
     let encryptedBlob;
     try {
-      encryptedBlob = await dlPromise;
+      encryptedBlob = await firstValueFrom(
+        this.driveService.downloadExternalFile(
+          `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`,
+          meta.access_token
+        )
+      );
     } catch (e: any) {
       if (e.message === 'PAUSED') {
         return;
       }
       throw e;
-    } finally {
-      this.activeSubscriptions.delete(transferId);
-      this.activeRejectors.delete(transferId);
     }
 
     if (this.pausedTransfers.has(transferId)) {
@@ -1013,34 +989,7 @@ export class DriveStore {
     this.pausedTransfers.add(id);
     this.updateTransfer(id, { status: 'paused', speed: 'Pausado', eta: '--:--' });
 
-    // Cancel active Google Drive HTTP request if applicable
-    // id in pausedTransfers is transferId. But activeSubscriptions are mapped to uploadId (which is transferId + suffix) for uploads, and transferId for downloads.
-    const sub = this.activeSubscriptions.get(id);
-    if (sub) {
-      sub.unsubscribe();
-      this.activeSubscriptions.delete(id);
-    }
-    const rej = this.activeRejectors.get(id);
-    if (rej) {
-      rej(new Error('PAUSED'));
-      this.activeRejectors.delete(id);
-    }
-
-    // Now for uploads which use uploadId
-    for (const uploadId of this.activeUploads.keys()) {
-      if (uploadId.startsWith(id)) {
-        const upSub = this.activeSubscriptions.get(uploadId);
-        if (upSub) {
-          upSub.unsubscribe();
-          this.activeSubscriptions.delete(uploadId);
-        }
-        const upRej = this.activeRejectors.get(uploadId);
-        if (upRej) {
-          upRej(new Error('PAUSED'));
-          this.activeRejectors.delete(uploadId);
-        }
-      }
-    }
+    // Abort active local downloads by marking as paused. Google Drive / monolithic downloads will just run to completion and drop.
   }
 
   async resumeUpload(id: string) {
@@ -1174,7 +1123,6 @@ export class DriveStore {
     this.updateTransfer(id, { status: 'processing', speed: 'Calculando...', eta: '--:--' });
 
     try {
-      this.isDownloading.set(true);
       if (state.isGoogleDrive) {
         await this.runGoogleDriveDownload(id, state);
       } else {
@@ -1185,7 +1133,7 @@ export class DriveStore {
         this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha no download' });
       }
     } finally {
-      this.isDownloading.set(false);
+      // isDownloading will be updated automatically by computed
     }
   }
 

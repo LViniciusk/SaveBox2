@@ -1,7 +1,7 @@
 import { Injectable, inject, signal, computed } from '@angular/core';
 import { HttpClient, HttpContext } from '@angular/common/http';
 import { Router } from '@angular/router';
-import { Observable, of, catchError, map, tap, switchMap } from 'rxjs';
+import { Observable, of, catchError, map, tap, switchMap, firstValueFrom } from 'rxjs';
 import { AppStateService, UserInfo, AppStatus } from '../state/app-state.service';
 import { CryptoService } from '../crypto/crypto.service';
 import { environment } from '../../../environments/environment';
@@ -94,7 +94,7 @@ export class AuthService {
     window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   }
 
-  handleOAuthCallback(fragment: string): void {
+  async handleOAuthCallback(fragment: string): Promise<void> {
     const params = new URLSearchParams(fragment);
     const idToken = params.get('id_token');
     const state = params.get('state');
@@ -113,33 +113,32 @@ export class AuthService {
     this._loading.set(true);
     this._error.set(null);
 
-    this.http
-      .post<GoogleLoginResponse>(`${environment.apiUrl}/api/auth/google`, {
-        id_token: idToken,
-        nonce: state,
-      }, { withCredentials: true })
-      .subscribe({
-        next: (res) => {
-          this.jwtToken = res.token;
-          const userInfo = this.decodeUserFromIdToken(res.token);
-          
-          // Extrair a flag real do JWT
-          const isVaultInitialized = this.isVaultInitializedFromToken(res.token);
+    try {
+      const res = await firstValueFrom(
+        this.http.post<GoogleLoginResponse>(`${environment.apiUrl}/api/auth/google`, {
+          id_token: idToken,
+          nonce: state,
+        }, { withCredentials: true })
+      );
+      
+      this.jwtToken = res.token;
+      const userInfo = this.decodeUserFromIdToken(res.token);
+      
+      // Extrair a flag real do JWT
+      const isVaultInitialized = this.isVaultInitializedFromToken(res.token);
 
-          this.appState.login(userInfo, isVaultInitialized);
+      this.appState.login(userInfo, isVaultInitialized);
 
-          this._loading.set(false);
-          this.router.navigate([isVaultInitialized ? '/drive/home' : '/drive/setup']);
-        },
-        error: (err) => {
-          console.error('[AuthService] Google login failed:', err);
-          this._error.set(
-            err.error?.error || 'Falha na autenticação com Google.',
-          );
-          this._loading.set(false);
-          this.router.navigate(['/login']);
-        },
-      });
+      this._loading.set(false);
+      this.router.navigate([isVaultInitialized ? '/drive/home' : '/drive/setup']);
+    } catch (err: any) {
+      console.error('[AuthService] Google login failed:', err);
+      this._error.set(
+        err.error?.error || 'Falha na autenticação com Google.',
+      );
+      this._loading.set(false);
+      this.router.navigate(['/login']);
+    }
   }
 
   private decodeUserFromIdToken(idToken: string): UserInfo {
@@ -182,23 +181,24 @@ export class AuthService {
     }
   }
 
-  updateProfile(name: string, avatarUrl: string): Promise<any> {
-    return new Promise((resolve, reject) => {
-      this.http.put(`${environment.apiUrl}/users/me/profile`, {
+  async updateProfile(name: string, avatarUrl: string): Promise<any> {
+    try {
+      const res = await firstValueFrom(this.http.put(`${environment.apiUrl}/users/me/profile`, {
         full_name: name,
         avatar_url: avatarUrl
-      }, { withCredentials: true }).subscribe({
-        next: (res) => {
-          // Since the JWT token contains the old name/picture, 
-          // we might need to refresh the token. Let's just call restoreSession()
-          this.restoreSession().subscribe({
-            next: () => resolve(res),
-            error: (err) => resolve(res) // resolve anyway, as the DB update succeeded
-          });
-        },
-        error: (err) => reject(err)
-      });
-    });
+      }, { withCredentials: true }));
+      
+      // Since the JWT token contains the old name/picture, 
+      // we might need to refresh the token. Let's just call restoreSession()
+      try {
+        await firstValueFrom(this.restoreSession());
+      } catch (err) {
+        // ignore restore error, as the DB update succeeded
+      }
+      return res;
+    } catch (err) {
+      throw err;
+    }
   }
 
   uploadProfilePic(file: File): Observable<any> {
@@ -209,24 +209,23 @@ export class AuthService {
     );
   }
 
-  linkGoogleDrive(code: string, state: string): void {
+  async linkGoogleDrive(code: string, state: string): Promise<void> {
     this._loading.set(true);
     this._error.set(null);
 
-    this.http.post(`${environment.apiUrl}/api/storage/google/link`, {
-      auth_code: code,
-      state: state
-    }, { withCredentials: true }).subscribe({
-      next: () => {
-        this._loading.set(false);
-        this.router.navigate(['/drive/home'], { queryParams: { drive_linked: 'success' } });
-      },
-      error: (err) => {
-        console.error('[AuthService] Google Drive link failed:', err);
-        this._error.set(err.error?.error || 'Falha ao vincular o Google Drive.');
-        this._loading.set(false);
-      }
-    });
+    try {
+      await firstValueFrom(this.http.post(`${environment.apiUrl}/api/storage/google/link`, {
+        auth_code: code,
+        state: state
+      }, { withCredentials: true }));
+      
+      this._loading.set(false);
+      this.router.navigate(['/drive/home'], { queryParams: { drive_linked: 'success' } });
+    } catch (err: any) {
+      console.error('[AuthService] Google Drive link failed:', err);
+      this._error.set(err.error?.error || 'Falha ao vincular o Google Drive.');
+      this._loading.set(false);
+    }
   }
 
   loginWithCredentials(username: string, password: string):Observable<boolean> {
@@ -259,16 +258,14 @@ export class AuthService {
     this.appState.logout();
 
     if (token) {
-      this.http
-        .post(
-          `${environment.apiUrl}/logout`,
-          {},
-          { 
-            headers: { Authorization: `Bearer ${token}` },
-            withCredentials: true 
-          }
-        )
-        .subscribe({ error: () => {} });
+      firstValueFrom(this.http.post(
+        `${environment.apiUrl}/logout`,
+        {},
+        { 
+          headers: { Authorization: `Bearer ${token}` },
+          withCredentials: true 
+        }
+      )).catch(() => {});
     }
 
     this.router.navigate(['/login']);
@@ -282,16 +279,14 @@ export class AuthService {
     this.appState.logout();
 
     if (token) {
-      this.http
-        .post(
-          `${environment.apiUrl}/logout/global`,
-          {},
-          { 
-            headers: { Authorization: `Bearer ${token}` },
-            withCredentials: true 
-          }
-        )
-        .subscribe({ error: () => {} });
+      firstValueFrom(this.http.post(
+        `${environment.apiUrl}/logout/global`,
+        {},
+        { 
+          headers: { Authorization: `Bearer ${token}` },
+          withCredentials: true 
+        }
+      )).catch(() => {});
     }
 
     this.router.navigate(['/login']);

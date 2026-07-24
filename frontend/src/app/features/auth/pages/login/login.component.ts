@@ -1,5 +1,7 @@
-import { Component, inject, afterNextRender, signal, OnInit } from '@angular/core';
+import { Component, inject, afterNextRender, signal, OnInit, effect, untracked } from '@angular/core';
 import { Router, ActivatedRoute } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { firstValueFrom } from 'rxjs';
 import { AuthService } from '../../../../core/auth/auth.service';
 import { AppStateService, AppStatus } from '../../../../core/state/app-state.service';
 import { FormsModule } from '@angular/forms';
@@ -491,6 +493,8 @@ export class LoginComponent implements OnInit {
 
   localError = signal<string | null>(null);
 
+  private readonly queryParams = toSignal(inject(ActivatedRoute).queryParams);
+
   constructor() {
     if (this.appState.isAuthenticated()) {
       this.router.navigate(['/drive']);
@@ -500,16 +504,20 @@ export class LoginComponent implements OnInit {
     afterNextRender(() => {
       requestAnimationFrame(() => this.cardVisible.set(true));
     });
+
+    effect(() => {
+      const params = this.queryParams();
+      if (params && params['token']) {
+        untracked(() => {
+          this.verificationCode.set(params['token']);
+          this.view.set('verify');
+          this.doVerify();
+        });
+      }
+    });
   }
 
   ngOnInit() {
-    this.route.queryParams.subscribe(params => {
-      if (params['token']) {
-        this.verificationCode.set(params['token']);
-        this.view.set('verify');
-        this.doVerify();
-      }
-    });
   }
 
   signInWithGoogle(): void {
@@ -535,7 +543,7 @@ export class LoginComponent implements OnInit {
     reader.readAsDataURL(file);
   }
 
-  finishAvatarUpload() {
+  async finishAvatarUpload() {
     this.localError.set(null);
     const file = this.selectedAvatarFile();
 
@@ -546,85 +554,75 @@ export class LoginComponent implements OnInit {
     }
 
     this.isLoading.set(true);
-    this.authService.uploadProfilePic(file).subscribe({
-      next: () => {
-        this.isLoading.set(false);
-        const isVaultInit = this.appState.status() !== AppStatus.Onboarding;
-        this.router.navigate([isVaultInit ? '/drive/home' : '/drive/setup']);
-      },
-      error: (err) => {
-        this.isLoading.set(false);
-        this.localError.set(err.error?.error || 'Erro ao enviar foto.');
-      }
-    });
+    try {
+      await firstValueFrom(this.authService.uploadProfilePic(file));
+      this.isLoading.set(false);
+      const isVaultInit = this.appState.status() !== AppStatus.Onboarding;
+      this.router.navigate([isVaultInit ? '/drive/home' : '/drive/setup']);
+    } catch (err: any) {
+      this.isLoading.set(false);
+      this.localError.set(err.error?.error || 'Erro ao enviar foto.');
+    }
   }
 
-  doRegister() {
+  async doRegister() {
     this.localError.set(null);
     this.isLoading.set(true);
-    this.authService.register(this.username(), this.email(), this.password()).subscribe({
-      next: () => {
-        this.isLoading.set(false);
-        this.view.set('verify');
-      },
-      error: (err) => {
-        this.isLoading.set(false);
-        this.localError.set(err.error?.error || 'Erro ao registrar.');
-        this.view.set('register');
-      }
-    });
+    try {
+      await firstValueFrom(this.authService.register(this.username(), this.email(), this.password()));
+      this.isLoading.set(false);
+      this.view.set('verify');
+    } catch (err: any) {
+      this.isLoading.set(false);
+      this.localError.set(err.error?.error || 'Erro ao registrar.');
+      this.view.set('register');
+    }
   }
 
-  doVerify() {
+  async doVerify() {
     this.localError.set(null);
     if (!this.verificationCode()) return;
     this.isLoading.set(true);
-    this.authService.verifyEmail(this.verificationCode()).subscribe({
-      next: () => {
-        if (this.username() && this.password()) {
-          this.authService.loginWithCredentials(this.username(), this.password()).subscribe({
-            next: () => {
-              this.isLoading.set(false);
-              this.view.set('avatar');
-            },
-            error: () => {
-              this.isLoading.set(false);
-              this.view.set('login');
-            }
-          });
-        } else {
+    try {
+      await firstValueFrom(this.authService.verifyEmail(this.verificationCode()));
+      if (this.username() && this.password()) {
+        try {
+          await firstValueFrom(this.authService.loginWithCredentials(this.username(), this.password()));
+          this.isLoading.set(false);
+          this.view.set('avatar');
+        } catch {
           this.isLoading.set(false);
           this.view.set('login');
-          this.localError.set('Conta ativada com sucesso! Por favor, faça login.');
         }
-      },
-      error: (err) => {
+      } else {
         this.isLoading.set(false);
-        this.localError.set(err.error?.error || 'Código inválido ou expirado.');
+        this.view.set('login');
+        this.localError.set('Conta ativada com sucesso! Por favor, faça login.');
       }
-    });
+    } catch (err: any) {
+      this.isLoading.set(false);
+      this.localError.set(err.error?.error || 'Código inválido ou expirado.');
+    }
   }
 
-  doLogin() {
+  async doLogin() {
     this.localError.set(null);
     if (!this.username() || !this.password()) return;
 
     this.isLoading.set(true);
-    this.authService.loginWithCredentials(this.username(), this.password()).subscribe({
-      next: () => {
-        this.isLoading.set(false);
-        const isVaultInit = this.appState.status() !== AppStatus.Onboarding;
-        this.router.navigate([isVaultInit ? '/drive/home' : '/drive/setup']);
-      },
-      error: (err) => {
-        this.isLoading.set(false);
-        if (err.status === 403) {
-          this.localError.set('Conta não verificada. Insira o código enviado pro e-mail.');
-          this.view.set('verify');
-        } else {
-          this.localError.set(err.error?.error || 'Credenciais inválidas.');
-        }
+    try {
+      await firstValueFrom(this.authService.loginWithCredentials(this.username(), this.password()));
+      this.isLoading.set(false);
+      const isVaultInit = this.appState.status() !== AppStatus.Onboarding;
+      this.router.navigate([isVaultInit ? '/drive/home' : '/drive/setup']);
+    } catch (err: any) {
+      this.isLoading.set(false);
+      if (err.status === 403) {
+        this.localError.set('Conta não verificada. Insira o código enviado pro e-mail.');
+        this.view.set('verify');
+      } else {
+        this.localError.set(err.error?.error || 'Credenciais inválidas.');
       }
-    });
+    }
   }
 }

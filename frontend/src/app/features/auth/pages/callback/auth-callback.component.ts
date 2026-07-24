@@ -1,5 +1,6 @@
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, inject, OnInit, effect, untracked } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { AuthService } from '../../../../core/auth/auth.service';
 
 /**
@@ -128,6 +129,18 @@ export class AuthCallbackComponent implements OnInit {
   protected readonly authService = inject(AuthService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly fragment = toSignal(this.route.fragment);
+
+  constructor() {
+    effect(() => {
+      const fragment = this.fragment();
+      if (fragment !== undefined) {
+        untracked(() => {
+          this.handleFragment(fragment);
+        });
+      }
+    });
+  }
 
   ngOnInit() {
     const queryParams = this.route.snapshot.queryParams;
@@ -138,23 +151,24 @@ export class AuthCallbackComponent implements OnInit {
       this.authService.linkGoogleDrive(queryParams['code'], queryParams['state']);
       return;
     }
+  }
 
-    this.route.fragment.subscribe((fragment) => {
-      console.log("[AuthCallback] Fragment received:", fragment);
+  private handleFragment(fragment: string | null) {
+    console.log("[AuthCallback] Fragment received:", fragment);
 
-      if (fragment) {
-        this.authService.handleOAuthCallback(fragment);
+    if (fragment) {
+      this.authService.handleOAuthCallback(fragment);
+    } else {
+      const queryParams = this.route.snapshot.queryParams;
+      // Fallback for cases where fragment is empty but data might be in queryParams
+      if (Object.keys(queryParams).length > 0) {
+        const simulatedFragment = new URLSearchParams(queryParams as any).toString();
+        this.authService.handleOAuthCallback(simulatedFragment);
       } else {
-        // Fallback for cases where fragment is empty but data might be in queryParams
-        if (Object.keys(queryParams).length > 0) {
-          const simulatedFragment = new URLSearchParams(queryParams).toString();
-          this.authService.handleOAuthCallback(simulatedFragment);
-        } else {
-          console.error("[AuthCallback] Fragment is empty!");
-          this.authService.handleOAuthCallback('');
-        }
+        console.error("[AuthCallback] Fragment is empty!");
+        this.authService.handleOAuthCallback('');
       }
-    });
+    }
   }
 
   goToLogin() {

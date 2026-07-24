@@ -385,7 +385,7 @@ import { CommonModule } from '@angular/common';
 
           <!-- Image Player Modal -->
           @if (activeImageFile()) {
-            <app-image-player [file]="activeImageFile()!" [playlist]="activeImagePlaylist()" [isVideoPlaying]="isVideoReady()" [isVideoLoading]="!!activeVideoFile() && !isVideoReady()" (fileChange)="activeImageFile.set($event)" (close)="activeImageFile.set(null); activeVideoFile.set(null); isVideoReady.set(false)" (closeVideo)="activeVideoFile.set(null); isVideoReady.set(false)" (playVideo)="activeVideoFile.set($event)" />
+            <app-image-player [file]="activeImageFile()!" [playlist]="activeImagePlaylist()" [isVideoPlaying]="isVideoReady()" [isVideoLoading]="!!activeVideoFile() && !isVideoReady()" (fileChange)="activeImageFile.set($event)" (close)="activeImageFile.set(null); activeVideoFile.set(null); isVideoReady.set(false)" (closeVideo)="activeVideoFile.set(null); isVideoReady.set(false)" (playVideo)="activeVideoFile.set($event)" (videoReady)="isVideoReady.set(true)" />
           }
 
           <!-- Video Player Modal -->
