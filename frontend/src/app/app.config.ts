@@ -13,9 +13,11 @@ import { routes } from './app.routes';
 import { jwtInterceptor } from './core/interceptors/jwt.interceptor';
 import { errorInterceptor } from './core/interceptors/error.interceptor';
 import { AuthService } from './core/auth/auth.service';
+import { ThemeService } from './core/theme/theme.service';
 
 export function initializeApp() {
   const authService = inject(AuthService);
+  inject(ThemeService);
   return () => firstValueFrom(authService.restoreSession());
 }
 

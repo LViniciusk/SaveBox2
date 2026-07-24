@@ -1,0 +1,264 @@
+import { CommonModule } from '@angular/common';
+import { Component, inject, input, signal } from '@angular/core';
+import { DriveStore, TransferItem } from '../../state/drive.store';
+import { DriveView } from '../../state/drive.types';
+
+@Component({
+  selector: 'app-transfer-panel',
+  standalone: true,
+  imports: [CommonModule],
+  template: `
+    @if (currentView() === 'transfers') {
+      <div class="transfers-container">
+        <div class="transfers-header">
+          <h2>Fila de Transferências</h2>
+          @if (driveStore.transfers().length > 0) {
+            <button class="clear-completed-btn" (click)="driveStore.clearCompletedTransfers()">
+              <span class="material-symbols-outlined">clear_all</span>
+              Limpar Concluídos
+            </button>
+          }
+        </div>
+
+        @if (driveStore.transfers().length === 0) {
+          <div class="transfers-empty">
+            <span class="material-symbols-outlined empty-icon">check_circle</span>
+            <p>Nenhuma transferência pendente ou concluída no momento.</p>
+          </div>
+        } @else {
+          <div class="transfers-list">
+            @for (t of driveStore.transfers(); track t.id) {
+              <div class="transfer-card" [class.error]="t.status === 'error'" [class.success]="t.status === 'success'" [class.paused]="t.status === 'paused'">
+                <div class="transfer-icon-area">
+                  @if (t.type === 'upload') {
+                    <span class="material-symbols-outlined transfer-type-icon upload">upload</span>
+                  } @else {
+                    <span class="material-symbols-outlined transfer-type-icon download">download</span>
+                  }
+                </div>
+
+                <div class="transfer-details">
+                  <div class="transfer-filename" [title]="t.fileName">{{ t.fileName }}</div>
+                  @if (t.statusMessage) {
+                    <div class="transfer-status-message" style="font-size: 11px; color: #666; margin-top: 2px;">{{ t.statusMessage }}</div>
+                  }
+                  <div class="transfer-meta">
+                    <span class="transfer-type-badge">{{ t.type === 'upload' ? 'Upload' : 'Download' }}</span>
+                    <span class="transfer-time">{{ t.timestamp | date:'shortTime' }}</span>
+                    @if (t.status === 'processing') {
+                      <span class="transfer-speed" style="margin-left: 8px; color: #1a73e8; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;">
+                        <span class="material-symbols-outlined" style="font-size: 14px;">speed</span>
+                        {{ t.speed || 'Calculando...' }}
+                      </span>
+                      <span class="transfer-eta" style="margin-left: 8px; color: #5f6368; display: inline-flex; align-items: center; gap: 4px;">
+                        <span class="material-symbols-outlined" style="font-size: 14px;">schedule</span>
+                        {{ t.eta }}
+                      </span>
+                    } @else if (t.status === 'paused') {
+                      <span class="transfer-speed" style="margin-left: 8px; color: #d97706; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;">
+                        <span class="material-symbols-outlined" style="font-size: 14px;">pause</span>
+                        Pausado
+                      </span>
+                    }
+                  </div>
+                  @if (t.status === 'processing' || t.status === 'paused') {
+                    <div class="transfer-progress-bar-container">
+                      <div class="transfer-progress-bar-fill" [style.width.%]="t.progress" [style.background-color]="t.status === 'paused' ? '#d97706' : '#1a73e8'"></div>
+                    </div>
+                  }
+                  @if (t.status === 'error' && t.errorMsg) {
+                    <div class="transfer-error-msg">{{ t.errorMsg }}</div>
+                  }
+                </div>
+
+                <div class="transfer-status-area" style="display: flex; align-items: center; gap: 8px;">
+                  @if (t.status === 'processing') {
+                    <div class="status-indicator processing">
+                      <div class="spinner"></div>
+                      <span>{{ t.progress }}%</span>
+                    </div>
+                    <button class="transfer-control-btn pause" (click)="driveStore.pauseTransfer(t.id)" title="Pausar">
+                      <span class="material-symbols-outlined">pause</span>
+                    </button>
+                  } @else if (t.status === 'paused') {
+                    <div class="status-indicator paused" style="color: #d97706; font-weight: 500; font-size: 13px;">
+                      <span>{{ t.progress }}%</span>
+                    </div>
+                    @if (t.isRecovery) {
+                      <button class="transfer-control-btn resume" (click)="recoveryInput.click()" title="Selecionar arquivo para retomar">
+                        <span class="material-symbols-outlined">folder_open</span>
+                      </button>
+                      <input type="file" #recoveryInput style="display: none" (change)="onRecoverFileSelected($event, t)" />
+                    } @else {
+                      <button class="transfer-control-btn resume" (click)="t.type === 'upload' ? driveStore.resumeUpload(t.id) : driveStore.resumeDownload(t.id)" title="Retomar">
+                        <span class="material-symbols-outlined">play_arrow</span>
+                      </button>
+                    }
+                    <button class="transfer-control-btn cancel" (click)="driveStore.cancelTransfer(t.id)" title="Cancelar e limpar">
+                      <span class="material-symbols-outlined">close</span>
+                    </button>
+                  } @else if (t.status === 'success') {
+                    <div class="status-indicator success">
+                      <span class="material-symbols-outlined">check_circle</span>
+                      <span>Concluido</span>
+                    </div>
+                  } @else if (t.status === 'error') {
+                    <div class="status-indicator error">
+                      <span class="material-symbols-outlined">error</span>
+                      <span>Falhou</span>
+                    </div>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        }
+      </div>
+    }
+
+    @if (driveStore.transfers().length > 0) {
+      <div class="transfers-popup-wrapper">
+        <div class="transfers-popup-header" (click)="togglePopup()">
+          <span class="popup-title">Transferências ({{ driveStore.transfers().length }})</span>
+          <div class="popup-actions">
+            <button class="icon-btn" (click)="$event.stopPropagation(); togglePopup()">
+              <span class="material-symbols-outlined">{{ isTransfersPopupMinimized() ? 'expand_less' : 'expand_more' }}</span>
+            </button>
+          </div>
+        </div>
+        @if (!isTransfersPopupMinimized()) {
+          <div class="transfers-popup-body">
+            @for (t of driveStore.transfers().slice().reverse(); track t.id) {
+              <div class="mini-transfer-item" [class.success]="t.status === 'success'" [class.error]="t.status === 'error'" [class.paused]="t.status === 'paused'">
+                <div class="mini-transfer-icon-wrapper">
+                  @if (t.type === 'upload') {
+                    <span class="material-symbols-outlined mini-icon">upload</span>
+                  } @else {
+                    <span class="material-symbols-outlined mini-icon">download</span>
+                  }
+                </div>
+                <div class="mini-transfer-details">
+                  <div class="mini-transfer-header">
+                    <span class="mini-filename" [title]="t.fileName">{{ t.fileName }}</span>
+                    <span class="mini-status">
+                      @if (t.status === 'processing') {
+                        {{ t.progress }}%
+                      } @else if (t.status === 'success') {
+                        <span class="material-symbols-outlined success-icon">check_circle</span>
+                      } @else if (t.status === 'error') {
+                        <span class="material-symbols-outlined error-icon">error</span>
+                      } @else if (t.status === 'paused') {
+                        <span class="material-symbols-outlined paused-icon">pause</span>
+                      }
+                    </span>
+                  </div>
+                  @if (t.status === 'processing' || t.status === 'paused') {
+                    <div class="mini-progress-track">
+                      <div class="mini-progress-fill" [style.width.%]="t.progress" [style.background-color]="t.status === 'paused' ? '#d97706' : '#1a73e8'"></div>
+                    </div>
+                  }
+                  @if (t.statusMessage && t.status !== 'success') {
+                    <div class="mini-status-msg">{{ t.statusMessage }}</div>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        }
+      </div>
+    }
+  `,
+  styles: [`
+    .transfers-popup-wrapper { position: absolute; bottom: 24px; right: 24px; width: 360px; background: white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 1px 4px rgba(0,0,0,0.1); z-index: 50; display: flex; flex-direction: column; border: 1px solid #dadce0; overflow: hidden; }
+    .transfers-popup-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #323232; color: white; cursor: pointer; user-select: none; }
+    .transfers-popup-header:hover { background: #404040; }
+    .popup-title { font-weight: 500; font-size: 14px; }
+    .popup-actions { display: flex; align-items: center; gap: 8px; }
+    .popup-actions .icon-btn { background: transparent; border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 4px; border-radius: 4px; }
+    .popup-actions .icon-btn:hover { background: rgba(255,255,255,0.1); }
+    .popup-actions .icon-btn span { font-size: 20px; }
+    .transfers-popup-body { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; }
+    .mini-transfer-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #f1f3f4; }
+    .mini-transfer-item:last-child { border-bottom: none; }
+    .mini-transfer-icon-wrapper { color: #5f6368; display: flex; align-items: center; justify-content: center; background: #f1f3f4; border-radius: 50%; width: 32px; height: 32px; flex-shrink: 0; }
+    .mini-transfer-icon-wrapper .mini-icon { font-size: 18px; }
+    .mini-transfer-item.success .mini-transfer-icon-wrapper { background: #e6f4ea; color: #137333; }
+    .mini-transfer-item.error .mini-transfer-icon-wrapper { background: #fce8e6; color: #c5221f; }
+    .mini-transfer-details { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+    .mini-transfer-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .mini-filename { font-size: 13px; font-weight: 500; color: #202124; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mini-status { font-size: 12px; color: #5f6368; display: flex; align-items: center; }
+    .mini-status .success-icon { color: #137333; font-size: 16px; }
+    .mini-status .error-icon { color: #c5221f; font-size: 16px; }
+    .mini-status .paused-icon { color: #d97706; font-size: 16px; }
+    .mini-progress-track { width: 100%; height: 4px; background: #e2e8f0; border-radius: 2px; overflow: hidden; margin-top: 2px; }
+    .mini-progress-fill { height: 100%; background: #1a73e8; transition: width 0.2s ease-out; }
+    .mini-status-msg { font-size: 11px; color: #5f6368; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .transfers-container { padding: 0 24px 24px; font-family: 'Roboto', sans-serif; }
+    .transfers-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; }
+    .transfers-header h2 { margin: 0; font-size: 20px; font-weight: 500; color: #0f172a; }
+    .clear-completed-btn { display: flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 20px; padding: 6px 16px; font-size: 13px; font-weight: 500; color: #334155; cursor: pointer; transition: background 150ms, border-color 150ms; }
+    .clear-completed-btn:hover { background: #e2e8f0; border-color: #94a3b8; }
+    .clear-completed-btn .material-symbols-outlined { font-size: 18px; }
+    .transfers-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 0; color: #64748b; text-align: center; }
+    .transfers-empty .empty-icon { font-size: 48px; color: #94a3b8; margin-bottom: 12px; }
+    .transfers-empty p { margin: 0; font-size: 14px; }
+    .transfers-list { display: flex; flex-direction: column; gap: 12px; }
+    .transfer-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; display: flex; align-items: center; gap: 16px; transition: box-shadow 150ms, border-color 150ms; }
+    .transfer-card:hover { box-shadow: 0 1px 3px rgba(0,0,0,0.05); border-color: #cbd5e1; }
+    .transfer-card.success { background: #f0fdf4; border-color: #bbf7d0; }
+    .transfer-card.error { background: #fef2f2; border-color: #fecaca; }
+    .transfer-icon-area { width: 40px; height: 40px; border-radius: 50%; background: #e2e8f0; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .transfer-card.success .transfer-icon-area { background: #dcfce7; }
+    .transfer-card.error .transfer-icon-area { background: #fee2e2; }
+    .transfer-type-icon { font-size: 20px; }
+    .transfer-type-icon.upload { color: #0b57d0; }
+    .transfer-type-icon.download { color: #0891b2; }
+    .transfer-details { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+    .transfer-filename { font-size: 14px; font-weight: 500; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .transfer-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #64748b; }
+    .transfer-type-badge { background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: 500; }
+    .transfer-card.success .transfer-type-badge { background: #dcfce7; color: #166534; }
+    .transfer-card.error .transfer-type-badge { background: #fee2e2; color: #991b1b; }
+    .transfer-progress-bar-container { width: 100%; height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; margin-top: 4px; }
+    .transfer-progress-bar-fill { height: 100%; background: #1a73e8; border-radius: 3px; transition: width 150ms ease-out; }
+    .transfer-error-msg { font-size: 11px; color: #dc2626; margin-top: 4px; font-weight: 500; }
+    .transfer-card.paused { background: #fffbeb; border-color: #fde68a; }
+    .transfer-card.paused .transfer-icon-area { background: #fef3c7; }
+    .transfer-card.paused .transfer-type-icon { color: #d97706; }
+    .transfer-card.paused .transfer-type-badge { background: #fef3c7; color: #b45309; }
+    .transfer-control-btn { background: transparent; border: none; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #5f6368; transition: background 150ms; }
+    .transfer-control-btn:hover { background: rgba(60, 64, 67, 0.08); color: #202124; }
+    .transfer-control-btn.pause:hover, .transfer-control-btn.cancel:hover { background: #fee2e2; color: #dc2626; }
+    .transfer-control-btn.resume:hover { background: #dcfce7; color: #166534; }
+    .transfer-status-area { display: flex; align-items: center; flex-shrink: 0; }
+    .status-indicator { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
+    .status-indicator.processing { color: #0b57d0; }
+    .status-indicator.success { color: #166534; }
+    .status-indicator.error { color: #991b1b; }
+    .status-indicator .material-symbols-outlined { font-size: 18px; }
+    .spinner { width: 14px; height: 14px; border: 2px solid #e2e8f0; border-top-color: #1a73e8; border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  `],
+})
+export class TransferPanelComponent {
+  readonly currentView = input.required<DriveView>();
+  readonly driveStore = inject(DriveStore);
+  readonly isTransfersPopupMinimized = signal(false);
+
+  togglePopup(): void {
+    this.isTransfersPopupMinimized.update(value => !value);
+  }
+
+  onRecoverFileSelected(event: Event, transfer: TransferItem): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files.length > 0) {
+      const file = input.files[0];
+      this.driveStore.recoverUpload(transfer.id, transfer.pendingData, file).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        alert('Falha ao recuperar upload: ' + message);
+      });
+    }
+    input.value = '';
+  }
+}

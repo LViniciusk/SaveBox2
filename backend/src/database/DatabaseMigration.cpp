@@ -103,14 +103,11 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 id SERIAL PRIMARY KEY,
                 file_id BIGINT UNIQUE REFERENCES files(id) ON DELETE CASCADE,
                 share_uuid VARCHAR(7) UNIQUE NOT NULL,
+                encrypted_name_fdk TEXT DEFAULT '',
                 hourly_changes INT DEFAULT 1,
                 last_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        )");
-
-        w.exec(R"(
-            ALTER TABLE shared_links ADD COLUMN IF NOT EXISTS encrypted_name_fdk TEXT DEFAULT '';
         )");
 
         // TABELA DE CHUNKS ENVIADOS

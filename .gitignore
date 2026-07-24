@@ -40,6 +40,7 @@ docker-volumes/
 *.sln
 *.vcxproj
 *.filters
+Microsoft/
 
 # === Logs e Temporários ===
 *.log
@@ -56,3 +57,15 @@ Desktop.ini
 # === Testes ===
 # Se o Catch2 gerar algum arquivo de reporte de lixo
 _tests/
+
+# Cobertura
+coverage/
+*.gcda
+*.gcno
+*.gcov
+lcov.info
+coverage.xml
+
+
+# repomix
+repomix-output.xml

@@ -949,7 +949,7 @@ crow::response ApiRouter::handle_download_file(const crow::request& req, int fil
     };
 
     try {
-        // file_mgr_->can_user_download(static_cast<uint64_t>(file_id), user_id); // Removed to allow downloading incomplete files (for preview and resume)
+        file_mgr_->can_user_download(static_cast<uint64_t>(file_id), user_id);
         
         size_t total_size = chunker_->get_file_size(file_id);
         std::string range_header = req.get_header_value("Range");
@@ -1737,6 +1737,9 @@ crow::response ApiRouter::handle_get_shared_file(const crow::request& req, const
         constexpr size_t MAX_FULL_DOWNLOAD_SIZE = 4 * 1024 * 1024; // 4MB
 
         if (range_header.empty()) {
+            if (total_size > MAX_FULL_DOWNLOAD_SIZE) {
+                return crow::response(400, R"({"error":"Arquivo muito grande para download sincrono. Use Range requests."})");
+            }
             std::string content = chunker_->read_entire_file(static_cast<uint64_t>(file_id));
             crow::response res(200, content);
             set_share_headers(res, encrypted_name, content.size(), total_size);
