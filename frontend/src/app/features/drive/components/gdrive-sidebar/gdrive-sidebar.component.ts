@@ -1,10 +1,12 @@
 import { Component, HostListener, input, output, signal } from '@angular/core';
 import { QuotaState } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
+import { PinnedFoldersSectionComponent } from '../pinned-folders-section/pinned-folders-section.component';
 
 @Component({
   selector: 'app-gdrive-sidebar',
   standalone: true,
+  imports: [PinnedFoldersSectionComponent],
   template: `
     <nav class="sidebar">
       <div class="new-dropdown-container">
@@ -54,6 +56,12 @@ import { DriveView } from '../../state/drive.types';
           Armazenamento
         </button>
       </div>
+
+      <app-pinned-folders-section
+        [currentFolderId]="currentFolderId()"
+        [locked]="locked()"
+        variant="gdrive"
+        (navigate)="pinnedFolderNavigate.emit($event)" />
 
       <div class="sidebar-divider"></div>
 
@@ -105,11 +113,13 @@ import { DriveView } from '../../state/drive.types';
 })
 export class GDriveSidebarComponent {
   readonly currentView = input.required<DriveView>();
+  readonly currentFolderId = input<number | null>(null);
   readonly locked = input(false);
   readonly quota = input.required<QuotaState>();
   readonly viewChange = output<DriveView>();
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
+  readonly pinnedFolderNavigate = output<number>();
   readonly isNewMenuOpen = signal(false);
 
   toggleNewMenu(): void {

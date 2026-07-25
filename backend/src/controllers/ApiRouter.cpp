@@ -8,6 +8,7 @@
 #include "utils.hpp"
 
 #include <optional>
+#include <unordered_set>
 #include <fstream>
 #include <sstream>
 #include <thread>
@@ -527,6 +528,90 @@ crow::response ApiRouter::handle_create_folder(const crow::request& req) {
         }
         if (msg == "FOLDER_ALREADY_EXISTS") {
             return crow::response(409, R"({"error":"Uma pasta com este nome ja existe neste diretorio"})");
+        }
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_get_pinned_folders(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+
+    try {
+        crow::json::wvalue body;
+        std::vector<crow::json::wvalue> folders;
+        for (const auto& pin : folder_mgr_->get_pinned_folders(*user_id_opt)) {
+            crow::json::wvalue item;
+            item["folder_id"] = pin.folder_id;
+            item["position"] = pin.position;
+            folders.push_back(std::move(item));
+        }
+        body["folders"] = std::move(folders);
+        return crow::response(200, body);
+    } catch (const std::exception&) {
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_pin_folder(const crow::request& req, int folder_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    if (folder_id <= 0) return crow::response(404, R"({"error":"Pasta nao encontrada"})");
+
+    try {
+        folder_mgr_->pin_folder(static_cast<uint64_t>(folder_id), *user_id_opt);
+        return crow::response(204);
+    } catch (const std::exception& e) {
+        const std::string msg = e.what();
+        if (msg == "FORBIDDEN") return crow::response(403, R"({"error":"Proibido"})");
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Pasta nao encontrada"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_unpin_folder(const crow::request& req, int folder_id) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    if (folder_id <= 0) return crow::response(404, R"({"error":"Pasta nao encontrada"})");
+
+    try {
+        folder_mgr_->unpin_folder(static_cast<uint64_t>(folder_id), *user_id_opt);
+        return crow::response(204);
+    } catch (const std::exception& e) {
+        const std::string msg = e.what();
+        if (msg == "FORBIDDEN") return crow::response(403, R"({"error":"Proibido"})");
+        if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Pasta nao encontrada"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
+crow::response ApiRouter::handle_reorder_pinned_folders(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("folder_ids") || body["folder_ids"].t() != crow::json::type::List) {
+        return crow::response(400, R"({"error":"folder_ids deve ser um array"})");
+    }
+
+    std::vector<uint64_t> folder_ids;
+    std::unordered_set<uint64_t> seen;
+    try {
+        for (const auto& item : body["folder_ids"]) {
+            if (item.t() != crow::json::type::Number || item.i() <= 0) {
+                return crow::response(400, R"({"error":"folder_ids contem tipo invalido"})");
+            }
+            const auto folder_id = static_cast<uint64_t>(item.i());
+            if (!seen.insert(folder_id).second) {
+                return crow::response(400, R"({"error":"folder_ids nao pode conter duplicados"})");
+            }
+            folder_ids.push_back(folder_id);
+        }
+        folder_mgr_->reorder_pinned_folders(*user_id_opt, folder_ids);
+        return crow::response(204);
+    } catch (const std::exception& e) {
+        if (std::string(e.what()) == "BAD_REQUEST") {
+            return crow::response(400, R"({"error":"A ordem deve representar exatamente as pastas fixadas"})");
         }
         return crow::response(500, R"({"error":"Erro interno"})");
     }
@@ -2168,6 +2253,30 @@ void ApiRouter::setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware
         auto res = handle_create_folder(req);
         res.set_header("Content-Type", "application/json");
         return res;
+    });
+
+    CROW_ROUTE(app, "/folders/pinned").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) {
+        auto res = handle_get_pinned_folders(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/folders/pinned/order").methods(crow::HTTPMethod::Put)
+    ([this](const crow::request& req) {
+        auto res = handle_reorder_pinned_folders(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/folders/<int>/pin").methods(crow::HTTPMethod::Put)
+    ([this](const crow::request& req, int folder_id) {
+        return handle_pin_folder(req, folder_id);
+    });
+
+    CROW_ROUTE(app, "/folders/<int>/pin").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req, int folder_id) {
+        return handle_unpin_folder(req, folder_id);
     });
 
     CROW_ROUTE(app, "/files").methods(crow::HTTPMethod::Post)

@@ -13,6 +13,7 @@ import { DefaultShellComponent } from '../../layouts/default-shell/default-shell
 import { ThemeService } from '../../../../core/theme/theme.service';
 import { DriveView } from '../../state/drive.types';
 import { CommonModule } from '@angular/common';
+import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 
 /**
  * Main vault page — Google Drive clone layout.
@@ -34,26 +35,39 @@ import { CommonModule } from '@angular/common';
 @Component({
   selector: 'app-vault-home',
   standalone: true,
+  providers: [PinnedFoldersStore],
   imports: [GDriveShellComponent, DefaultShellComponent, UnlockModalComponent, VideoPlayerComponent, ImagePlayerComponent, ShareModalComponent, CommonModule],
   template: `
     @if (themeService.theme() === 'default') {
       <app-default-shell
         [currentView]="currentView()"
+        [currentFolderId]="driveStore.currentFolderId()"
+        [currentPath]="driveStore.currentPath()"
+        [canGoBack]="driveStore.canGoBack()"
+        [canGoForward]="driveStore.canGoForward()"
+        [canGoUp]="driveStore.canGoUp()"
         [locked]="appState.isLocked()"
         [quota]="driveStore.quota()"
         (viewChange)="onViewChange($event)"
         (createFolderRequested)="createNewFolder()"
         (uploadFileRequested)="openFilePicker()"
         (unlockRequested)="isUnlockModalOpen.set(true)"
+        (lockRequested)="lockDrive()"
+        (backRequested)="driveStore.goBack()"
+        (forwardRequested)="driveStore.goForward()"
+        (upRequested)="driveStore.navigateUp()"
+        (addressNavigate)="onAddressNavigate($event)"
         (videoSelected)="activeVideoFile.set($event)"
         (imageSelected)="onImageSelected($event)"
         (shareRequested)="onShareRequested($event)"
+        (pinnedFolderNavigate)="onPinnedFolderNavigate($event)"
         (emptyTrashRequested)="onEmptyTrash()">
         <ng-container *ngTemplateOutlet="shellContent"></ng-container>
       </app-default-shell>
     } @else {
       <app-gdrive-shell
         [currentView]="currentView()"
+        [currentFolderId]="driveStore.currentFolderId()"
         [locked]="appState.isLocked()"
         [quota]="driveStore.quota()"
         (viewChange)="onViewChange($event)"
@@ -63,13 +77,14 @@ import { CommonModule } from '@angular/common';
         (videoSelected)="activeVideoFile.set($event)"
         (imageSelected)="onImageSelected($event)"
         (shareRequested)="onShareRequested($event)"
+        (pinnedFolderNavigate)="onPinnedFolderNavigate($event)"
         (emptyTrashRequested)="onEmptyTrash()">
         <ng-container *ngTemplateOutlet="shellContent"></ng-container>
       </app-gdrive-shell>
     }
 
     <ng-template #shellContent>
-      <input type="file" #fileInput style="display: none" (change)="onFileSelected($event)" />
+      <input type="file" #fileInput multiple style="display: none" (change)="onFilesSelected($event)" />
       
                 <!-- Unlock Modal (visible when unlocked requested) -->
                 @if (isUnlockModalOpen()) {
@@ -279,6 +294,7 @@ export class VaultHomeComponent implements OnInit {
   protected readonly cryptoService = inject(CryptoService);
   protected readonly driveStore = inject(DriveStore);
   protected readonly themeService = inject(ThemeService);
+  protected readonly pinnedFoldersStore = inject(PinnedFoldersStore);
   readonly dialogService = inject(DialogService);
   readonly AppStatus = AppStatus;
 
@@ -297,6 +313,7 @@ export class VaultHomeComponent implements OnInit {
   ngOnInit() {
     this.driveStore.loadQuota();
     this.driveStore.loadTree();
+    void this.pinnedFoldersStore.load();
   }
 
   openFilePicker(): void {
@@ -307,6 +324,41 @@ export class VaultHomeComponent implements OnInit {
     this.currentView.set(view);
     if (view === 'drive') this.driveStore.navigateTo(null);
     if (view === 'trash') this.driveStore.loadTrash();
+  }
+
+  onPinnedFolderNavigate(folderId: number): void {
+    if (this.appState.isLocked() || !this.pinnedFoldersStore.pinnedFolders().some(folder => folder.id === folderId && folder.available)) return;
+    this.currentView.set('drive');
+    this.driveStore.navigateTo(folderId);
+  }
+
+  onAddressNavigate(value: string): void {
+    if (this.appState.isLocked()) return;
+
+    const parts = value
+      .split(/[>/\\]/)
+      .map(part => part.trim())
+      .filter(Boolean)
+      .filter(part => !['este computador', 'nanika', 'meu drive'].includes(part.toLowerCase()));
+
+    let parentId: number | null = null;
+    for (const part of parts) {
+      const folder = this.driveStore.files().find(file =>
+        file.isFolder && (file.parentId ?? null) === parentId && file.decryptedName?.toLowerCase() === part.toLowerCase()
+      );
+      if (!folder) return;
+      parentId = folder.id;
+    }
+
+    this.currentView.set('drive');
+    this.driveStore.navigateTo(parentId);
+  }
+
+  lockDrive(): void {
+    this.cryptoService.lockVault();
+    this.driveStore.clearDecryptedNames();
+    this.driveStore.navigateTo(null);
+    this.appState.lock();
   }
 
   readonly activeVideoFile = signal<DriveFile | null>(null);
@@ -346,23 +398,24 @@ export class VaultHomeComponent implements OnInit {
     }
   }
 
-  async onFileSelected(event: Event) {
-    if (this.appState.isLocked()) return;
-
+  async onFilesSelected(event: Event) {
     const input = event.target as HTMLInputElement;
-    if (!input.files || input.files.length === 0) return;
+    const files = Array.from(input.files ?? []);
+    input.value = '';
 
-    const file = input.files[0];
+    if (this.appState.isLocked() || files.length === 0) return;
 
     try {
-      await this.driveStore.uploadFile(file);
+      const folderId = this.driveStore.currentFolderId();
+      if (files.length === 1) {
+        await this.driveStore.uploadFile(files[0], folderId);
+      } else {
+        await this.driveStore.uploadFiles(files, folderId);
+      }
     } catch (e) {
       console.error(e);
       alert('Erro no upload');
     }
-
-    // Reset file input
-    input.value = '';
   }
 
   async onEmptyTrash() {

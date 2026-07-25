@@ -17,6 +17,11 @@ struct BatchDeleteFolderResult {
         std::vector<std::string> external_files;
     };
 
+struct PinnedFolder {
+    uint64_t folder_id = 0;
+    int position = 0;
+};
+
 class FolderManager {
 public:
     explicit FolderManager(DatabasePool& pool);
@@ -34,6 +39,10 @@ public:
     std::vector<std::string> hard_delete_folder(uint64_t folder_id, uint64_t user_id, class FileChunker* chunker);
     BatchDeleteFolderResult batch_delete_folders(uint64_t user_id, const std::vector<int>& folder_ids);
     BatchHardDeleteFolderResult batch_hard_delete_folders(uint64_t user_id, const std::vector<int>& folder_ids, class FileChunker* chunker);
+    std::vector<PinnedFolder> get_pinned_folders(uint64_t user_id);
+    void pin_folder(uint64_t folder_id, uint64_t user_id);
+    void unpin_folder(uint64_t folder_id, uint64_t user_id);
+    void reorder_pinned_folders(uint64_t user_id, const std::vector<uint64_t>& folder_ids);
 
 private:
     DatabasePool& pool_;

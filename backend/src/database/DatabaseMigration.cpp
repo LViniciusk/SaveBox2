@@ -55,6 +55,18 @@ bool DatabaseMigration::run(DatabasePool& pool) {
             );
         )");
 
+        // TABELA DE PASTAS FIXADAS: somente associação e posição; nomes permanecem no cliente.
+        w.exec(R"(
+            CREATE TABLE IF NOT EXISTS pinned_folders (
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                folder_id BIGINT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, folder_id)
+            );
+        )");
+        w.exec("CREATE INDEX IF NOT EXISTS idx_pinned_folders_user_position ON pinned_folders(user_id, position);");
+
         // TABELA DE ARMAZENAMENTO EXTERNO (Google Drive Multi-Account)
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS user_external_storages (

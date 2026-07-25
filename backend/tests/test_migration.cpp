@@ -16,6 +16,7 @@ TEST_CASE("Migração do Banco de Dados - Integração", "[database][migration][
     bool success = DatabaseMigration::run(pool);
 
     REQUIRE(success == true);
+    REQUIRE(DatabaseMigration::run(pool));
 
     {
         auto conn_wrapper = pool.acquire_connection();
@@ -48,6 +49,7 @@ TEST_CASE("Migração do Banco de Dados - Integração", "[database][migration][
 
         REQUIRE(check_table_exists("users"));
         REQUIRE(check_table_exists("folders"));
+        REQUIRE(check_table_exists("pinned_folders"));
         REQUIRE(check_table_exists("files"));
         REQUIRE(check_column_exists("shared_links", "encrypted_name_fdk"));
     }

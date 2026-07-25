@@ -1,6 +1,15 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { GDriveSidebarComponent } from './gdrive-sidebar.component';
+import { Component, input, output } from '@angular/core';
+
+@Component({ selector: 'app-pinned-folders-section', standalone: true, template: '' })
+class PinnedFoldersSectionStubComponent {
+  readonly currentFolderId = input<number | null>(null);
+  readonly locked = input(false);
+  readonly variant = input<'gdrive' | 'default'>('gdrive');
+  readonly navigate = output<number>();
+}
 
 describe('GDriveSidebarComponent', () => {
   let fixture: ComponentFixture<GDriveSidebarComponent>;
@@ -10,7 +19,7 @@ describe('GDriveSidebarComponent', () => {
     await TestBed.configureTestingModule({
       imports: [GDriveSidebarComponent],
       providers: [provideZonelessChangeDetection()]
-    }).compileComponents();
+    }).overrideComponent(GDriveSidebarComponent, { set: { imports: [PinnedFoldersSectionStubComponent] } }).compileComponents();
 
     fixture = TestBed.createComponent(GDriveSidebarComponent);
     component = fixture.componentInstance;

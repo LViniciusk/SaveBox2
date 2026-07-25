@@ -509,6 +509,121 @@ paths:
         '500':
           description: Erro interno
 
+  /folders/pinned:
+    get:
+      tags: [Pastas]
+      summary: Lista as pastas fixadas do usuário
+      description: Retorna somente IDs e posições. Pastas em soft delete são ocultadas.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista ordenada de pastas fixadas
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [folders]
+                properties:
+                  folders:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [folder_id, position]
+                      properties:
+                        folder_id:
+                          type: integer
+                          format: int64
+                        position:
+                          type: integer
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /folders/pinned/order:
+    put:
+      tags: [Pastas]
+      summary: Reordena as pastas fixadas
+      description: A lista deve representar exatamente o conjunto atual de pins, sem duplicidades.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [folder_ids]
+              additionalProperties: false
+              properties:
+                folder_ids:
+                  type: array
+                  items:
+                    type: integer
+                    format: int64
+                    minimum: 1
+      responses:
+        '204':
+          description: Ordem atualizada
+        '400':
+          description: JSON inválido, IDs duplicados ou conjunto diferente dos pins atuais
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /folders/{folderId}/pin:
+    put:
+      tags: [Pastas]
+      summary: Fixa uma pasta
+      description: Operação idempotente; a pasta é adicionada ao final da lista.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Pasta fixada
+        '401':
+          description: Token ausente ou inválido
+        '403':
+          description: Pasta pertence a outro usuário
+        '404':
+          description: Pasta inexistente ou em soft delete
+        '500':
+          description: Erro interno
+    delete:
+      tags: [Pastas]
+      summary: Remove uma pasta fixada
+      description: Operação idempotente para uma pasta própria; as posições restantes são normalizadas.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Pasta desafixada
+        '401':
+          description: Token ausente ou inválido
+        '403':
+          description: Pasta pertence a outro usuário
+        '404':
+          description: Pasta inexistente ou em soft delete
+        '500':
+          description: Erro interno
+
   /folders/{folderId}/contents:
     get:
       tags: [Pastas]

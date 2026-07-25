@@ -40,6 +40,44 @@ describe('DriveService', () => {
     req.flush({});
   });
 
+  it('should manage pinned folders using only ids and credentials', () => {
+    service.getPinnedFolders().subscribe();
+    let req = httpMock.expectOne(`${environment.apiUrl}/folders/pinned`);
+    expect(req.request.method).toBe('GET');
+    expect(req.request.withCredentials).toBeTrue();
+    req.flush({ folders: [] });
+
+    service.pinFolder(7).subscribe();
+    req = httpMock.expectOne(`${environment.apiUrl}/folders/7/pin`);
+    expect(req.request.method).toBe('PUT');
+    expect(req.request.body).toBeNull();
+    expect(req.request.withCredentials).toBeTrue();
+    req.flush(null);
+
+    service.unpinFolder(7).subscribe();
+    req = httpMock.expectOne(`${environment.apiUrl}/folders/7/pin`);
+    expect(req.request.method).toBe('DELETE');
+    expect(req.request.withCredentials).toBeTrue();
+    req.flush(null);
+
+    service.reorderPinnedFolders([9, 7]).subscribe();
+    req = httpMock.expectOne(`${environment.apiUrl}/folders/pinned/order`);
+    expect(req.request.method).toBe('PUT');
+    expect(req.request.body).toEqual({ folder_ids: [9, 7] });
+    expect(req.request.withCredentials).toBeTrue();
+    expect(JSON.stringify(req.request.body)).not.toContain('name');
+    expect(JSON.stringify(req.request.body)).not.toContain('path');
+    req.flush(null);
+  });
+
+  it('should propagate pinned-folder HTTP errors', () => {
+    let error: unknown;
+    service.getPinnedFolders().subscribe({ error: value => error = value });
+    const req = httpMock.expectOne(`${environment.apiUrl}/folders/pinned`);
+    req.flush({}, { status: 401, statusText: 'Unauthorized' });
+    expect((error as any).status).toBe(401);
+  });
+
   it('should create folder', () => {
     service.createFolder('enc_name', 'hash', 10).subscribe();
     const req = httpMock.expectOne(`${environment.apiUrl}/folders`);
@@ -186,6 +224,37 @@ describe('DriveService', () => {
     expect(req.request.method).toBe('POST');
     expect(req.request.body).toEqual({ external_file_id: 'ext-id' });
     req.flush({});
+  });
+
+  it('should initialize a bounded encrypted batch without plaintext fields', () => {
+    service.batchInitUploads([
+      {
+        folder_id: null,
+        encrypted_name: 'enc-name',
+        name_hash: 'hash-name',
+        encrypted_fdk: 'enc-fdk',
+        size_bytes: 10,
+        total_chunks: 1,
+        storage_provider: 'local',
+      },
+      {
+        folder_id: 7,
+        encrypted_name: 'enc-google-name',
+        name_hash: 'hash-google-name',
+        encrypted_fdk: 'enc-google-fdk',
+        size_bytes: 20,
+        total_chunks: 1,
+        storage_provider: 'google_drive',
+      },
+    ]).subscribe();
+
+    const req = httpMock.expectOne(`${environment.apiUrl}/files/batch-init`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.withCredentials).toBeTrue();
+    expect(req.request.body.files).toHaveSize(2);
+    expect(JSON.stringify(req.request.body)).not.toContain('original.txt');
+    expect(JSON.stringify(req.request.body)).not.toContain('webkitRelativePath');
+    req.flush({ files: [] });
   });
 
   it('should download external metadata', () => {

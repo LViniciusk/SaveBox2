@@ -45,11 +45,17 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
 | `POST` | `/folders` | Cria nova pasta. |
+| `GET` | `/folders/pinned` | Lista as pastas fixadas do usuário, somente com `folder_id` e `position`. Pastas em soft delete não aparecem. |
+| `PUT` | `/folders/<id>/pin` | Fixa uma pasta ao final da lista. Operação idempotente; retorna `204`. |
+| `DELETE` | `/folders/<id>/pin` | Remove uma pasta fixada e normaliza as posições. Operação idempotente para pasta própria; retorna `204`. |
+| `PUT` | `/folders/pinned/order` | Reordena exatamente o conjunto de pins atual com `{ "folder_ids": [<id>, ...] }`; retorna `204`. |
 | `GET` | `/folders/<id>/contents` | Lista subpastas e arquivos diretos de uma pasta. |
 | `GET` | `/tree` | Retorna a árvore raiz do usuário com paginação opcional. |
 | `PUT` | `/folders/<id>` | Renomeia ou move a pasta para outro `parent_id`. |
 | `DELETE` | `/folders/batch-delete` | Envia múltiplas pastas para a lixeira (Soft Delete em lote). |
 | `DELETE` | `/folders/<id>` | Exclusão recursiva que apaga todo o conteudo de uma pasta (Soft Delete). |
+
+As pastas fixadas persistem somente a associação entre usuário e pasta e sua posição; nenhum nome ou caminho é retornado. As rotas exigem JWT, usam `400` para JSON/ordem inválidos, `403` para pasta de outro usuário e `404` para pasta inexistente ou em soft delete. A associação é removida automaticamente quando a pasta ou o usuário é excluído permanentemente.
 
 ### Gerenciamento de Arquivos e Chunks
 | Método | Endpoint | Descrição |

@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
 import { environment } from '../../../../environments/environment';
+import { BatchUploadRequestItem, BatchUploadResponseItem } from '../upload/upload.models';
 
 export interface QuotaResponse {
   used_bytes: number;
@@ -30,6 +31,19 @@ export interface TreeResponse {
   files: DriveFileDto[];
 }
 
+export interface PinnedFolderReference {
+  folder_id: number;
+  position: number;
+}
+
+export interface PinnedFoldersResponse {
+  folders: PinnedFolderReference[];
+}
+
+export interface BatchInitUploadsResponse {
+  files: BatchUploadResponseItem[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class DriveService {
   private readonly http = inject(HttpClient);
@@ -42,6 +56,32 @@ export class DriveService {
 
   getTree(): Observable<TreeResponse> {
     return this.http.get<TreeResponse>(`${environment.apiUrl}/tree`, {
+      withCredentials: true,
+    });
+  }
+
+  getPinnedFolders(): Observable<PinnedFoldersResponse> {
+    return this.http.get<PinnedFoldersResponse>(`${environment.apiUrl}/folders/pinned`, {
+      withCredentials: true,
+    });
+  }
+
+  pinFolder(folderId: number): Observable<void> {
+    return this.http.put<void>(`${environment.apiUrl}/folders/${folderId}/pin`, null, {
+      withCredentials: true,
+    });
+  }
+
+  unpinFolder(folderId: number): Observable<void> {
+    return this.http.delete<void>(`${environment.apiUrl}/folders/${folderId}/pin`, {
+      withCredentials: true,
+    });
+  }
+
+  reorderPinnedFolders(folderIds: readonly number[]): Observable<void> {
+    return this.http.put<void>(`${environment.apiUrl}/folders/pinned/order`, {
+      folder_ids: [...folderIds],
+    }, {
       withCredentials: true,
     });
   }
@@ -86,6 +126,12 @@ export class DriveService {
     if (proxyEncryptedFdk) body.proxy_encrypted_fdk = proxyEncryptedFdk;
 
     return this.http.post<{file_id: number, storage_provider?: string, access_token?: string, root_folder_id?: string}>(`${environment.apiUrl}/files`, body, {
+      withCredentials: true,
+    });
+  }
+
+  batchInitUploads(files: readonly BatchUploadRequestItem[]): Observable<BatchInitUploadsResponse> {
+    return this.http.post<BatchInitUploadsResponse>(`${environment.apiUrl}/files/batch-init`, { files }, {
       withCredentials: true,
     });
   }

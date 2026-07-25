@@ -88,3 +88,62 @@ TEST_CASE("Gestão de Pastas - Hierarquia e Cascata", "[folders][hierarchy][casc
         W.commit();
     }
 }
+
+TEST_CASE("FolderManager - Pastas fixadas", "[folders][pinned][manager]") {
+    DatabasePool pool(2, get_secure_conn_string());
+    FolderManager manager(pool);
+    const auto suffix = std::to_string(rand());
+    const auto username = "manager_pins_" + suffix;
+    const auto email = username + "@test.com";
+    uint64_t user_id = 0;
+    uint64_t other_user_id = 0;
+
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+        user_id = txn.exec(
+            "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ($1, $2, 'hash', true) RETURNING id",
+            pqxx::params{username, email}
+        )[0][0].as<uint64_t>();
+        other_user_id = txn.exec(
+            "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ($1, $2, 'hash', true) RETURNING id",
+            pqxx::params{username + "_other", username + "_other@test.com"}
+        )[0][0].as<uint64_t>();
+        txn.commit();
+    }
+
+    const auto root_id = manager.create_folder(user_id, std::nullopt, "root", "manager-pin-root-" + suffix);
+    const auto child_id = manager.create_folder(user_id, root_id, "child", "manager-pin-child-" + suffix);
+    const auto other_folder_id = manager.create_folder(other_user_id, std::nullopt, "other", "manager-pin-other-" + suffix);
+
+    REQUIRE(manager.get_pinned_folders(user_id).empty());
+    REQUIRE_NOTHROW(manager.pin_folder(root_id, user_id));
+    REQUIRE_NOTHROW(manager.pin_folder(root_id, user_id));
+    REQUIRE_NOTHROW(manager.pin_folder(child_id, user_id));
+    REQUIRE_THROWS_AS(manager.pin_folder(other_folder_id, user_id), std::runtime_error);
+
+    auto pins = manager.get_pinned_folders(user_id);
+    REQUIRE(pins.size() == 2);
+    REQUIRE(pins[0].folder_id == root_id);
+    REQUIRE(pins[0].position == 0);
+    REQUIRE(pins[1].folder_id == child_id);
+    REQUIRE(pins[1].position == 1);
+
+    REQUIRE_NOTHROW(manager.reorder_pinned_folders(user_id, {child_id, root_id}));
+    pins = manager.get_pinned_folders(user_id);
+    REQUIRE(pins[0].folder_id == child_id);
+    REQUIRE(pins[1].folder_id == root_id);
+    REQUIRE_THROWS_AS(manager.reorder_pinned_folders(user_id, {root_id}), std::runtime_error);
+
+    REQUIRE_NOTHROW(manager.unpin_folder(child_id, user_id));
+    REQUIRE_NOTHROW(manager.unpin_folder(child_id, user_id));
+    pins = manager.get_pinned_folders(user_id);
+    REQUIRE(pins.size() == 1);
+    REQUIRE(pins[0].folder_id == root_id);
+    REQUIRE(pins[0].position == 0);
+
+    auto conn = pool.acquire_connection();
+    pqxx::work cleanup(*conn);
+    cleanup.exec("DELETE FROM users WHERE id IN ($1, $2)", pqxx::params{user_id, other_user_id});
+    cleanup.commit();
+}

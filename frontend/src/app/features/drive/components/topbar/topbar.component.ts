@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Output, inject, signal, HostListener } from '@angular/core';
+import { Component, EventEmitter, Output, inject, signal, HostListener, input } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { AppStateService } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
@@ -6,6 +6,7 @@ import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { DriveStore } from '../../state/drive.store';
 import { CommonModule } from '@angular/common';
 import { DialogService } from '../../../../core/dialog/dialog.service';
+import { ThemeService } from '../../../../core/theme/theme.service';
 import { environment } from '../../../../../environments/environment';
 import { firstValueFrom } from 'rxjs';
 
@@ -14,6 +15,11 @@ import { firstValueFrom } from 'rxjs';
   standalone: true,
   imports: [CommonModule, FormsModule],
   template: `
+    @if (compact()) {
+      <button class="compact-settings-btn" (click)="openSettings()" aria-label="Abrir configurações" title="Configurações">
+        <span class="material-symbols-outlined">settings</span>
+      </button>
+    } @else {
     <header class="topbar">
       <div class="left-section">
         <div class="logo-area">
@@ -169,6 +175,9 @@ import { firstValueFrom } from 'rxjs';
         </div>
       </div>
 
+    </header>
+    }
+
       <!-- Modal de Configurações -->
       @if (isSettingsOpen()) {
         <div class="modal-backdrop" [class.closing]="isSettingsClosing()" (click)="closeSettings()">
@@ -251,6 +260,41 @@ import { firstValueFrom } from 'rxjs';
                     }
                   </div>
                 }
+              </div>
+
+              <div class="settings-section theme-settings-section">
+                <h4 class="section-title" id="theme-heading">Aparência</h4>
+                <p class="section-desc">Escolha o tema da interface.</p>
+                <div class="theme-options" role="radiogroup" aria-labelledby="theme-heading">
+                  <label class="theme-option" [class.active]="themeService.theme() === 'default'">
+                    <input
+                      class="theme-radio"
+                      type="radio"
+                      name="theme"
+                      value="default"
+                      [checked]="themeService.theme() === 'default'"
+                      (change)="themeService.setTheme('default')"
+                    />
+                    <span class="theme-option-content">
+                      <span class="option-name">Default</span>
+                      <span class="option-sub">Interface escura inspirada no Explorador de Arquivos</span>
+                    </span>
+                  </label>
+                  <label class="theme-option" [class.active]="themeService.theme() === 'gdrive'">
+                    <input
+                      class="theme-radio"
+                      type="radio"
+                      name="theme"
+                      value="gdrive"
+                      [checked]="themeService.theme() === 'gdrive'"
+                      (change)="themeService.setTheme('gdrive')"
+                    />
+                    <span class="theme-option-content">
+                      <span class="option-name">GDrive</span>
+                      <span class="option-sub">Interface clássica inspirada no Google Drive</span>
+                    </span>
+                  </label>
+                </div>
               </div>
 
               <!-- Configurações de Mídia -->
@@ -380,10 +424,25 @@ import { firstValueFrom } from 'rxjs';
           </div>
         </div>
       }
-    </header>
   `,
   styles: [
     `
+      .compact-settings-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 32px;
+        padding: 0 8px;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--default-text, #3c4043);
+        cursor: pointer;
+      }
+      .compact-settings-btn:hover {
+        background: var(--default-hover, #e8eaed);
+        border-color: var(--default-border, #dadce0);
+      }
       .topbar {
         display: flex;
         align-items: center;
@@ -1034,6 +1093,58 @@ import { firstValueFrom } from 'rxjs';
         margin: 0;
       }
 
+      .theme-settings-section {
+        border-top: 1px solid var(--divider-color);
+        padding-top: 16px;
+      }
+
+      .theme-options {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .theme-option {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 12px;
+        border: 2px solid var(--border-color);
+        border-radius: var(--radius-md);
+        background: var(--bg-surface);
+        color: var(--text-primary);
+        cursor: pointer;
+        transition: background-color var(--transition-fast), border-color var(--transition-fast);
+      }
+
+      .theme-option:hover {
+        background: var(--bg-hover);
+      }
+
+      .theme-option.active {
+        background: var(--bg-selected);
+        border-color: var(--primary);
+      }
+
+      .theme-option:focus-within {
+        outline: 3px solid color-mix(in srgb, var(--primary) 35%, transparent);
+        outline-offset: 2px;
+      }
+
+      .theme-radio {
+        width: 16px;
+        height: 16px;
+        margin-top: 2px;
+        accent-color: var(--primary);
+        flex: 0 0 auto;
+      }
+
+      .theme-option-content {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
       .storage-switch-container {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -1289,11 +1400,13 @@ import { firstValueFrom } from 'rxjs';
   ],
 })
 export class TopbarComponent {
+  readonly compact = input(false);
   protected readonly appState = inject(AppStateService);
   protected readonly driveStore = inject(DriveStore);
   private readonly authService = inject(AuthService);
   protected readonly cryptoService = inject(CryptoService);
   protected readonly dialogService = inject(DialogService);
+  protected readonly themeService = inject(ThemeService);
 
   isProfileMenuOpen = signal(false);
   isSettingsOpen = signal(false);

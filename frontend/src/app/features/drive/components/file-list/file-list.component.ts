@@ -4,6 +4,7 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
 import { AppStateService } from '../../../../core/state/app-state.service';
 import { CommonModule } from '@angular/common';
 import { DialogService } from '../../../../core/dialog/dialog.service';
+import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 
 @Component({
   selector: 'app-file-list',
@@ -76,6 +77,12 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
               <span class="material-symbols-outlined">edit</span>
               Renomear
             </button>
+            @if (viewMode() === 'drive' && file.isFolder && file.id !== -9999) {
+              <button class="menu-item" [disabled]="pinnedFoldersStore.isPending(file.id)" (click)="togglePinned(file, $event)">
+                <span class="material-symbols-outlined">{{ pinnedFoldersStore.isPending(file.id) ? 'hourglass_top' : 'push_pin' }}</span>
+                {{ pinnedFoldersStore.isPinned(file.id) ? 'Desafixar do acesso rápido' : 'Fixar no acesso rápido' }}
+              </button>
+            }
             <div style="height: 1px; background: #e8eaed; margin: 4px 0;"></div>
             <button class="menu-item" (click)="onDelete(file, $event)" style="color: #d93025;">
               <span class="material-symbols-outlined" style="color: #d93025;">delete</span>
@@ -1057,6 +1064,7 @@ export class FileListComponent implements OnInit, OnDestroy {
   selectionBox = signal({ startX: 0, startY: 0, x: 0, y: 0, w: 0, h: 0 });
   private dragSelectionInitialSet = new Set<number>();
   private readonly elRef = inject(ElementRef);
+  readonly pinnedFoldersStore = inject(PinnedFoldersStore);
 
   closeMenu() {
     this.activeMenuFileId.set(null);
@@ -1147,6 +1155,20 @@ export class FileListComponent implements OnInit, OnDestroy {
     event.stopPropagation();
     this.closeMenu();
     this.uploadFileRequested.emit();
+  }
+
+  async togglePinned(file: DriveFile, event: Event): Promise<void> {
+    event.stopPropagation();
+    try {
+      if (this.pinnedFoldersStore.isPinned(file.id)) {
+        await this.pinnedFoldersStore.unpin(file.id);
+      } else {
+        await this.pinnedFoldersStore.pin(file.id);
+      }
+      this.closeMenu();
+    } catch (error) {
+      console.error('Erro ao atualizar pasta fixada', error);
+    }
   }
 
   onDragStart(event: DragEvent, file: DriveFile, previewEl: HTMLElement) {

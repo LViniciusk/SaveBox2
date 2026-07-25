@@ -146,6 +146,20 @@ describe('DriveStore', () => {
       store.navigateUp();
       expect(store.currentFolderId()).toBeNull();
     });
+
+    it('should support back and forward navigation without duplicating history', () => {
+      store.navigateTo(1);
+      store.navigateTo(2);
+      expect(store.canGoBack()).toBeTrue();
+
+      store.goBack();
+      expect(store.currentFolderId()).toBe(1);
+      expect(store.canGoForward()).toBeTrue();
+
+      store.goForward();
+      expect(store.currentFolderId()).toBe(2);
+      expect(store.canGoForward()).toBeFalse();
+    });
   });
 
   describe('Storage / Display mode setters', () => {

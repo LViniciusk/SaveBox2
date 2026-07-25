@@ -14,11 +14,13 @@ import { DriveView } from '../../state/drive.types';
       <app-topbar (unlockRequested)="unlockRequested.emit()" style="grid-area: topbar; z-index: 10;" />
       <app-gdrive-sidebar
         [currentView]="currentView()"
+        [currentFolderId]="currentFolderId()"
         [locked]="locked()"
         [quota]="quota()"
         (viewChange)="viewChange.emit($event)"
         (createFolderRequested)="createFolderRequested.emit()"
-        (uploadFileRequested)="uploadFileRequested.emit()" />
+        (uploadFileRequested)="uploadFileRequested.emit()"
+        (pinnedFolderNavigate)="pinnedFolderNavigate.emit($event)" />
       <main class="content-area">
         <div class="content-inner">
           <app-drive-workspace
@@ -51,12 +53,14 @@ import { DriveView } from '../../state/drive.types';
 })
 export class GDriveShellComponent {
   readonly currentView = input.required<DriveView>();
+  readonly currentFolderId = input<number | null>(null);
   readonly locked = input(false);
   readonly quota = input.required<QuotaState>();
   readonly unlockRequested = output<void>();
   readonly viewChange = output<DriveView>();
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
+  readonly pinnedFolderNavigate = output<number>();
   readonly videoSelected = output<DriveFile>();
   readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
   readonly shareRequested = output<DriveFile>();

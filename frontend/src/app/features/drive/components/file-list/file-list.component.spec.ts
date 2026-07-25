@@ -3,6 +3,7 @@ import { FileListComponent } from './file-list.component';
 import { DriveStore, DriveFile } from '../../state/drive.store';
 import { AppStateService } from '../../../../core/state/app-state.service';
 import { DialogService } from '../../../../core/dialog/dialog.service';
+import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 import { signal } from '@angular/core';
 import { provideZonelessChangeDetection } from '@angular/core';
 
@@ -12,6 +13,7 @@ describe('FileListComponent', () => {
   let mockDriveStore: any;
   let mockAppState: any;
   let mockDialogService: any;
+  let mockPinnedFoldersStore: any;
 
   beforeEach(async () => {
     // Isolate dependencies with strict mocks (Ponytail philosophy: test logic, not framework)
@@ -31,6 +33,13 @@ describe('FileListComponent', () => {
       isLocked: signal(false)
     });
     mockDialogService = jasmine.createSpyObj('DialogService', ['confirm', 'prompt']);
+    mockPinnedFoldersStore = jasmine.createSpyObj('PinnedFoldersStore', ['isPinned', 'isPending', 'pin', 'unpin'], {
+      pinnedFolders: signal([]),
+      error: signal(null),
+      isLoading: signal(false)
+    });
+    mockPinnedFoldersStore.isPinned.and.returnValue(false);
+    mockPinnedFoldersStore.isPending.and.returnValue(false);
 
     await TestBed.configureTestingModule({
       imports: [FileListComponent],
@@ -39,6 +48,7 @@ describe('FileListComponent', () => {
         { provide: DriveStore, useValue: mockDriveStore },
         { provide: AppStateService, useValue: mockAppState },
         { provide: DialogService, useValue: mockDialogService }
+        , { provide: PinnedFoldersStore, useValue: mockPinnedFoldersStore }
       ]
     }).compileComponents();
 
@@ -243,6 +253,20 @@ describe('FileListComponent', () => {
     mockAppState.isLocked.set(true);
     component.onContextMenu(file, new MouseEvent('contextmenu'));
     expect(component.activeMenuFileId()).toBeNull();
+  });
+
+  it('pins and unpins folders from the context menu without files receiving the action', async () => {
+    const folder = { id: 3, isFolder: true } as DriveFile;
+    const file = { id: 4, isFolder: false } as DriveFile;
+    const event = { stopPropagation: jasmine.createSpy('stopPropagation') } as any;
+    mockPinnedFoldersStore.pin.and.resolveTo();
+    await component.togglePinned(folder, event);
+    expect(mockPinnedFoldersStore.pin).toHaveBeenCalledWith(3);
+    mockPinnedFoldersStore.isPinned.and.returnValue(true);
+    mockPinnedFoldersStore.unpin.and.resolveTo();
+    await component.togglePinned(folder, event);
+    expect(mockPinnedFoldersStore.unpin).toHaveBeenCalledWith(3);
+    expect(component.togglePinned(file, event)).toBeInstanceOf(Promise);
   });
 
   it('handles drag selection, multi-item drag previews, drops, and invalid targets', async () => {

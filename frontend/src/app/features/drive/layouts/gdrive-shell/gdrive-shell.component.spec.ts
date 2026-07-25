@@ -8,8 +8,8 @@ class TopbarStubComponent { readonly unlockRequested = output<void>(); }
 
 @Component({ selector: 'app-gdrive-sidebar', standalone: true, template: '<button id="drive" (click)="viewChange.emit(\'drive\')"></button>' })
 class SidebarStubComponent {
-  readonly currentView = input<string>(); readonly locked = input(false); readonly quota = input<any>();
-  readonly viewChange = output<any>(); readonly createFolderRequested = output<void>(); readonly uploadFileRequested = output<void>();
+  readonly currentView = input<string>(); readonly currentFolderId = input<number | null>(null); readonly locked = input(false); readonly quota = input<any>();
+  readonly viewChange = output<any>(); readonly createFolderRequested = output<void>(); readonly uploadFileRequested = output<void>(); readonly pinnedFolderNavigate = output<number>();
 }
 
 @Component({ selector: 'app-drive-workspace', standalone: true, template: '<button id="trash" (click)="emptyTrashRequested.emit()"></button>' })

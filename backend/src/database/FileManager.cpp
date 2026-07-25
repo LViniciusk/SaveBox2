@@ -942,7 +942,8 @@ std::vector<BatchInitResult> FileManager::batch_init_uploads(uint64_t user_id, c
         std::string f_id = files[i].folder_id.has_value() ? std::to_string(files[i].folder_id.value()) : "NULL";
         std::string ext_id = files[i].external_storage_id.has_value() ? std::to_string(files[i].external_storage_id.value()) : "NULL";
         int chunks = files[i].storage_provider == "local" ? files[i].total_chunks : 0;
-        bool is_complete = files[i].storage_provider != "local";
+        // External uploads become complete only after finalize_external_upload stores the provider ID.
+        bool is_complete = false;
         
         std::string proxy_ext_id = files[i].proxy_external_file_id.has_value() ? txn.quote(files[i].proxy_external_file_id.value()) : "NULL";
         std::string proxy_size = files[i].proxy_size_bytes.has_value() ? std::to_string(files[i].proxy_size_bytes.value()) : "NULL";

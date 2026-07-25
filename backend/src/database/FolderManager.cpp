@@ -2,8 +2,45 @@
 #include "database/DatabasePool.hpp"
 #include "storage/FileChunker.hpp"
 #include <pqxx/pqxx>
+#include <algorithm>
 #include <stdexcept>
+#include <string>
 #include <vector>
+
+namespace {
+
+std::string to_pg_bigint_array(const std::vector<uint64_t>& ids) {
+    std::string result = "{";
+    for (size_t i = 0; i < ids.size(); ++i) {
+        if (i > 0) result += ',';
+        result += std::to_string(ids[i]);
+    }
+    result += '}';
+    return result;
+}
+
+void lock_user_pins(pqxx::work& txn, uint64_t user_id) {
+    // ponytail: one PostgreSQL transaction lock per user; replace only if pin throughput demands finer granularity.
+    txn.exec("SELECT pg_advisory_xact_lock($1::bigint)", pqxx::params{user_id});
+}
+
+void normalize_active_pins(pqxx::work& txn, uint64_t user_id) {
+    txn.exec(
+        "WITH ordered AS ("
+        "  SELECT p.user_id, p.folder_id, "
+        "         ROW_NUMBER() OVER (ORDER BY p.position, p.created_at, p.folder_id) - 1 AS new_position "
+        "  FROM pinned_folders p "
+        "  JOIN folders f ON f.id = p.folder_id "
+        "  WHERE p.user_id = $1 AND f.deleted_at IS NULL"
+        ") "
+        "UPDATE pinned_folders p SET position = ordered.new_position "
+        "FROM ordered "
+        "WHERE p.user_id = ordered.user_id AND p.folder_id = ordered.folder_id",
+        pqxx::params{user_id}
+    );
+}
+
+}
 
 FolderManager::FolderManager(DatabasePool& pool)
     : pool_(pool) {}
@@ -629,4 +666,121 @@ BatchHardDeleteFolderResult FolderManager::batch_hard_delete_folders(uint64_t us
 
     txn.commit();
     return result;
+}
+
+std::vector<PinnedFolder> FolderManager::get_pinned_folders(uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::nontransaction txn(*conn);
+    auto rows = txn.exec(
+        "SELECT p.folder_id, p.position "
+        "FROM pinned_folders p "
+        "JOIN folders f ON f.id = p.folder_id "
+        "WHERE p.user_id = $1 AND f.deleted_at IS NULL "
+        "ORDER BY p.position, p.created_at, p.folder_id",
+        pqxx::params{user_id}
+    );
+
+    std::vector<PinnedFolder> result;
+    result.reserve(rows.size());
+    for (const auto& row : rows) {
+        result.push_back({row[0].as<uint64_t>(), row[1].as<int>()});
+    }
+    return result;
+}
+
+void FolderManager::pin_folder(uint64_t folder_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    lock_user_pins(txn, user_id);
+
+    auto folder = txn.exec(
+        "SELECT user_id, deleted_at FROM folders WHERE id = $1 FOR SHARE",
+        pqxx::params{folder_id}
+    );
+    if (folder.empty()) throw std::runtime_error("NOT_FOUND");
+    if (folder[0][0].as<uint64_t>() != user_id) throw std::runtime_error("FORBIDDEN");
+    if (!folder[0][1].is_null()) throw std::runtime_error("NOT_FOUND");
+
+    auto existing = txn.exec(
+        "SELECT 1 FROM pinned_folders WHERE user_id = $1 AND folder_id = $2",
+        pqxx::params{user_id, folder_id}
+    );
+    if (!existing.empty()) {
+        txn.commit();
+        return;
+    }
+
+    auto next_position = txn.exec(
+        "SELECT COALESCE(MAX(p.position) + 1, 0) "
+        "FROM pinned_folders p JOIN folders f ON f.id = p.folder_id "
+        "WHERE p.user_id = $1 AND f.deleted_at IS NULL",
+        pqxx::params{user_id}
+    )[0][0].as<int>();
+
+    txn.exec(
+        "INSERT INTO pinned_folders (user_id, folder_id, position) VALUES ($1, $2, $3) "
+        "ON CONFLICT (user_id, folder_id) DO NOTHING",
+        pqxx::params{user_id, folder_id, next_position}
+    );
+    txn.commit();
+}
+
+void FolderManager::unpin_folder(uint64_t folder_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    lock_user_pins(txn, user_id);
+
+    auto folder = txn.exec(
+        "SELECT user_id, deleted_at FROM folders WHERE id = $1 FOR SHARE",
+        pqxx::params{folder_id}
+    );
+    if (folder.empty()) throw std::runtime_error("NOT_FOUND");
+    if (folder[0][0].as<uint64_t>() != user_id) throw std::runtime_error("FORBIDDEN");
+    if (!folder[0][1].is_null()) throw std::runtime_error("NOT_FOUND");
+
+    txn.exec(
+        "DELETE FROM pinned_folders WHERE user_id = $1 AND folder_id = $2",
+        pqxx::params{user_id, folder_id}
+    );
+    normalize_active_pins(txn, user_id);
+    txn.commit();
+}
+
+void FolderManager::reorder_pinned_folders(uint64_t user_id, const std::vector<uint64_t>& folder_ids) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    lock_user_pins(txn, user_id);
+
+    auto current_rows = txn.exec(
+        "SELECT p.folder_id "
+        "FROM pinned_folders p JOIN folders f ON f.id = p.folder_id "
+        "WHERE p.user_id = $1 AND f.deleted_at IS NULL "
+        "ORDER BY p.folder_id FOR UPDATE",
+        pqxx::params{user_id}
+    );
+
+    std::vector<uint64_t> current_ids;
+    current_ids.reserve(current_rows.size());
+    for (const auto& row : current_rows) current_ids.push_back(row[0].as<uint64_t>());
+
+    auto requested = folder_ids;
+    auto sorted_current = current_ids;
+    auto sorted_requested = requested;
+    std::sort(sorted_current.begin(), sorted_current.end());
+    std::sort(sorted_requested.begin(), sorted_requested.end());
+    if (sorted_current != sorted_requested) throw std::runtime_error("BAD_REQUEST");
+
+    if (!folder_ids.empty()) {
+        txn.exec(
+            "WITH requested AS ("
+            "  SELECT folder_id, position - 1 AS position "
+            "  FROM unnest($1::bigint[]) WITH ORDINALITY AS x(folder_id, position)"
+            ") "
+            "UPDATE pinned_folders p SET position = requested.position "
+            "FROM requested "
+            "WHERE p.user_id = $2 AND p.folder_id = requested.folder_id",
+            pqxx::params{to_pg_bigint_array(folder_ids), user_id}
+        );
+    }
+    txn.commit();
 }

@@ -256,3 +256,101 @@ TEST_CASE("API Batch Upload Init", "[api][upload][batch]") {
         txn.commit();
     }
 }
+
+TEST_CASE("API Batch Upload Google Drive lifecycle", "[api][upload][batch][googledrive]") {
+    _putenv_s("GOOGLE_CLIENT_ID", "mock_client_id");
+    _putenv_s("GOOGLE_CLIENT_SECRET", "mock_client_secret");
+
+    std::string conn_str = get_secure_conn_string();
+    DatabasePool pool(2, conn_str);
+    MockEmailService mock_email;
+    AuthService auth("BatchGoogleSecret", "batch_google_salt", &mock_email);
+    FolderManager folder_mgr(pool);
+    FileManager file_mgr(pool);
+    FileChunker chunker("test_batch_google_chunks_dir");
+    MockGoogleDriveService gdrive(pool);
+    ApiRouter router(pool, auth, folder_mgr, &file_mgr, &chunker, &gdrive);
+
+    const uint64_t user_id = 9996;
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+        txn.exec("DELETE FROM files WHERE user_id = $1", pqxx::params{user_id});
+        txn.exec("DELETE FROM user_external_storages WHERE user_id = $1", pqxx::params{user_id});
+        txn.exec("DELETE FROM users WHERE id = $1", pqxx::params{user_id});
+        txn.exec("INSERT INTO users (id, username, email, password_hash, is_email_verified, max_storage_bytes) "
+                 "VALUES ($1, 'batch_google_user', 'batch_google@test.com', 'hash', true, 100000000)",
+                 pqxx::params{user_id});
+        txn.commit();
+    }
+
+    struct Cleanup {
+        DatabasePool& pool;
+        uint64_t user_id;
+        ~Cleanup() {
+            try {
+                auto conn = pool.acquire_connection();
+                pqxx::work txn(*conn);
+                txn.exec("DELETE FROM files WHERE user_id = $1", pqxx::params{user_id});
+                txn.exec("DELETE FROM user_external_storages WHERE user_id = $1", pqxx::params{user_id});
+                txn.exec("DELETE FROM users WHERE id = $1", pqxx::params{user_id});
+                txn.commit();
+            } catch (...) {}
+        }
+    } cleanup{pool, user_id};
+
+    gdrive.link_account(user_id, "valid_code", gdrive.generate_test_state(user_id));
+    const auto token = auth.generate_token(user_id);
+
+    crow::request req;
+    req.url = "/files/batch-init";
+    req.method = crow::HTTPMethod::Post;
+    req.add_header("Authorization", "Bearer " + token);
+    crow::json::wvalue item;
+    item["encrypted_name"] = "encrypted-name";
+    item["name_hash"] = "google-batch-hash";
+    item["encrypted_fdk"] = "encrypted-fdk";
+    item["size_bytes"] = 1024;
+    item["storage_provider"] = "google_drive";
+    std::vector<crow::json::wvalue> items;
+    items.push_back(std::move(item));
+    crow::json::wvalue body;
+    body["files"] = std::move(items);
+    req.body = body.dump();
+
+    const auto init = router.handle_batch_init_uploads(req);
+    REQUIRE(init.code == 201);
+    const auto init_json = crow::json::load(init.body);
+    REQUIRE(init_json["files"].size() == 1);
+    REQUIRE(init_json["files"][0]["name_hash"].s() == "google-batch-hash");
+    REQUIRE(init_json["files"][0]["storage_provider"].s() == "google_drive");
+    REQUIRE(init_json["files"][0].has("access_token"));
+    REQUIRE(init_json["files"][0].has("root_folder_id"));
+
+    const int file_id = init_json["files"][0]["file_id"].i();
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::nontransaction txn(*conn);
+        const auto state = txn.exec("SELECT is_upload_complete, external_file_id FROM files WHERE id = $1", pqxx::params{file_id});
+        REQUIRE(state[0][0].as<bool>() == false);
+        REQUIRE(state[0][1].is_null());
+        const auto quota = txn.exec("SELECT used_storage_bytes FROM users WHERE id = $1", pqxx::params{user_id});
+        REQUIRE(quota[0][0].as<uint64_t>() == 2048);
+    }
+
+    crow::request finalize;
+    finalize.url = "/files/" + std::to_string(file_id) + "/finalize-external";
+    finalize.add_header("Authorization", "Bearer " + token);
+    finalize.body = R"({"external_file_id":"external-google-id"})";
+    REQUIRE(router.handle_finalize_external_upload(finalize, file_id).code == 200);
+
+    crow::request download;
+    download.url = "/files/" + std::to_string(file_id) + "/download";
+    download.add_header("Authorization", "Bearer " + token);
+    const auto metadata = router.handle_download_file(download, file_id);
+    REQUIRE(metadata.code == 200);
+    const auto metadata_json = crow::json::load(metadata.body);
+    REQUIRE(metadata_json["external_file_id"].s() == "external-google-id");
+
+    REQUIRE(router.handle_finalize_external_upload(finalize, file_id).code == 409);
+}
