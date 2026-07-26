@@ -3,6 +3,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { DriveWorkspaceComponent } from './drive-workspace.component';
 import { DriveFile, DriveStore } from '../../state/drive.store';
+import { DriveDropZoneDirective } from '../../directives/drive-drop-zone.directive';
 
 @Component({ selector: 'app-file-list', standalone: true, template: '' })
 class FileListStubComponent {
@@ -40,7 +41,7 @@ describe('DriveWorkspaceComponent', () => {
       imports: [DriveWorkspaceComponent],
       providers: [provideZonelessChangeDetection(), { provide: DriveStore, useValue: store }]
     })
-      .overrideComponent(DriveWorkspaceComponent, { set: { imports: [FileListStubComponent, TransferPanelStubComponent] } })
+      .overrideComponent(DriveWorkspaceComponent, { set: { imports: [FileListStubComponent, TransferPanelStubComponent, DriveDropZoneDirective] } })
       .compileComponents();
     fixture = TestBed.createComponent(DriveWorkspaceComponent);
     fixture.componentRef.setInput('currentView', 'drive');
@@ -100,5 +101,13 @@ describe('DriveWorkspaceComponent', () => {
       { id: 4, sizeBytes: 8, isFolder: false, isHidden: true },
     ]);
     expect(fixture.componentInstance.currentStorageFiles().map(file => file.id)).toEqual([2, 1]);
+  });
+
+  it('does not add a parent entry while browsing storage', () => {
+    store.currentFolderId.set(7);
+    fixture.componentRef.setInput('currentView', 'storage');
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('[data-id="-9999"]')).toBeNull();
   });
 });

@@ -15,8 +15,10 @@ class PinnedFoldersSectionStubComponent {
 @Component({ selector: 'app-drive-workspace', standalone: true, template: '<span class="workspace-stub"></span>' })
 class WorkspaceStubComponent {
   readonly currentView = input<string>();
+  readonly locked = input(false);
   readonly createFolderRequested = output<void>(); readonly uploadFileRequested = output<void>();
   readonly videoSelected = output<any>(); readonly imageSelected = output<any>(); readonly shareRequested = output<any>(); readonly emptyTrashRequested = output<void>();
+  readonly dropStarted = output<void>(); readonly externalDrop = output<any>(); readonly dropError = output<unknown>();
 }
 
 @Component({ selector: 'app-topbar', standalone: true, template: '' })

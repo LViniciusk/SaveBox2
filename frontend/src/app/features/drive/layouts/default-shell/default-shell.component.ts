@@ -4,6 +4,7 @@ import { DriveWorkspaceComponent } from '../../components/drive-workspace/drive-
 import { DriveFile, QuotaState } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
 import { PinnedFoldersSectionComponent } from '../../components/pinned-folders-section/pinned-folders-section.component';
+import { DroppedItems } from '../../services/data-transfer-reader.service';
 
 interface BreadcrumbSegment {
   id: number | null;
@@ -39,6 +40,7 @@ interface BreadcrumbSegment {
           }
         </div>
         <button class="toolbar-action" (click)="uploadFileRequested.emit()" aria-label="Novo upload"><span class="material-symbols-outlined">upload</span> Upload</button>
+        <button class="toolbar-action" [disabled]="locked()" (click)="uploadFolderRequested.emit()" aria-label="Upload de pasta"><span class="material-symbols-outlined">drive_folder_upload</span> Pasta</button>
         <button class="toolbar-action" (click)="createFolderRequested.emit()" aria-label="Nova pasta"><span class="material-symbols-outlined">create_new_folder</span> Nova pasta</button>
         @if (locked()) {
           <button class="toolbar-action" (click)="unlockRequested.emit()" aria-label="Desbloquear"><span class="material-symbols-outlined">lock_open</span> Desbloquear</button>
@@ -76,12 +78,16 @@ interface BreadcrumbSegment {
         <main class="explorer-content">
           <app-drive-workspace
             [currentView]="currentView()"
+            [locked]="locked()"
             (createFolderRequested)="createFolderRequested.emit()"
             (uploadFileRequested)="uploadFileRequested.emit()"
             (videoSelected)="videoSelected.emit($event)"
             (imageSelected)="imageSelected.emit($event)"
             (shareRequested)="shareRequested.emit($event)"
-            (emptyTrashRequested)="emptyTrashRequested.emit()" />
+            (emptyTrashRequested)="emptyTrashRequested.emit()"
+            (dropStarted)="dropStarted.emit()"
+            (externalDrop)="externalDrop.emit($event)"
+            (dropError)="dropError.emit($event)" />
           <ng-content />
         </main>
       </div>
@@ -139,11 +145,15 @@ export class DefaultShellComponent {
   readonly viewChange = output<DriveView>();
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
+  readonly uploadFolderRequested = output<void>();
   readonly pinnedFolderNavigate = output<number>();
   readonly videoSelected = output<DriveFile>();
   readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
   readonly shareRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
+  readonly externalDrop = output<DroppedItems>();
+  readonly dropStarted = output<void>();
+  readonly dropError = output<unknown>();
   readonly backRequested = output<void>();
   readonly forwardRequested = output<void>();
   readonly upRequested = output<void>();

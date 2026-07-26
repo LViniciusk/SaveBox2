@@ -14,6 +14,7 @@ import { ThemeService } from '../../../../core/theme/theme.service';
 import { DriveView } from '../../state/drive.types';
 import { CommonModule } from '@angular/common';
 import { PinnedFoldersStore } from '../../state/pinned-folders.store';
+import { DroppedItems } from '../../services/data-transfer-reader.service';
 
 /**
  * Main vault page — Google Drive clone layout.
@@ -51,12 +52,16 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
         (viewChange)="onViewChange($event)"
         (createFolderRequested)="createNewFolder()"
         (uploadFileRequested)="openFilePicker()"
+        (uploadFolderRequested)="openFolderPicker()"
         (unlockRequested)="isUnlockModalOpen.set(true)"
         (lockRequested)="lockDrive()"
         (backRequested)="driveStore.goBack()"
         (forwardRequested)="driveStore.goForward()"
         (upRequested)="driveStore.navigateUp()"
         (addressNavigate)="onAddressNavigate($event)"
+        (dropStarted)="onDropStarted()"
+        (externalDrop)="onDropped($event)"
+        (dropError)="onDropError($event)"
         (videoSelected)="activeVideoFile.set($event)"
         (imageSelected)="onImageSelected($event)"
         (shareRequested)="onShareRequested($event)"
@@ -73,7 +78,11 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
         (viewChange)="onViewChange($event)"
         (createFolderRequested)="createNewFolder()"
         (uploadFileRequested)="openFilePicker()"
+        (uploadFolderRequested)="openFolderPicker()"
         (unlockRequested)="isUnlockModalOpen.set(true)"
+        (dropStarted)="onDropStarted()"
+        (externalDrop)="onDropped($event)"
+        (dropError)="onDropError($event)"
         (videoSelected)="activeVideoFile.set($event)"
         (imageSelected)="onImageSelected($event)"
         (shareRequested)="onShareRequested($event)"
@@ -85,6 +94,7 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 
     <ng-template #shellContent>
       <input type="file" #fileInput multiple style="display: none" (change)="onFilesSelected($event)" />
+      <input type="file" #folderInput multiple webkitdirectory directory style="display: none" (change)="onFolderSelected($event)" />
       
                 <!-- Unlock Modal (visible when unlocked requested) -->
                 @if (isUnlockModalOpen()) {
@@ -288,7 +298,9 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
   ],
 })
 export class VaultHomeComponent implements OnInit {
+  private dropTargetFolderId: number | null | undefined;
   @ViewChild('fileInput') private fileInput?: ElementRef<HTMLInputElement>;
+  @ViewChild('folderInput') private folderInput?: ElementRef<HTMLInputElement>;
   protected readonly appState = inject(AppStateService);
   protected readonly authService = inject(AuthService);
   protected readonly cryptoService = inject(CryptoService);
@@ -318,6 +330,10 @@ export class VaultHomeComponent implements OnInit {
 
   openFilePicker(): void {
     this.fileInput?.nativeElement.click();
+  }
+
+  openFolderPicker(): void {
+    this.folderInput?.nativeElement.click();
   }
 
   onViewChange(view: DriveView): void {
@@ -416,6 +432,55 @@ export class VaultHomeComponent implements OnInit {
       console.error(e);
       alert('Erro no upload');
     }
+  }
+
+  async onFolderSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    input.value = '';
+    if (this.appState.isLocked() || files.length === 0) return;
+
+    try {
+      const rootParentId = this.driveStore.currentFolderId();
+      await this.driveStore.uploadFolder(files, rootParentId);
+    } catch (error) {
+      console.error(error);
+      alert('Erro no upload da pasta');
+    }
+  }
+
+  async onDropped(drop: DroppedItems): Promise<void> {
+    const folderId = this.dropTargetFolderId;
+    this.dropTargetFolderId = undefined;
+    if (folderId === undefined || this.appState.isLocked() || this.currentView() !== 'drive') return;
+    if (drop.files.length > 0) {
+      try {
+        if (drop.files.length === 1) await this.driveStore.uploadFile(drop.files[0], folderId);
+        else await this.driveStore.uploadFiles(drop.files, folderId, 'drop-files');
+      } catch (error) {
+        console.error(error);
+        alert('Erro no upload dos arquivos arrastados');
+      }
+    }
+    if (drop.folders.length > 0 && !this.appState.isLocked()) {
+      try {
+        await this.driveStore.uploadFolderSources(drop.folders, folderId, 'drop-folders');
+      } catch (error) {
+        console.error(error);
+        alert('Erro no upload das pastas arrastadas');
+      }
+    }
+  }
+
+  onDropStarted(): void {
+    this.dropTargetFolderId = this.appState.isLocked() || this.currentView() !== 'drive'
+      ? undefined
+      : this.driveStore.currentFolderId();
+  }
+
+  onDropError(error: unknown): void {
+    console.error('Erro ao ler itens arrastados', error);
+    alert('Não foi possível ler os itens arrastados');
   }
 
   async onEmptyTrash() {

@@ -3,12 +3,15 @@ import { FileListComponent } from '../file-list/file-list.component';
 import { TransferPanelComponent } from '../transfer-panel/transfer-panel.component';
 import { DriveFile, DriveStore } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
+import { DriveDropZoneDirective } from '../../directives/drive-drop-zone.directive';
+import { DroppedItems } from '../../services/data-transfer-reader.service';
 
 @Component({
   selector: 'app-drive-workspace',
   standalone: true,
-  imports: [FileListComponent, TransferPanelComponent],
+  imports: [FileListComponent, TransferPanelComponent, DriveDropZoneDirective],
   template: `
+    <div class="workspace-drop-zone" appDriveDropZone [dropZoneEnabled]="currentView() === 'drive'" [dropZoneLocked]="locked()" (dropStarted)="dropStarted.emit()" (dropped)="externalDrop.emit($event)" (dropError)="dropError.emit($event)">
     <div class="breadcrumb">
       <span class="material-symbols-outlined breadcrumb-icon">
         {{ currentView() === 'drive' ? (driveStore.currentFolderId() ? 'folder_open' : 'folder') : (currentView() === 'trash' ? 'delete' : (currentView() === 'storage' ? 'cloud' : 'pending_actions')) }}
@@ -69,9 +72,12 @@ import { DriveView } from '../../state/drive.types';
     @if (currentView() !== 'transfers') {
       <app-transfer-panel [currentView]="currentView()" />
     }
+    </div>
   `,
   styles: [`
     :host { display: flex; flex: 1; flex-direction: column; min-height: 0; width: 100%; }
+    .workspace-drop-zone { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; }
+    .workspace-drop-zone.drop-zone-active::after { content: 'Solte para enviar'; position: absolute; inset: 8px; z-index: 40; display: grid; place-items: center; border: 2px dashed var(--accent-color, #1a73e8); border-radius: 12px; background: color-mix(in srgb, var(--accent-color, #1a73e8) 10%, transparent); color: var(--accent-color, #1a73e8); font-size: 18px; font-weight: 500; pointer-events: none; }
     .breadcrumb { display: flex; align-items: center; gap: 10px; padding: 20px 24px 12px; font-size: 18px; font-weight: 400; color: #202124; }
     .breadcrumb-icon { font-size: 22px; color: #5f6368; font-variation-settings: 'FILL' 1; }
     .breadcrumb-text { font-size: 18px; }
@@ -94,6 +100,7 @@ import { DriveView } from '../../state/drive.types';
 })
 export class DriveWorkspaceComponent {
   readonly currentView = input.required<DriveView>();
+  readonly locked = input(false);
   readonly driveStore = inject(DriveStore);
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
@@ -101,6 +108,9 @@ export class DriveWorkspaceComponent {
   readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
   readonly shareRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
+  readonly externalDrop = output<DroppedItems>();
+  readonly dropStarted = output<void>();
+  readonly dropError = output<unknown>();
 
   readonly currentStorageFiles = computed(() => [...this.driveStore.files()]
     .filter(file => !file.isHidden && !file.isFolder)

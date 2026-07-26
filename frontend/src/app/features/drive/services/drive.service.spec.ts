@@ -40,6 +40,17 @@ describe('DriveService', () => {
     req.flush({});
   });
 
+  it('creates folder trees in one opaque batch request', () => {
+    const folders = [{ client_ref: 'ref-1', parent_client_ref: null, encrypted_name: 'cipher', name_hash: 'hash' }];
+    service.batchCreateFolders(7, folders).subscribe();
+    const req = httpMock.expectOne(`${environment.apiUrl}/folders/batch-create`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ root_parent_id: 7, folders });
+    expect(JSON.stringify(req.request.body)).not.toContain('path');
+    expect(req.request.withCredentials).toBeTrue();
+    req.flush({ folders: [{ client_ref: 'ref-1', folder_id: 8, created: true }] });
+  });
+
   it('should manage pinned folders using only ids and credentials', () => {
     service.getPinnedFolders().subscribe();
     let req = httpMock.expectOne(`${environment.apiUrl}/folders/pinned`);

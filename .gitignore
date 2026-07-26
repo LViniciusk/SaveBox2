@@ -3,6 +3,7 @@
 backend/include/crow_all.h
 nanika_storage/
 build/
+build-*/
 bin/
 obj/
 out/

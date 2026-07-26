@@ -34,11 +34,15 @@ class GDriveShellStubComponent {
   readonly viewChange = output<any>();
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
+  readonly uploadFolderRequested = output<void>();
   readonly videoSelected = output<any>();
   readonly imageSelected = output<any>();
   readonly shareRequested = output<any>();
   readonly pinnedFolderNavigate = output<number>();
   readonly emptyTrashRequested = output<void>();
+  readonly dropStarted = output<void>();
+  readonly externalDrop = output<any>();
+  readonly dropError = output<unknown>();
 }
 
 @Component({
@@ -101,6 +105,8 @@ describe('VaultHomeComponent theme switching', () => {
     createFolder: jasmine.createSpy('createFolder'),
     uploadFile: jasmine.createSpy('uploadFile').and.resolveTo(),
     uploadFiles: jasmine.createSpy('uploadFiles').and.resolveTo(),
+    uploadFolder: jasmine.createSpy('uploadFolder').and.resolveTo(),
+    uploadFolderSources: jasmine.createSpy('uploadFolderSources').and.resolveTo(),
   };
   const cryptoService = {
     isVaultUnlocked: jasmine.createSpy('isVaultUnlocked').and.returnValue(false),
@@ -117,6 +123,7 @@ describe('VaultHomeComponent theme switching', () => {
     driveStore.loadTree.calls.reset();
     driveStore.uploadFile.calls.reset();
     driveStore.uploadFiles.calls.reset();
+    driveStore.uploadFolder.calls.reset();
     driveStore.goBack.calls.reset();
     driveStore.goForward.calls.reset();
     driveStore.navigateUp.calls.reset();
@@ -219,7 +226,22 @@ describe('VaultHomeComponent theme switching', () => {
     expect(driveStore.uploadFile).toHaveBeenCalledTimes(2);
     expect(driveStore.uploadFiles).not.toHaveBeenCalled();
     expect(input.hasAttribute('webkitdirectory')).toBeFalse();
-    expect(fixture.nativeElement.querySelectorAll('input[type="file"]').length).toBe(1);
+    expect(fixture.nativeElement.querySelectorAll('input[type="file"]').length).toBe(2);
+  });
+
+  it('uses the single directory input and forwards the captured destination', async () => {
+    appState.isLocked.set(false);
+    driveStore.currentFolderId.set(42);
+    const input = fixture.nativeElement.querySelector('input[webkitdirectory]') as HTMLInputElement;
+    const file = new File(['a'], 'a.txt');
+    Object.defineProperty(file, 'webkitRelativePath', { configurable: true, value: 'Projeto/a.txt' });
+    Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+
+    await fixture.componentInstance.onFolderSelected({ target: input } as unknown as Event);
+
+    expect(driveStore.uploadFolder).toHaveBeenCalledOnceWith([file], 42);
+    expect(input.value).toBe('');
+    expect(fixture.nativeElement.querySelectorAll('input[webkitdirectory]').length).toBe(1);
   });
 
   it('does not start uploads while locked, after clearing the input', async () => {

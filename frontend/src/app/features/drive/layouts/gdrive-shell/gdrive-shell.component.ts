@@ -4,6 +4,7 @@ import { GDriveSidebarComponent } from '../../components/gdrive-sidebar/gdrive-s
 import { DriveWorkspaceComponent } from '../../components/drive-workspace/drive-workspace.component';
 import { DriveFile, QuotaState } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
+import { DroppedItems } from '../../services/data-transfer-reader.service';
 
 @Component({
   selector: 'app-gdrive-shell',
@@ -20,17 +21,22 @@ import { DriveView } from '../../state/drive.types';
         (viewChange)="viewChange.emit($event)"
         (createFolderRequested)="createFolderRequested.emit()"
         (uploadFileRequested)="uploadFileRequested.emit()"
+        (uploadFolderRequested)="uploadFolderRequested.emit()"
         (pinnedFolderNavigate)="pinnedFolderNavigate.emit($event)" />
       <main class="content-area">
         <div class="content-inner">
           <app-drive-workspace
             [currentView]="currentView()"
+            [locked]="locked()"
             (createFolderRequested)="createFolderRequested.emit()"
             (uploadFileRequested)="uploadFileRequested.emit()"
             (videoSelected)="videoSelected.emit($event)"
             (imageSelected)="imageSelected.emit($event)"
             (shareRequested)="shareRequested.emit($event)"
-            (emptyTrashRequested)="emptyTrashRequested.emit()" />
+            (emptyTrashRequested)="emptyTrashRequested.emit()"
+            (dropStarted)="dropStarted.emit()"
+            (externalDrop)="externalDrop.emit($event)"
+            (dropError)="dropError.emit($event)" />
           <ng-content />
         </div>
       </main>
@@ -60,9 +66,13 @@ export class GDriveShellComponent {
   readonly viewChange = output<DriveView>();
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
+  readonly uploadFolderRequested = output<void>();
   readonly pinnedFolderNavigate = output<number>();
   readonly videoSelected = output<DriveFile>();
   readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
   readonly shareRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
+  readonly externalDrop = output<DroppedItems>();
+  readonly dropStarted = output<void>();
+  readonly dropError = output<unknown>();
 }

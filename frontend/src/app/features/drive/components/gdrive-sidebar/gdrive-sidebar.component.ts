@@ -26,6 +26,10 @@ import { PinnedFoldersSectionComponent } from '../pinned-folders-section/pinned-
               <span class="material-symbols-outlined">upload_file</span>
               Upload de ficheiro
             </button>
+            <button class="dropdown-item" (click)="uploadFolder()">
+              <span class="material-symbols-outlined">drive_folder_upload</span>
+              Upload de pasta
+            </button>
           </div>
         }
       </div>
@@ -119,6 +123,7 @@ export class GDriveSidebarComponent {
   readonly viewChange = output<DriveView>();
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
+  readonly uploadFolderRequested = output<void>();
   readonly pinnedFolderNavigate = output<number>();
   readonly isNewMenuOpen = signal(false);
 
@@ -139,6 +144,11 @@ export class GDriveSidebarComponent {
   uploadFile(): void {
     this.isNewMenuOpen.set(false);
     this.uploadFileRequested.emit();
+  }
+
+  uploadFolder(): void {
+    this.isNewMenuOpen.set(false);
+    this.uploadFolderRequested.emit();
   }
 
   getQuotaPercent(): number {

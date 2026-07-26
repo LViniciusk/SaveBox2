@@ -2,7 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
 import { environment } from '../../../../environments/environment';
-import { BatchUploadRequestItem, BatchUploadResponseItem } from '../upload/upload.models';
+import { BatchUploadRequestItem, BatchUploadResponseItem, FolderBatchResponseItem } from '../upload/upload.models';
 
 export interface QuotaResponse {
   used_bytes: number;
@@ -42,6 +42,10 @@ export interface PinnedFoldersResponse {
 
 export interface BatchInitUploadsResponse {
   files: BatchUploadResponseItem[];
+}
+
+export interface BatchCreateFoldersResponse {
+  folders: FolderBatchResponseItem[];
 }
 
 @Injectable({ providedIn: 'root' })
@@ -134,6 +138,18 @@ export class DriveService {
     return this.http.post<BatchInitUploadsResponse>(`${environment.apiUrl}/files/batch-init`, { files }, {
       withCredentials: true,
     });
+  }
+
+  batchCreateFolders(rootParentId: number | null, folders: readonly {
+    client_ref: string;
+    parent_client_ref: string | null;
+    encrypted_name: string;
+    name_hash: string;
+  }[]): Observable<BatchCreateFoldersResponse> {
+    return this.http.post<BatchCreateFoldersResponse>(`${environment.apiUrl}/folders/batch-create`, {
+      root_parent_id: rootParentId,
+      folders,
+    }, { withCredentials: true });
   }
 
   uploadChunk(fileId: number, chunkIndex: number, chunkBlob: Blob): Observable<void> {

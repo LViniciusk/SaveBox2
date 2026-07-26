@@ -68,3 +68,37 @@ export interface UploadBatchSummary {
   paused: number;
   failed: number;
 }
+
+export interface FolderUploadFile {
+  file: File;
+  segments: readonly string[];
+}
+
+export interface FolderUploadSourceFile {
+  file: File;
+  relativePath: string;
+}
+
+export interface FolderUploadNode {
+  clientRef: string;
+  parentClientRef: string | null;
+  name: string;
+  encryptedName?: string;
+  nameHash?: string;
+}
+
+export interface FolderUploadTree {
+  nodes: FolderUploadNode[];
+  files: Array<{ file: File; folderClientRef: string | null }>;
+}
+
+export interface FolderBatchResponseItem {
+  client_ref: string;
+  folder_id: number;
+  created: boolean;
+}
+
+export interface FolderUploadCandidate {
+  file: File;
+  folderId: number | null;
+}

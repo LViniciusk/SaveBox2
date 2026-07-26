@@ -3,11 +3,21 @@
 #include "storage/FileChunker.hpp"
 #include <pqxx/pqxx>
 #include <algorithm>
+#include <cctype>
+#include <queue>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
+
+constexpr size_t MAX_BATCH_FOLDERS = 1000;
+constexpr size_t MAX_TREE_DEPTH = 128;
+constexpr size_t MAX_CLIENT_REF_LENGTH = 128;
+constexpr size_t MAX_ENCRYPTED_NAME_LENGTH = 64 * 1024;
+constexpr size_t MAX_NAME_HASH_LENGTH = 128;
 
 std::string to_pg_bigint_array(const std::vector<uint64_t>& ids) {
     std::string result = "{";
@@ -22,6 +32,81 @@ std::string to_pg_bigint_array(const std::vector<uint64_t>& ids) {
 void lock_user_pins(pqxx::work& txn, uint64_t user_id) {
     // ponytail: one PostgreSQL transaction lock per user; replace only if pin throughput demands finer granularity.
     txn.exec("SELECT pg_advisory_xact_lock($1::bigint)", pqxx::params{user_id});
+}
+
+void lock_user_folders(pqxx::work& txn, uint64_t user_id) {
+    // A single deterministic lock serializes individual and batch folder creates.
+    txn.exec("SELECT pg_advisory_xact_lock($1::bigint)", pqxx::params{user_id});
+}
+
+bool is_valid_client_ref(const std::string& value) {
+    if (value.empty() || value.size() > MAX_CLIENT_REF_LENGTH || value == "." || value == "..") {
+        return false;
+    }
+    for (const unsigned char ch : value) {
+        if (!(std::isalnum(ch) || ch == '-' || ch == '_')) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void validate_batch_structure(const std::vector<BatchCreateFolderItem>& folders) {
+    if (folders.empty() || folders.size() > MAX_BATCH_FOLDERS) {
+        throw std::runtime_error("BAD_REQUEST");
+    }
+
+    std::unordered_map<std::string, size_t> by_ref;
+    by_ref.reserve(folders.size());
+    for (size_t i = 0; i < folders.size(); ++i) {
+        const auto& folder = folders[i];
+        if (!is_valid_client_ref(folder.client_ref) || !by_ref.emplace(folder.client_ref, i).second ||
+            folder.encrypted_name.empty() || folder.encrypted_name.size() > MAX_ENCRYPTED_NAME_LENGTH ||
+            folder.name_hash.empty() || folder.name_hash.size() > MAX_NAME_HASH_LENGTH) {
+            throw std::runtime_error("BAD_REQUEST");
+        }
+        if (folder.parent_client_ref.has_value() && !is_valid_client_ref(*folder.parent_client_ref)) {
+            throw std::runtime_error("BAD_REQUEST");
+        }
+    }
+
+    std::vector<std::vector<size_t>> children(folders.size());
+    std::vector<size_t> indegree(folders.size(), 0);
+    for (size_t i = 0; i < folders.size(); ++i) {
+        if (!folders[i].parent_client_ref.has_value()) {
+            continue;
+        }
+        auto parent = by_ref.find(*folders[i].parent_client_ref);
+        if (parent == by_ref.end() || parent->second == i) {
+            throw std::runtime_error("BAD_REQUEST");
+        }
+        children[parent->second].push_back(i);
+        ++indegree[i];
+    }
+
+    std::queue<size_t> ready;
+    for (size_t i = 0; i < indegree.size(); ++i) {
+        if (indegree[i] == 0) ready.push(i);
+    }
+
+    std::vector<size_t> order;
+    order.reserve(folders.size());
+    std::vector<size_t> depth(folders.size(), 1);
+    while (!ready.empty()) {
+        const size_t current = ready.front();
+        ready.pop();
+        order.push_back(current);
+        for (const size_t child : children[current]) {
+            depth[child] = std::max(depth[child], depth[current] + 1);
+            if (depth[child] > MAX_TREE_DEPTH) {
+                throw std::runtime_error("BAD_REQUEST");
+            }
+            if (--indegree[child] == 0) ready.push(child);
+        }
+    }
+    if (order.size() != folders.size()) {
+        throw std::runtime_error("BAD_REQUEST");
+    }
 }
 
 void normalize_active_pins(pqxx::work& txn, uint64_t user_id) {
@@ -51,6 +136,7 @@ uint64_t FolderManager::create_folder(uint64_t user_id,
                                       const std::string& name_hash) {
     auto conn = pool_.acquire_connection();
     pqxx::work W(*conn);
+    lock_user_folders(W, user_id);
 
     if (parent_id.has_value()) {
         auto parent_check = W.exec(
@@ -84,6 +170,158 @@ uint64_t FolderManager::create_folder(uint64_t user_id,
     }
 
     return res[0][0].as<uint64_t>();
+}
+
+std::vector<BatchCreateFolderResult> FolderManager::batch_create_folders(
+    uint64_t user_id,
+    std::optional<uint64_t> root_parent_id,
+    const std::vector<BatchCreateFolderItem>& folders) {
+    validate_batch_structure(folders);
+
+    std::unordered_map<std::string, size_t> by_ref;
+    by_ref.reserve(folders.size());
+    for (size_t i = 0; i < folders.size(); ++i) by_ref.emplace(folders[i].client_ref, i);
+
+    std::vector<size_t> order;
+    order.reserve(folders.size());
+    std::vector<size_t> indegree(folders.size(), 0);
+    std::vector<std::vector<size_t>> children(folders.size());
+    for (size_t i = 0; i < folders.size(); ++i) {
+        if (folders[i].parent_client_ref.has_value()) {
+            const auto parent = by_ref.at(*folders[i].parent_client_ref);
+            children[parent].push_back(i);
+            ++indegree[i];
+        }
+    }
+    std::queue<size_t> ready;
+    for (size_t i = 0; i < folders.size(); ++i) if (indegree[i] == 0) ready.push(i);
+    std::vector<size_t> depth(folders.size(), 1);
+    while (!ready.empty()) {
+        const size_t current = ready.front();
+        ready.pop();
+        order.push_back(current);
+        for (const size_t child : children[current]) {
+            depth[child] = std::max(depth[child], depth[current] + 1);
+            if (--indegree[child] == 0) ready.push(child);
+        }
+    }
+
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    lock_user_folders(txn, user_id);
+
+    if (root_parent_id.has_value()) {
+        const auto root = txn.exec(
+            "SELECT user_id, deleted_at FROM folders WHERE id = $1",
+            pqxx::params{*root_parent_id}
+        );
+        if (root.empty()) throw std::runtime_error("NOT_FOUND");
+        if (root[0][0].as<uint64_t>() != user_id) throw std::runtime_error("FORBIDDEN");
+        if (!root[0][1].is_null()) throw std::runtime_error("NOT_FOUND");
+    }
+
+    std::unordered_map<std::string, uint64_t> resolved_ids;
+    std::unordered_set<std::string> request_names;
+    resolved_ids.reserve(folders.size());
+    request_names.reserve(folders.size());
+
+    auto find_active = [&](std::optional<uint64_t> parent_id, const std::string& hash) {
+        if (parent_id.has_value()) {
+            return txn.exec(
+                "SELECT id FROM folders WHERE user_id = $1 AND parent_id = $2 AND name_hash = $3 AND deleted_at IS NULL",
+                pqxx::params{user_id, *parent_id, hash}
+            );
+        }
+        return txn.exec(
+            "SELECT id FROM folders WHERE user_id = $1 AND parent_id IS NULL AND name_hash = $2 AND deleted_at IS NULL",
+            pqxx::params{user_id, hash}
+        );
+    };
+
+    auto find_deleted = [&](std::optional<uint64_t> parent_id, const std::string& hash) {
+        if (parent_id.has_value()) {
+            return txn.exec(
+                "SELECT id FROM folders WHERE user_id = $1 AND parent_id = $2 AND name_hash = $3 AND deleted_at IS NOT NULL",
+                pqxx::params{user_id, *parent_id, hash}
+            );
+        }
+        return txn.exec(
+            "SELECT id FROM folders WHERE user_id = $1 AND parent_id IS NULL AND name_hash = $2 AND deleted_at IS NOT NULL",
+            pqxx::params{user_id, hash}
+        );
+    };
+
+    // Preflight all logical collisions before the first insert.
+    for (const size_t index : order) {
+        const auto& folder = folders[index];
+        std::optional<uint64_t> parent_id;
+        std::string parent_key;
+        if (folder.parent_client_ref.has_value()) {
+            const auto& parent_ref = *folder.parent_client_ref;
+            const auto parent_id_it = resolved_ids.find(parent_ref);
+            if (parent_id_it != resolved_ids.end()) {
+                parent_id = parent_id_it->second;
+                parent_key = "id:" + std::to_string(*parent_id);
+            } else {
+                parent_key = "ref:" + parent_ref;
+            }
+        } else if (root_parent_id.has_value()) {
+            parent_id = root_parent_id;
+            parent_key = "id:" + std::to_string(*root_parent_id);
+        } else {
+            parent_key = "root";
+        }
+
+        const std::string logical_key = parent_key + "\n" + folder.name_hash;
+        if (!request_names.emplace(logical_key).second) throw std::runtime_error("BAD_REQUEST");
+        if (!parent_id.has_value() && parent_key.rfind("ref:", 0) == 0) continue;
+        const auto active = find_active(parent_id, folder.name_hash);
+        if (!active.empty()) {
+            resolved_ids.emplace(folder.client_ref, active[0][0].as<uint64_t>());
+        } else if (!find_deleted(parent_id, folder.name_hash).empty()) {
+            throw std::runtime_error("FOLDER_ALREADY_EXISTS");
+        }
+    }
+
+    std::unordered_map<std::string, BatchCreateFolderResult> results;
+    results.reserve(folders.size());
+    for (const size_t index : order) {
+        const auto& folder = folders[index];
+        auto existing = resolved_ids.find(folder.client_ref);
+        if (existing != resolved_ids.end()) {
+            results.emplace(folder.client_ref, BatchCreateFolderResult{folder.client_ref, existing->second, false});
+            continue;
+        }
+
+        std::optional<uint64_t> parent_id;
+        if (folder.parent_client_ref.has_value()) {
+            parent_id = resolved_ids.at(*folder.parent_client_ref);
+        } else {
+            parent_id = root_parent_id;
+        }
+
+        pqxx::result inserted;
+        if (parent_id.has_value()) {
+            inserted = txn.exec(
+                "INSERT INTO folders (user_id, parent_id, encrypted_name, name_hash) VALUES ($1, $2, $3, $4) RETURNING id",
+                pqxx::params{user_id, *parent_id, folder.encrypted_name, folder.name_hash}
+            );
+        } else {
+            inserted = txn.exec(
+                "INSERT INTO folders (user_id, parent_id, encrypted_name, name_hash) VALUES ($1, NULL, $2, $3) RETURNING id",
+                pqxx::params{user_id, folder.encrypted_name, folder.name_hash}
+            );
+        }
+        const auto id = inserted[0][0].as<uint64_t>();
+        resolved_ids.emplace(folder.client_ref, id);
+        results.emplace(folder.client_ref, BatchCreateFolderResult{folder.client_ref, id, true});
+    }
+
+    txn.commit();
+    std::vector<BatchCreateFolderResult> response;
+    response.reserve(folders.size());
+    for (const auto& folder : folders) response.push_back(results.at(folder.client_ref));
+    return response;
 }
 
 std::vector<std::string> FolderManager::delete_folder(uint64_t folder_id, uint64_t user_id) {

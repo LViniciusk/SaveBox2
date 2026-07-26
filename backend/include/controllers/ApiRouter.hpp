@@ -35,6 +35,7 @@ public:
     crow::response handle_verify_email(const crow::request& req);
     crow::response handle_update_profile_pic(const crow::request& req);
     crow::response handle_create_folder(const crow::request& req);
+    crow::response handle_batch_create_folders(const crow::request& req);
     crow::response handle_get_pinned_folders(const crow::request& req);
     crow::response handle_pin_folder(const crow::request& req, int folder_id);
     crow::response handle_unpin_folder(const crow::request& req, int folder_id);

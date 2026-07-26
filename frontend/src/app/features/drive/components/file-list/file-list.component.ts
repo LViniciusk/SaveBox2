@@ -1493,7 +1493,7 @@ export class FileListComponent implements OnInit, OnDestroy {
     }
 
     const currentId = this.driveStore.currentFolderId();
-    if (currentId !== null) {
+    if (currentId !== null && mode !== 'storage') {
       let parentId: number | null = null;
       if (mode === 'trash') {
         const currentFolder = this.driveStore.trashFiles().find(f => f.isFolder && f.id === currentId);

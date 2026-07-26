@@ -10,7 +10,9 @@ import { environment } from '../../../../environments/environment';
 import { AppStateService, AppStatus } from '../../../core/state/app-state.service';
 import { UploadEngineService } from '../upload/upload-engine.service';
 import { UploadBatchCoordinatorService } from '../upload/upload-batch-coordinator.service';
-import { PreparedUpload, UploadBatchCandidate, UploadProvider } from '../upload/upload.models';
+import { PreparedUpload, UploadBatchCandidate, UploadBatchSummary, UploadProvider } from '../upload/upload.models';
+import { FolderUploadCoordinatorService } from '../upload/folder-upload-coordinator.service';
+import { FolderUploadSourceFile } from '../upload/upload.models';
 
 export interface TransferItem {
   id: string;
@@ -23,11 +25,47 @@ export interface TransferItem {
   timestamp: Date;
   speed?: string;
   eta?: string;
+  speedBytesPerSecond?: number;
+  groupId?: string;
   isRecovery?: boolean;
   pendingData?: any;
   bytesTransferred?: number;
   totalBytes?: number;
   history?: { bytes: number, time: number }[];
+}
+
+export type TransferGroupSource = 'multiple-files' | 'folder-upload' | 'drop-files' | 'drop-folders' | 'mixed-drop';
+export type TransferGroupStatus = 'queued' | 'active' | 'paused' | 'success' | 'error' | 'partial' | 'cancelled';
+
+export interface TransferGroup {
+  id: string;
+  source: TransferGroupSource;
+  transferIds: readonly string[];
+  createdAt: number;
+  cancelledTransferIds: readonly string[];
+  cancelledBytes: Readonly<Record<string, { totalBytes: number; transferredBytes: number }>>;
+}
+
+export interface TransferGroupViewModel {
+  id: string;
+  source: TransferGroupSource;
+  transferIds: readonly string[];
+  totalFiles: number;
+  completedFiles: number;
+  failedFiles: number;
+  cancelledFiles: number;
+  pausedFiles: number;
+  activeFiles: number;
+  totalBytes: number;
+  transferredBytes: number;
+  progress: number;
+  speedBytesPerSecond: number;
+  etaSeconds: number | null;
+  status: TransferGroupStatus;
+  canPause: boolean;
+  canResume: boolean;
+  canCancel: boolean;
+  canClear: boolean;
 }
 export interface PendingUpload {
   id: number;
@@ -80,6 +118,7 @@ export class DriveStore {
   private readonly appState = inject(AppStateService);
   private readonly uploadEngine = inject(UploadEngineService);
   private readonly uploadBatchCoordinator = inject(UploadBatchCoordinatorService);
+  private readonly folderUploadCoordinator = inject(FolderUploadCoordinatorService);
 
   constructor() {
     effect(() => {
@@ -137,6 +176,8 @@ export class DriveStore {
   readonly linkedAccounts = signal<any[]>([]);
   readonly trashFiles = signal<DriveFile[]>([]);
   readonly transfers = signal<TransferItem[]>([]);
+  readonly transferGroups = signal<TransferGroup[]>([]);
+  readonly transferGroupViews = computed(() => this.transferGroups().map(group => this.toTransferGroupView(group)));
   readonly thumbnails = signal<Record<number, string>>({});
 
   readonly currentFolderId = signal<number | null>(null);
@@ -520,7 +561,142 @@ export class DriveStore {
   }
 
   clearCompletedTransfers() {
-    this.transfers.update(list => list.filter(item => item.status !== 'success' && item.status !== 'error'));
+    const groupedIds = new Set(this.transferGroups().flatMap(group => group.transferIds));
+    this.transfers.update(list => list.filter(item =>
+      groupedIds.has(item.id) || (item.status !== 'success' && item.status !== 'error'))
+    );
+  }
+
+  private newTransferId(prefix: 'up' | 'dl' = 'up'): string {
+    return `${prefix}_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  }
+
+  private createTransferGroup(source: TransferGroupSource, transferIds: readonly string[]): string {
+    const id = crypto.randomUUID();
+    this.transferGroups.update(groups => [...groups, {
+      id,
+      source,
+      transferIds: [...transferIds],
+      createdAt: Date.now(),
+      cancelledTransferIds: [],
+      cancelledBytes: {},
+    }]);
+    return id;
+  }
+
+  private recordCancelledTransfer(transfer: TransferItem): void {
+    if (!transfer.groupId) return;
+    this.transferGroups.update(groups => groups.map(group => {
+      if (group.id !== transfer.groupId || group.cancelledTransferIds.includes(transfer.id)) return group;
+      return {
+        ...group,
+        cancelledTransferIds: [...group.cancelledTransferIds, transfer.id],
+        cancelledBytes: {
+          ...group.cancelledBytes,
+          [transfer.id]: {
+            totalBytes: transfer.totalBytes ?? 0,
+            transferredBytes: transfer.bytesTransferred ?? 0,
+          },
+        },
+      };
+    }));
+  }
+
+  private toTransferGroupView(group: TransferGroup): TransferGroupViewModel {
+    const byId = new Map(this.transfers().map(item => [item.id, item]));
+    const cancelled = new Set(group.cancelledTransferIds);
+    const members = group.transferIds.map(id => byId.get(id)).filter((item): item is TransferItem => !!item);
+    const completedFiles = members.filter(item => item.status === 'success').length;
+    const failedFiles = members.filter(item => item.status === 'error').length;
+    const pausedFiles = members.filter(item => item.status === 'paused').length;
+    const activeFiles = members.filter(item => item.status === 'processing' || item.status === 'pending').length;
+    const cancelledFiles = cancelled.size;
+    const terminalFiles = completedFiles + failedFiles + cancelledFiles;
+    const totalBytes = members.reduce((sum, item) => sum + (item.totalBytes ?? 0), 0) +
+      [...cancelled].reduce((sum, id) => sum + (group.cancelledBytes[id]?.totalBytes ?? 0), 0);
+    const transferredBytes = members.reduce((sum, item) => {
+      const total = item.totalBytes ?? 0;
+      return sum + (total > 0 ? Math.min(Math.max(item.bytesTransferred ?? 0, 0), total) : 0);
+    }, 0) + [...cancelled].reduce((sum, id) => {
+      const bytes = group.cancelledBytes[id];
+      return sum + (bytes?.totalBytes ? Math.min(Math.max(bytes.transferredBytes, 0), bytes.totalBytes) : 0);
+    }, 0);
+    const speedBytesPerSecond = members
+      .filter(item => item.status === 'processing')
+      .reduce((sum, item) => sum + Math.max(item.speedBytesPerSecond ?? 0, 0), 0);
+    const allTerminal = terminalFiles >= group.transferIds.length;
+    let status: TransferGroupStatus = 'queued';
+    if (completedFiles === group.transferIds.length) status = 'success';
+    else if (cancelledFiles === group.transferIds.length) status = 'cancelled';
+    else if (allTerminal) {
+      status = completedFiles > 0 || failedFiles > 0 ? (completedFiles > 0 && (failedFiles > 0 || cancelledFiles > 0) ? 'partial' : failedFiles > 0 ? 'error' : 'partial') : 'cancelled';
+    } else if (activeFiles > 0) status = 'active';
+    else if (pausedFiles + cancelledFiles === group.transferIds.length) status = 'paused';
+
+    const progress = totalBytes > 0
+      ? Math.min(Math.max(transferredBytes / totalBytes, 0), 1)
+      : status === 'success' ? 1 : 0;
+    const remainingBytes = Math.max(totalBytes - transferredBytes, 0);
+    return {
+      id: group.id,
+      source: group.source,
+      transferIds: group.transferIds,
+      totalFiles: group.transferIds.length,
+      completedFiles,
+      failedFiles,
+      cancelledFiles,
+      pausedFiles,
+      activeFiles,
+      totalBytes,
+      transferredBytes,
+      progress,
+      speedBytesPerSecond,
+      etaSeconds: speedBytesPerSecond > 0 ? Math.ceil(remainingBytes / speedBytesPerSecond) : null,
+      status,
+      canPause: activeFiles > 0,
+      canResume: pausedFiles > 0 && activeFiles === 0,
+      canCancel: !allTerminal,
+      canClear: allTerminal,
+    };
+  }
+
+  pauseTransferGroup(id: string): void {
+    const group = this.transferGroups().find(item => item.id === id);
+    if (!group) return;
+    for (const transferId of group.transferIds) {
+      const transfer = this.transfers().find(item => item.id === transferId);
+      if (transfer?.status === 'processing' || transfer?.status === 'pending') this.pauseTransfer(transferId);
+    }
+  }
+
+  async resumeTransferGroup(id: string): Promise<void> {
+    const group = this.transferGroups().find(item => item.id === id);
+    if (!group) return;
+    for (const transferId of group.transferIds) {
+      const transfer = this.transfers().find(item => item.id === transferId);
+      if (transfer?.status !== 'paused') continue;
+      if (transfer.type === 'upload') await this.resumeUpload(transferId);
+      else await this.resumeDownload(transferId);
+    }
+  }
+
+  async cancelTransferGroup(id: string): Promise<void> {
+    const group = this.transferGroups().find(item => item.id === id);
+    if (!group) return;
+    for (const transferId of group.transferIds) {
+      const transfer = this.transfers().find(item => item.id === transferId);
+      if (transfer && transfer.status !== 'success' && transfer.status !== 'error') await this.cancelTransfer(transferId);
+    }
+  }
+
+  clearTransferGroup(id: string): void {
+    const view = this.transferGroupViews().find(group => group.id === id);
+    if (!view?.canClear) return;
+    const group = this.transferGroups().find(item => item.id === id);
+    if (!group) return;
+    const ids = new Set(group.transferIds);
+    this.transfers.update(list => list.filter(item => !ids.has(item.id)));
+    this.transferGroups.update(groups => groups.filter(item => item.id !== id));
   }
 
   updateTransferProgress(id: string, progress: number, bytesTransferred: number, totalBytes: number) {
@@ -566,17 +742,18 @@ export class DriveStore {
       progress, 
       speed: speedStr, 
       eta: etaStr,
+      speedBytesPerSecond: history.length >= 2 ? Math.max(0, (history.at(-1)!.bytes - history[0].bytes) / Math.max((history.at(-1)!.time - history[0].time) / 1000, 0.001)) : 0,
       bytesTransferred,
       totalBytes,
       history
     });
   }
 
-  async uploadFile(file: File, folderId: number | null = this.currentFolderId()): Promise<void> {
+  async uploadFile(file: File, folderId: number | null = this.currentFolderId(), refresh = true, groupId?: string, transferId?: string): Promise<void> {
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
 
     try {
-      await this._doUpload(file, folderId);
+      await this._doUpload(file, folderId, refresh, groupId, transferId);
     } catch (e: any) {
       if (e?.status === 409) {
         const confirmed = await this.dialogService.confirm(
@@ -595,7 +772,7 @@ export class DriveStore {
           await firstValueFrom(this.driveService.trashFile(existing.id));
           await firstValueFrom(this.driveService.hardDeleteFile(existing.id));
         }
-        await this._doUpload(file, folderId);
+        await this._doUpload(file, folderId, refresh, groupId, transferId);
       } else {
         console.error('Falha no upload', e);
         throw e;
@@ -605,7 +782,11 @@ export class DriveStore {
     }
   }
 
-  async uploadFiles(files: readonly File[], folderId: number | null = this.currentFolderId()): Promise<void> {
+  async uploadFiles(
+    files: readonly File[],
+    folderId: number | null = this.currentFolderId(),
+    source: TransferGroupSource = 'multiple-files'
+  ): Promise<void> {
     if (files.length === 0) return;
     if (files.length === 1) {
       await this.uploadFile(files[0], folderId);
@@ -613,21 +794,73 @@ export class DriveStore {
     }
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
 
+    const transferIds = files.map(() => this.newTransferId());
+    const transferIdByFile = new Map(files.map((file, index) => [file, transferIds[index]]));
+    const groupId = files.length >= 2 ? this.createTransferGroup(source, transferIds) : undefined;
+
     const individualVideoFiles = environment.logs.ffmpeg === undefined ? [] : files.filter(file =>
       this.videoTranscoder.isVideo(file) && !this.videoTranscoder.isFormatNativelySupported(file)
     );
     const batchFiles = files.filter(file => !individualVideoFiles.includes(file));
     if (individualVideoFiles.length > 0) {
-      await Promise.all(individualVideoFiles.map(file => this.uploadFile(file, folderId)));
+      await Promise.all(individualVideoFiles.map(file => this.uploadFile(file, folderId, true, groupId, transferIdByFile.get(file))));
     }
     if (batchFiles.length === 0) return;
     if (batchFiles.length === 1) {
-      await this.uploadFile(batchFiles[0], folderId);
+      await this.uploadFile(batchFiles[0], folderId, true, groupId, transferIdByFile.get(batchFiles[0]));
       return;
     }
 
-    const candidates: UploadBatchCandidate[] = batchFiles.map(file => {
-      const transferId = 'up_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
+    await this.uploadBatchFiles(batchFiles.map(file => ({ file, folderId, groupId, transferId: transferIdByFile.get(file) })));
+  }
+
+  async uploadFolder(
+    files: readonly File[],
+    rootParentId: number | null = this.currentFolderId(),
+    source: TransferGroupSource = 'folder-upload'
+  ): Promise<void> {
+    if (!files.length) return;
+    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
+
+    const mapped = await this.folderUploadCoordinator.prepare(files, rootParentId);
+    await this.uploadFolderCandidates(mapped, source);
+  }
+
+  async uploadFolderSources(
+    sources: readonly FolderUploadSourceFile[],
+    rootParentId: number | null = this.currentFolderId(),
+    source: TransferGroupSource = 'drop-folders'
+  ): Promise<void> {
+    if (!sources.length) return;
+    if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
+    const mapped = await this.folderUploadCoordinator.prepareSources(sources, rootParentId);
+    await this.uploadFolderCandidates(mapped, source);
+  }
+
+  private async uploadFolderCandidates(mapped: readonly { file: File; folderId: number | null }[], source: TransferGroupSource): Promise<void> {
+    const individualVideoFiles = environment.logs.ffmpeg === undefined ? [] : mapped.filter(item =>
+      this.videoTranscoder.isVideo(item.file) && !this.videoTranscoder.isFormatNativelySupported(item.file)
+    );
+    const batchFiles = mapped.filter(item => !individualVideoFiles.includes(item));
+    const transferIds = mapped.map(() => this.newTransferId());
+    const groupId = mapped.length >= 2 ? this.createTransferGroup(source, transferIds) : undefined;
+    const transferIdByFile = new Map(mapped.map((item, index) => [item.file, transferIds[index]]));
+    try {
+      await Promise.all(individualVideoFiles.map(item => this.uploadFile(item.file, item.folderId, false, groupId, transferIdByFile.get(item.file))));
+      if (batchFiles.length > 0) await this.uploadBatchFiles(batchFiles.map(item => ({ ...item, groupId, transferId: transferIdByFile.get(item.file) })), false);
+    } finally {
+      await this.loadTree();
+      await this.loadQuota();
+    }
+  }
+
+  private async uploadBatchFiles(
+    items: readonly { file: File; folderId: number | null; groupId?: string; transferId?: string }[],
+    refresh = true
+  ): Promise<UploadBatchSummary> {
+    const candidates: UploadBatchCandidate[] = items.map(item => {
+      const { file, folderId } = item;
+      const transferId = item.transferId ?? this.newTransferId();
       this.cancelledTransfers.delete(transferId);
       this.addTransfer({
         id: transferId,
@@ -635,7 +868,8 @@ export class DriveStore {
         type: 'upload',
         status: 'processing',
         statusMessage: 'Preparando...',
-        progress: 0
+        progress: 0,
+        groupId: item.groupId,
       });
       return {
         file,
@@ -677,25 +911,43 @@ export class DriveStore {
       }
     });
 
-    if (summary.succeeded > 0) {
+    if (refresh && summary.succeeded > 0) {
       await this.loadTree();
       await this.loadQuota();
     }
+    return summary;
   }
 
-  private async _doUpload(originalFile: File, folderId: number | null = null): Promise<void> {
+  private async _doUpload(
+    originalFile: File,
+    folderId: number | null = null,
+    refresh = true,
+    groupId?: string,
+    transferId?: string
+  ): Promise<void> {
     const isVideo = this.videoTranscoder.isVideo(originalFile);
     
     const filesToUpload: { file: File, isHiddenProxy: boolean }[] = [];
-    const transferId = 'up_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
-    this.addTransfer({
-      id: transferId,
-      fileName: originalFile.name,
-      type: 'upload',
-      status: 'processing',
-      statusMessage: 'Preparando...',
-      progress: 0
-    });
+    const activeTransferId = transferId ?? this.newTransferId();
+    if (this.transfers().some(item => item.id === activeTransferId)) {
+      this.updateTransfer(activeTransferId, {
+        fileName: originalFile.name,
+        status: 'processing',
+        statusMessage: 'Preparando...',
+        progress: 0,
+        groupId,
+      });
+    } else {
+      this.addTransfer({
+        id: activeTransferId,
+        fileName: originalFile.name,
+        type: 'upload',
+        status: 'processing',
+        statusMessage: 'Preparando...',
+        progress: 0,
+        groupId,
+      });
+    }
 
     let fileToEncrypt = originalFile;
 
@@ -704,10 +956,10 @@ export class DriveStore {
        if (!isSupported) {
           const conversionMode = 'pure';
           try {
-            this.updateTransfer(transferId, { statusMessage: 'Convertendo vídeo incompatível...' });
+            this.updateTransfer(activeTransferId, { statusMessage: 'Convertendo vídeo incompatível...' });
             const proxyFile = await this.videoTranscoder.transcodeToProxy(originalFile, conversionMode, (p: number, statusMessage: string) => {
-              this.updateTransfer(transferId, { statusMessage: statusMessage });
-              this.updateTransferProgress(transferId, Math.round(p * 100), 0, 100);
+              this.updateTransfer(activeTransferId, { statusMessage: statusMessage });
+              this.updateTransferProgress(activeTransferId, Math.round(p * 100), 0, 100);
             });
             fileToEncrypt = new File([proxyFile], originalFile.name, { type: proxyFile.type });
           } catch (e: any) {
@@ -720,11 +972,11 @@ export class DriveStore {
     filesToUpload.push({ file: fileToEncrypt, isHiddenProxy: false });
 
     for (const item of filesToUpload) {
-      await this._uploadSingleFile(item.file, folderId, item.isHiddenProxy, transferId);
+      await this._uploadSingleFile(item.file, folderId, item.isHiddenProxy, activeTransferId, refresh);
     }
   }
 
-  private async _uploadSingleFile(file: File, folderId: number | null, isHiddenProxy: boolean, transferId: string): Promise<void> {
+  private async _uploadSingleFile(file: File, folderId: number | null, isHiddenProxy: boolean, transferId: string, refresh = true): Promise<void> {
     const uploadId = transferId + (isHiddenProxy ? '_proxy' : '_original');
     
     this.updateTransfer(transferId, {
@@ -763,7 +1015,7 @@ export class DriveStore {
         isHiddenProxy
       });
 
-      await this.runUploadLoop(uploadId, transferId, fileId, prepared, activeProvider, initRes, isHiddenProxy);
+      await this.runUploadLoop(uploadId, transferId, fileId, prepared, activeProvider, initRes, isHiddenProxy, refresh);
     } catch (e: any) {
       if (e?.message !== 'PAUSED') {
         this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no upload' });
@@ -780,7 +1032,8 @@ export class DriveStore {
     prepared: PreparedUpload,
     activeProvider: UploadProvider,
     initRes: any,
-    isHiddenProxy: boolean
+    isHiddenProxy: boolean,
+    refresh = true
   ): Promise<void> {
     const result = await this.uploadEngine.execute(
       prepared,
@@ -811,8 +1064,10 @@ export class DriveStore {
       this.updateTransfer(transferId, { status: 'success', progress: 100, statusMessage: 'Concluído!' });
     }
     
-    await this.loadTree();
-    await this.loadQuota();
+    if (refresh) {
+      await this.loadTree();
+      await this.loadQuota();
+    }
   }
 
   async downloadFile(file: DriveFile): Promise<void> {
@@ -1039,6 +1294,7 @@ export class DriveStore {
     
     // Se for uma recuperação pendente, excluir o arquivo temporário/incompleto do servidor
     const transfer = this.transfers().find(t => t.id === id);
+    if (transfer) this.recordCancelledTransfer(transfer);
     if (transfer && transfer.isRecovery && transfer.pendingData) {
       try {
         await firstValueFrom(this.driveService.trashFile(transfer.pendingData.id));

@@ -20,6 +20,56 @@ import { DriveView } from '../../state/drive.types';
           }
         </div>
 
+        @if (driveStore.transferGroupViews().length > 0) {
+          <div class="transfer-groups">
+            @for (group of driveStore.transferGroupViews(); track group.id) {
+              <div class="transfer-group" [class.terminal-group]="group.canClear">
+                <button class="transfer-group-header" (click)="toggleGroup(group.id)" [attr.aria-expanded]="isGroupExpanded(group.id)">
+                  <span class="material-symbols-outlined">{{ isGroupExpanded(group.id) ? 'expand_more' : 'chevron_right' }}</span>
+                  <span class="transfer-group-label">{{ groupSourceLabel(group.source) }}</span>
+                  <span class="transfer-group-count">{{ group.completedFiles }}/{{ group.totalFiles }}</span>
+                </button>
+                <div class="transfer-group-summary">
+                  <div class="transfer-group-meta">{{ groupStatusLabel(group.status) }} · {{ group.progress * 100 | number:'1.0-0' }}%</div>
+                  @if (group.status !== 'success' && group.status !== 'error' && group.status !== 'cancelled') {
+                    <div class="transfer-progress-bar-container"><div class="transfer-progress-bar-fill" [style.width.%]="group.progress * 100"></div></div>
+                  }
+                  <div class="transfer-group-meta">{{ formatBytes(group.transferredBytes) }} / {{ formatBytes(group.totalBytes) }}</div>
+                  <div class="transfer-group-actions">
+                    @if (group.canPause) { <button class="transfer-control-btn" (click)="$event.stopPropagation(); driveStore.pauseTransferGroup(group.id)" title="Pausar grupo"><span class="material-symbols-outlined">pause</span></button> }
+                    @if (group.canResume) { <button class="transfer-control-btn" (click)="$event.stopPropagation(); driveStore.resumeTransferGroup(group.id)" title="Retomar grupo"><span class="material-symbols-outlined">play_arrow</span></button> }
+                    @if (group.canCancel) { <button class="transfer-control-btn cancel" (click)="$event.stopPropagation(); driveStore.cancelTransferGroup(group.id)" title="Cancelar grupo"><span class="material-symbols-outlined">close</span></button> }
+                    @if (group.canClear) { <button class="transfer-control-btn" (click)="$event.stopPropagation(); driveStore.clearTransferGroup(group.id)" title="Limpar grupo"><span class="material-symbols-outlined">delete</span></button> }
+                  </div>
+                </div>
+                @if (isGroupExpanded(group.id)) {
+                  <div class="transfer-group-items">
+                    @for (transfer of groupTransfers(group); track transfer.id) {
+                      <div class="transfer-group-item" [class.success]="transfer.status === 'success'" [class.error]="transfer.status === 'error'" [class.paused]="transfer.status === 'paused'">
+                        <div class="transfer-group-item-name" [title]="transfer.fileName">{{ transfer.fileName }}</div>
+                        <div class="transfer-group-item-status">
+                          @if (transfer.status === 'processing') {
+                            <span>{{ transfer.progress }}%</span>
+                            <button class="transfer-control-btn" (click)="driveStore.pauseTransfer(transfer.id)" title="Pausar arquivo"><span class="material-symbols-outlined">pause</span></button>
+                          } @else if (transfer.status === 'paused') {
+                            <span>Pausado</span>
+                            <button class="transfer-control-btn" (click)="transfer.type === 'upload' ? driveStore.resumeUpload(transfer.id) : driveStore.resumeDownload(transfer.id)" title="Retomar arquivo"><span class="material-symbols-outlined">play_arrow</span></button>
+                            <button class="transfer-control-btn cancel" (click)="driveStore.cancelTransfer(transfer.id)" title="Cancelar arquivo"><span class="material-symbols-outlined">close</span></button>
+                          } @else if (transfer.status === 'success') {
+                            <span>Concluído</span>
+                          } @else if (transfer.status === 'error') {
+                            <span>Falhou</span>
+                          }
+                        </div>
+                      </div>
+                    }
+                  </div>
+                }
+              </div>
+            }
+          </div>
+        }
+
         @if (driveStore.transfers().length === 0) {
           <div class="transfers-empty">
             <span class="material-symbols-outlined empty-icon">check_circle</span>
@@ -28,6 +78,7 @@ import { DriveView } from '../../state/drive.types';
         } @else {
           <div class="transfers-list">
             @for (t of driveStore.transfers(); track t.id) {
+              @if (!t.groupId) {
               <div class="transfer-card" [class.error]="t.status === 'error'" [class.success]="t.status === 'success'" [class.paused]="t.status === 'paused'">
                 <div class="transfer-icon-area">
                   @if (t.type === 'upload') {
@@ -110,13 +161,14 @@ import { DriveView } from '../../state/drive.types';
                   }
                 </div>
               </div>
+              }
             }
           </div>
         }
       </div>
     }
 
-    @if (driveStore.transfers().length > 0) {
+    @if (driveStore.transfers().length > 0 && !isTransfersPopupClosed()) {
       <div class="transfers-popup-wrapper">
         <div class="transfers-popup-header" (click)="togglePopup()">
           <span class="popup-title">Transferências ({{ driveStore.transfers().length }})</span>
@@ -124,11 +176,25 @@ import { DriveView } from '../../state/drive.types';
             <button class="icon-btn" (click)="$event.stopPropagation(); togglePopup()">
               <span class="material-symbols-outlined">{{ isTransfersPopupMinimized() ? 'expand_less' : 'expand_more' }}</span>
             </button>
+            <button class="icon-btn" (click)="$event.stopPropagation(); closePopup()" title="Fechar transferências" aria-label="Fechar transferências">
+              <span class="material-symbols-outlined">close</span>
+            </button>
           </div>
         </div>
         @if (!isTransfersPopupMinimized()) {
           <div class="transfers-popup-body">
+            @for (group of driveStore.transferGroupViews(); track group.id) {
+              <div class="mini-transfer-group" [class.terminal-group]="group.canClear">
+                <button class="mini-group-header" (click)="$event.stopPropagation(); toggleGroup(group.id)" [attr.aria-expanded]="isGroupExpanded(group.id)">
+                  <span class="material-symbols-outlined">{{ isGroupExpanded(group.id) ? 'expand_more' : 'chevron_right' }}</span>
+                  <span>{{ groupSourceLabel(group.source) }}</span>
+                  <span>{{ group.completedFiles }}/{{ group.totalFiles }}</span>
+                </button>
+                <div class="mini-progress-track"><div class="mini-progress-fill" [style.width.%]="group.progress * 100"></div></div>
+              </div>
+            }
             @for (t of driveStore.transfers().slice().reverse(); track t.id) {
+              @if (!t.groupId || isGroupExpanded(t.groupId)) {
               <div class="mini-transfer-item" [class.success]="t.status === 'success'" [class.error]="t.status === 'error'" [class.paused]="t.status === 'paused'">
                 <div class="mini-transfer-icon-wrapper">
                   @if (t.type === 'upload') {
@@ -162,6 +228,7 @@ import { DriveView } from '../../state/drive.types';
                   }
                 </div>
               </div>
+              }
             }
           </div>
         }
@@ -177,6 +244,28 @@ import { DriveView } from '../../state/drive.types';
     .popup-actions .icon-btn { background: transparent; border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 4px; border-radius: 4px; }
     .popup-actions .icon-btn:hover { background: rgba(255,255,255,0.1); }
     .popup-actions .icon-btn span { font-size: 20px; }
+    .transfer-groups { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+    .transfer-group { border: 1px solid #d2e3fc; border-radius: 8px; background: #f8fbff; overflow: hidden; }
+    .transfer-group.terminal-group { border-color: #c8e6c9; background: #f7fff8; }
+    .transfer-group-header, .mini-group-header { width: 100%; display: flex; align-items: center; gap: 6px; border: 0; background: transparent; cursor: pointer; text-align: left; color: #202124; }
+    .transfer-group-header { padding: 8px 10px 2px; font-weight: 500; }
+    .transfer-group-header .material-symbols-outlined, .mini-group-header .material-symbols-outlined { font-size: 18px; }
+    .transfer-group-label { flex: 1; }
+    .transfer-group-count { color: #5f6368; font-size: 12px; }
+    .transfer-group-summary { padding: 0 10px 8px 34px; }
+    .transfer-group-meta { color: #5f6368; font-size: 11px; }
+    .transfer-group-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+    .transfer-group-items { border-top: 1px solid #d2e3fc; }
+    .transfer-group-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px 7px 34px; border-bottom: 1px solid #e5eefb; font-size: 12px; }
+    .transfer-group-item:last-child { border-bottom: 0; }
+    .transfer-group-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #334155; }
+    .transfer-group-item-status { display: flex; align-items: center; gap: 3px; color: #64748b; }
+    .transfer-group-item.success .transfer-group-item-status { color: #166534; }
+    .transfer-group-item.error .transfer-group-item-status { color: #991b1b; }
+    .transfer-group-item.paused .transfer-group-item-status { color: #b45309; }
+    .mini-transfer-group { padding: 8px 12px 6px; border-bottom: 1px solid #e8eaed; background: #f8fbff; }
+    .mini-group-header { justify-content: flex-start; font-size: 12px; font-weight: 500; }
+    .mini-group-header span:nth-child(2) { flex: 1; }
     .transfers-popup-body { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; }
     .mini-transfer-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #f1f3f4; }
     .mini-transfer-item:last-child { border-bottom: none; }
@@ -245,9 +334,62 @@ export class TransferPanelComponent {
   readonly currentView = input.required<DriveView>();
   readonly driveStore = inject(DriveStore);
   readonly isTransfersPopupMinimized = signal(false);
+  readonly isTransfersPopupClosed = signal(false);
+  readonly expandedGroups = signal(new Set<string>());
 
   togglePopup(): void {
     this.isTransfersPopupMinimized.update(value => !value);
+  }
+
+  closePopup(): void {
+    this.isTransfersPopupClosed.set(true);
+  }
+
+  isGroupExpanded(id: string): boolean {
+    return this.expandedGroups().has(id);
+  }
+
+  toggleGroup(id: string): void {
+    this.expandedGroups.update(groups => {
+      const next = new Set(groups);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  groupTransfers(group: { transferIds: readonly string[] }): TransferItem[] {
+    const byId = new Map(this.driveStore.transfers().map(transfer => [transfer.id, transfer]));
+    return group.transferIds.map(id => byId.get(id)).filter((transfer): transfer is TransferItem => !!transfer);
+  }
+
+  formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return `${parseFloat((bytes / 1024 ** unit).toFixed(1))} ${units[unit]}`;
+  }
+
+  groupSourceLabel(source: string): string {
+    return {
+      'multiple-files': 'Múltiplos arquivos',
+      'folder-upload': 'Upload de pasta',
+      'drop-files': 'Arquivos arrastados',
+      'drop-folders': 'Pastas arrastadas',
+      'mixed-drop': 'Drop misto',
+    }[source] ?? 'Transferência agrupada';
+  }
+
+  groupStatusLabel(status: string): string {
+    return {
+      queued: 'Na fila',
+      active: 'Em andamento',
+      paused: 'Pausado',
+      success: 'Concluído',
+      error: 'Falhou',
+      partial: 'Parcial',
+      cancelled: 'Cancelado',
+    }[status] ?? status;
   }
 
   onRecoverFileSelected(event: Event, transfer: TransferItem): void {

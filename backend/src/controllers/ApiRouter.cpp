@@ -533,6 +533,74 @@ crow::response ApiRouter::handle_create_folder(const crow::request& req) {
     }
 }
 
+crow::response ApiRouter::handle_batch_create_folders(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+
+    try {
+        auto body = crow::json::load(req.body);
+        if (!body || !body.has("root_parent_id") || !body.has("folders") || body["folders"].t() != crow::json::type::List) {
+            return crow::response(400, R"({"error":"JSON invalido"})");
+        }
+
+        std::optional<uint64_t> root_parent_id;
+        if (body.has("root_parent_id") && body["root_parent_id"].t() != crow::json::type::Null) {
+            if (body["root_parent_id"].t() != crow::json::type::Number || body["root_parent_id"].i() <= 0) {
+                return crow::response(400, R"({"error":"root_parent_id invalido"})");
+            }
+            root_parent_id = static_cast<uint64_t>(body["root_parent_id"].i());
+        }
+
+        std::vector<BatchCreateFolderItem> folders;
+        auto folder_nodes = body["folders"];
+        for (const auto& item : folder_nodes.lo()) {
+            if (item.t() != crow::json::type::Object ||
+                !item.has("client_ref") || !item.has("parent_client_ref") ||
+                !item.has("encrypted_name") || !item.has("name_hash") ||
+                item["client_ref"].t() != crow::json::type::String ||
+                item["encrypted_name"].t() != crow::json::type::String ||
+                item["name_hash"].t() != crow::json::type::String) {
+                return crow::response(400, R"({"error":"Item de pasta invalido"})");
+            }
+
+            BatchCreateFolderItem folder;
+            folder.client_ref = item["client_ref"].s();
+            folder.encrypted_name = item["encrypted_name"].s();
+            folder.name_hash = item["name_hash"].s();
+            if (item["parent_client_ref"].t() != crow::json::type::Null) {
+                if (item["parent_client_ref"].t() != crow::json::type::String) {
+                    return crow::response(400, R"({"error":"parent_client_ref invalido"})");
+                }
+                folder.parent_client_ref = item["parent_client_ref"].s();
+            }
+            folders.push_back(std::move(folder));
+        }
+
+        const auto created = folder_mgr_->batch_create_folders(*user_id_opt, root_parent_id, folders);
+        crow::json::wvalue response;
+        std::vector<crow::json::wvalue> result_items;
+        result_items.reserve(created.size());
+        for (const auto& folder : created) {
+            crow::json::wvalue item;
+            item["client_ref"] = folder.client_ref;
+            item["folder_id"] = folder.folder_id;
+            item["created"] = folder.created;
+            result_items.push_back(std::move(item));
+        }
+        response["folders"] = std::move(result_items);
+        return crow::response(200, response);
+    } catch (const pqxx::unique_violation&) {
+        return crow::response(409, R"({"error":"Uma pasta com este nome ja existe neste diretorio"})");
+    } catch (const std::exception& e) {
+        const std::string message = e.what();
+        if (message == "FORBIDDEN") return crow::response(403, R"({"error":"Proibido"})");
+        if (message == "NOT_FOUND") return crow::response(404, R"({"error":"Pasta nao encontrada"})");
+        if (message == "FOLDER_ALREADY_EXISTS") return crow::response(409, R"({"error":"Uma pasta com este nome ja existe neste diretorio"})");
+        if (message == "BAD_REQUEST") return crow::response(400, R"({"error":"Estrutura de pastas invalida"})");
+        return crow::response(500, R"({"error":"Erro interno"})");
+    }
+}
+
 crow::response ApiRouter::handle_get_pinned_folders(const crow::request& req) {
     auto user_id_opt = authenticate_request(req);
     if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
@@ -2251,6 +2319,13 @@ void ApiRouter::setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware
     CROW_ROUTE(app, "/folders").methods(crow::HTTPMethod::Post)
     ([this](const crow::request& req) {
         auto res = handle_create_folder(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/folders/batch-create").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req) {
+        auto res = handle_batch_create_folders(req);
         res.set_header("Content-Type", "application/json");
         return res;
     });

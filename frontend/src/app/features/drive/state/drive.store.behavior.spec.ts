@@ -134,6 +134,73 @@ describe('DriveStore public behavior', () => {
     expect(store.transfers()).toEqual([]);
   });
 
+  it('aggregates grouped transfers by bytes and preserves partial outcomes', () => {
+    (store as any).createTransferGroup('multiple-files', ['a', 'b']);
+    store.transfers.set([
+      { id: 'a', fileName: 'a', type: 'upload', status: 'success', progress: 100, totalBytes: 100, bytesTransferred: 100, groupId: store.transferGroups()[0].id, timestamp: new Date() },
+      { id: 'b', fileName: 'b', type: 'upload', status: 'error', progress: 50, totalBytes: 300, bytesTransferred: 50, groupId: store.transferGroups()[0].id, timestamp: new Date() },
+    ]);
+
+    const view = store.transferGroupViews()[0];
+    expect(view.totalFiles).toBe(2);
+    expect(view.completedFiles).toBe(1);
+    expect(view.failedFiles).toBe(1);
+    expect(view.totalBytes).toBe(400);
+    expect(view.transferredBytes).toBe(150);
+    expect(view.progress).toBe(0.375);
+    expect(view.status).toBe('partial');
+    expect(view.canClear).toBeTrue();
+  });
+
+  it('reuses individual controls for group pause, resume, cancel and terminal cleanup', async () => {
+    const groupId = (store as any).createTransferGroup('multiple-files', ['upload', 'download', 'done']);
+    store.transfers.set([
+      { id: 'upload', fileName: 'upload', type: 'upload', status: 'processing', progress: 0, timestamp: new Date(), groupId },
+      { id: 'download', fileName: 'download', type: 'download', status: 'paused', progress: 0, timestamp: new Date(), groupId },
+      { id: 'done', fileName: 'done', type: 'upload', status: 'success', progress: 100, timestamp: new Date(), groupId },
+    ]);
+    spyOn(store, 'pauseTransfer').and.callThrough();
+    spyOn(store, 'resumeUpload').and.resolveTo();
+    spyOn(store, 'resumeDownload').and.resolveTo();
+    spyOn(store, 'cancelTransfer').and.resolveTo();
+
+    store.pauseTransferGroup(groupId);
+    expect(store.pauseTransfer).toHaveBeenCalledWith('upload');
+    await store.resumeTransferGroup(groupId);
+    expect(store.resumeDownload).toHaveBeenCalledWith('download');
+    await store.cancelTransferGroup(groupId);
+    expect(store.cancelTransfer).not.toHaveBeenCalledWith('done');
+
+    store.updateTransfer('upload', { status: 'success' });
+    store.updateTransfer('download', { status: 'success' });
+    store.clearTransferGroup(groupId);
+    expect(store.transferGroups()).toHaveSize(0);
+    expect(store.transfers()).toEqual([]);
+  });
+
+  it('derives queued, active, paused, error and cancelled aggregate states', () => {
+    const queued = (store as any).createTransferGroup('multiple-files', ['queued']);
+    const active = (store as any).createTransferGroup('multiple-files', ['active']);
+    const paused = (store as any).createTransferGroup('multiple-files', ['paused']);
+    const failed = (store as any).createTransferGroup('multiple-files', ['failed']);
+    const cancelled = (store as any).createTransferGroup('multiple-files', ['cancelled']);
+    store.transfers.set([
+      { id: 'active', fileName: 'active', type: 'upload', status: 'processing', progress: 0, timestamp: new Date(), groupId: active },
+      { id: 'paused', fileName: 'paused', type: 'upload', status: 'paused', progress: 0, timestamp: new Date(), groupId: paused },
+      { id: 'failed', fileName: 'failed', type: 'upload', status: 'error', progress: 0, timestamp: new Date(), groupId: failed },
+    ]);
+    store.transferGroups.update(groups => groups.map(group => group.id === cancelled
+      ? { ...group, cancelledTransferIds: ['cancelled'], cancelledBytes: { cancelled: { totalBytes: 0, transferredBytes: 0 } } }
+      : group));
+
+    const views = store.transferGroupViews();
+    expect(views.find(view => view.id === queued)?.status).toBe('queued');
+    expect(views.find(view => view.id === active)?.status).toBe('active');
+    expect(views.find(view => view.id === paused)?.status).toBe('paused');
+    expect(views.find(view => view.id === failed)?.status).toBe('error');
+    expect(views.find(view => view.id === cancelled)?.status).toBe('cancelled');
+  });
+
   it('renames and moves files, including an optimized proxy, and rejects folder self-moves', async () => {
     const file = { id: 1, isFolder: false, decryptedName: 'movie.mp4', folderId: 7 } as DriveFile;
     const proxy = { id: 2, isFolder: false, decryptedName: 'movie.mp4.proxy.mp4', folderId: 7 } as DriveFile;

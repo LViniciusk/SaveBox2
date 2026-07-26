@@ -21,7 +21,8 @@ describe('TransferPanelComponent', () => {
     store = jasmine.createSpyObj('DriveStore', [
       'clearCompletedTransfers', 'pauseTransfer', 'resumeUpload', 'resumeDownload',
       'cancelTransfer', 'recoverUpload'
-    ], { transfers: signal<TransferItem[]>([]) });
+      , 'pauseTransferGroup', 'resumeTransferGroup', 'cancelTransferGroup', 'clearTransferGroup'
+    ], { transfers: signal<TransferItem[]>([]), transferGroupViews: signal([]) });
     store.recoverUpload.and.returnValue(Promise.resolve());
 
     await TestBed.configureTestingModule({
@@ -91,6 +92,19 @@ describe('TransferPanelComponent', () => {
     expect(fixture.nativeElement.querySelector('.transfers-popup-body')).toBeNull();
   });
 
+  it('closes the mini popup without clearing transfers', () => {
+    store.transfers.set([transfer({ status: 'success' })]);
+    fixture.componentRef.setInput('currentView', 'drive');
+    fixture.detectChanges();
+
+    const closeButton = fixture.nativeElement.querySelector('[aria-label="Fechar transferências"]') as HTMLButtonElement;
+    closeButton.click();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.transfers-popup-wrapper')).toBeNull();
+    expect(store.transfers()).toHaveSize(1);
+  });
+
   it('recovers a paused upload and resets the file input', async () => {
     const pending = transfer({ status: 'paused', isRecovery: true, pendingData: { chunk: 1 } });
     store.transfers.set([pending]);
@@ -115,6 +129,39 @@ describe('TransferPanelComponent', () => {
     expect(fixture.nativeElement.textContent).toContain('Enviando');
     expect(fixture.nativeElement.textContent).toContain('Selecione o arquivo');
     expect(fixture.nativeElement.querySelectorAll('.mini-transfer-item')).toHaveSize(2);
+  });
+
+  it('renders grouped transfers and delegates group controls', () => {
+    store.transfers.set([transfer({ id: 'grouped', groupId: 'group-1' })]);
+    store.transferGroupViews.set([{
+      id: 'group-1', source: 'drop-files', transferIds: ['grouped'], totalFiles: 1,
+      completedFiles: 0, failedFiles: 0, cancelledFiles: 0, pausedFiles: 0, activeFiles: 1,
+      totalBytes: 100, transferredBytes: 50, progress: 0.5, speedBytesPerSecond: 10,
+      etaSeconds: 5, status: 'active', canPause: true, canResume: false, canCancel: true, canClear: false,
+    }]);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.transfer-group-label').textContent).toContain('Arquivos arrastados');
+    expect(fixture.nativeElement.querySelector('.transfer-group-meta').textContent).toContain('Em andamento');
+    fixture.nativeElement.querySelector('[title="Pausar grupo"]').click();
+    expect(store.pauseTransferGroup).toHaveBeenCalledWith('group-1');
+    fixture.nativeElement.querySelector('.transfer-group-header').click();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.transfer-group-item')).not.toBeNull();
+  });
+
+  it('does not show group progress or an overlaid clear button after completion', () => {
+    store.transfers.set([transfer({ id: 'finished', groupId: 'group-2', status: 'success', progress: 100 })]);
+    store.transferGroupViews.set([{
+      id: 'group-2', source: 'folder-upload', transferIds: ['finished'], totalFiles: 1,
+      completedFiles: 1, failedFiles: 0, cancelledFiles: 0, pausedFiles: 0, activeFiles: 0,
+      totalBytes: 1024, transferredBytes: 1024, progress: 1, speedBytesPerSecond: 0,
+      etaSeconds: null, status: 'success', canPause: false, canResume: false, canCancel: false, canClear: true,
+    }]);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.transfer-group .transfer-progress-bar-container')).toBeNull();
+    expect(fixture.nativeElement.querySelector('[title="Limpar grupo"]')).not.toBeNull();
   });
 
   it('resets an empty recovery input and handles recovery failures', async () => {

@@ -9,14 +9,16 @@ class TopbarStubComponent { readonly unlockRequested = output<void>(); }
 @Component({ selector: 'app-gdrive-sidebar', standalone: true, template: '<button id="drive" (click)="viewChange.emit(\'drive\')"></button>' })
 class SidebarStubComponent {
   readonly currentView = input<string>(); readonly currentFolderId = input<number | null>(null); readonly locked = input(false); readonly quota = input<any>();
-  readonly viewChange = output<any>(); readonly createFolderRequested = output<void>(); readonly uploadFileRequested = output<void>(); readonly pinnedFolderNavigate = output<number>();
+  readonly viewChange = output<any>(); readonly createFolderRequested = output<void>(); readonly uploadFileRequested = output<void>(); readonly uploadFolderRequested = output<void>(); readonly pinnedFolderNavigate = output<number>();
 }
 
 @Component({ selector: 'app-drive-workspace', standalone: true, template: '<button id="trash" (click)="emptyTrashRequested.emit()"></button>' })
 class WorkspaceStubComponent {
   readonly currentView = input<string>();
+  readonly locked = input(false);
   readonly createFolderRequested = output<void>(); readonly uploadFileRequested = output<void>();
   readonly videoSelected = output<any>(); readonly imageSelected = output<any>(); readonly shareRequested = output<any>(); readonly emptyTrashRequested = output<void>();
+  readonly dropStarted = output<void>(); readonly externalDrop = output<any>(); readonly dropError = output<unknown>();
 }
 
 describe('GDriveShellComponent', () => {
