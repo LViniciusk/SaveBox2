@@ -1,0 +1,9 @@
+tunnel: YOUR-TUNNEL-ID
+credentials-file: /home/YOUR-USER/.cloudflared/YOUR-TUNNEL-ID.json
+
+ingress:
+  - hostname: lvinik.app
+    service: http://localhost:80
+  - hostname: nanika.lvinik.app
+    service: http://localhost:80
+  - service: http_status:404

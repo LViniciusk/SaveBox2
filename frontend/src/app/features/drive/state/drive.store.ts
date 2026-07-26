@@ -410,10 +410,21 @@ export class DriveStore {
   async loadTree(): Promise<void> {
     this.isLoading.set(true);
     try {
-      const res = await firstValueFrom(this.driveService.getTree());
+      const pageSize = 100;
+      let page = await firstValueFrom(this.driveService.getTree(pageSize, 0));
+      const folders = page.folders;
+      const files = [...page.files];
+      let offset = files.length;
+
+      while (page.files.length === pageSize) {
+        page = await firstValueFrom(this.driveService.getTree(pageSize, offset));
+        files.push(...page.files);
+        offset += page.files.length;
+      }
+
       const parsedFiles: DriveFile[] = [];
       
-      for (const folder of res.folders) {
+      for (const folder of folders) {
         let decName = null;
         if (this.cryptoService.isVaultUnlocked()) {
           decName = await this.cryptoService.decryptName(folder.encrypted_name);
@@ -432,7 +443,7 @@ export class DriveStore {
         });
       }
 
-      for (const file of res.files) {
+      for (const file of files) {
         let decName = null;
         if (this.cryptoService.isVaultUnlocked()) {
           decName = await this.cryptoService.decryptName(file.encrypted_name);

@@ -88,6 +88,33 @@ describe('DriveStore public behavior', () => {
     expect(store.files()[0].parentId).toBeNull();
   });
 
+  it('loads files beyond the first tree page', async () => {
+    const firstPage = Array.from({ length: 100 }, (_, id) => ({
+      id,
+      folder_id: null,
+      encrypted_name: `file-${id}`,
+      size_bytes: 1,
+      encrypted_fdk: 'fdk',
+      is_hidden: false,
+    }));
+    drive.getTree.and.callFake((_limit?: number, offset = 0) => of({
+      folders: [],
+      files: offset === 0 ? firstPage : [{
+        id: 100,
+        folder_id: null,
+        encrypted_name: 'new-file',
+        size_bytes: 1,
+        encrypted_fdk: 'fdk',
+        is_hidden: false,
+      }],
+    }));
+
+    await store.loadTree();
+
+    expect(drive.getTree).toHaveBeenCalledTimes(2);
+    expect(store.files()).toHaveSize(101);
+  });
+
   it('creates recovery transfers with zero-safe progress and clears old recoveries', async () => {
     store.transfers.set([{ id: 'old', fileName: 'old', type: 'upload', status: 'paused', progress: 1, isRecovery: true, timestamp: new Date() }]);
     drive.getPendingUploads.and.returnValue(of({ pending_uploads: [

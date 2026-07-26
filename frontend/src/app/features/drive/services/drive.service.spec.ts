@@ -40,6 +40,13 @@ describe('DriveService', () => {
     req.flush({});
   });
 
+  it('should request a tree page when pagination is provided', () => {
+    service.getTree(100, 200).subscribe();
+    const req = httpMock.expectOne(`${environment.apiUrl}/tree?file_limit=100&file_offset=200`);
+    expect(req.request.method).toBe('GET');
+    req.flush({});
+  });
+
   it('creates folder trees in one opaque batch request', () => {
     const folders = [{ client_ref: 'ref-1', parent_client_ref: null, encrypted_name: 'cipher', name_hash: 'hash' }];
     service.batchCreateFolders(7, folders).subscribe();
@@ -121,7 +128,7 @@ describe('DriveService', () => {
   it('should upload chunk', () => {
     const blob = new Blob(['chunk']);
     service.uploadChunk(100, 0, blob).subscribe();
-    const req = httpMock.expectOne(`${environment.apiUrl}/files/100/chunks`);
+    const req = httpMock.expectOne(`${environment.uploadApiUrl}/files/100/chunks`);
     expect(req.request.method).toBe('POST');
     expect(req.request.headers.get('X-Chunk-Index')).toBe('0');
     expect(req.request.body).toBe(blob);

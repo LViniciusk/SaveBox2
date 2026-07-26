@@ -13,7 +13,8 @@ export const jwtInterceptor: HttpInterceptorFn = (req, next) => {
   const authService = inject(AuthService);
   const token = authService.getToken();
 
-  if (req.url.includes('googleapis.com')) {
+  const requestUrl = new URL(req.url, globalThis.location.origin);
+  if (requestUrl.hostname === 'www.googleapis.com') {
     return next(req);
   }
 
