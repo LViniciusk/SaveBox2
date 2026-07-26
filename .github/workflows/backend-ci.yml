@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   Savebox_Backend_Tests:
     runs-on: windows-latest
@@ -161,6 +164,7 @@ jobs:
         working-directory: ./backend
         run: |
           gcovr --root . \
+            --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \
             --filter 'src/' \
             --exclude 'src/main.cpp' \
             --txt --html-details coverage.html \

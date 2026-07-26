@@ -30,7 +30,7 @@ describe('JwtInterceptor', () => {
     httpMock.verify();
   });
 
-  it('should attach Bearer token if token exists and URL is not googleapis.com', () => {
+  it('should attach Bearer token if token exists and URL is not Google Drive API', () => {
     // Arrange
     authSpy.getToken.and.returnValue('fake-jwt-token');
 
@@ -54,6 +54,15 @@ describe('JwtInterceptor', () => {
     // Assert
     const req = httpMock.expectOne('https://www.googleapis.com/drive/v3/files');
     expect(req.request.headers.has('Authorization')).toBeFalse();
+  });
+
+  it('should not trust a lookalike googleapis hostname', () => {
+    authSpy.getToken.and.returnValue('fake-jwt-token');
+
+    httpClient.get('https://googleapis.com.attacker.test/drive/v3/files').subscribe();
+
+    const req = httpMock.expectOne('https://googleapis.com.attacker.test/drive/v3/files');
+    expect(req.request.headers.get('Authorization')).toBe('Bearer fake-jwt-token');
   });
 
   it('should not attach Bearer token if token is empty', () => {

@@ -58,8 +58,11 @@ export class DriveService {
     });
   }
 
-  getTree(): Observable<TreeResponse> {
-    return this.http.get<TreeResponse>(`${environment.apiUrl}/tree`, {
+  getTree(fileLimit?: number, fileOffset = 0): Observable<TreeResponse> {
+    const url = fileLimit === undefined
+      ? `${environment.apiUrl}/tree`
+      : `${environment.apiUrl}/tree?file_limit=${fileLimit}&file_offset=${fileOffset}`;
+    return this.http.get<TreeResponse>(url, {
       withCredentials: true,
     });
   }
@@ -153,7 +156,7 @@ export class DriveService {
   }
 
   uploadChunk(fileId: number, chunkIndex: number, chunkBlob: Blob): Observable<void> {
-    return this.http.post<void>(`${environment.apiUrl}/files/${fileId}/chunks`, chunkBlob, {
+    return this.http.post<void>(`${environment.uploadApiUrl}/files/${fileId}/chunks`, chunkBlob, {
       headers: {
         'X-Chunk-Index': chunkIndex.toString()
       },
