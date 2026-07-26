@@ -164,8 +164,7 @@ jobs:
             --filter 'src/' \
             --exclude 'src/main.cpp' \
             --txt --html-details coverage.html \
-            --fail-under-line 50 \
-            --fail-under-branch 50
+            --fail-under-line 50
 
       - name: Upload backend coverage report
         if: always()

@@ -84,7 +84,8 @@ TEST_CASE("API de pastas em lote - hierarquia e merge", "[api][folders][batch]")
           "folders":[{"client_ref":"different-ref","parent_client_ref":null,"encrypted_name":"new-cipher","name_hash":"merge-hash"}]
         })");
         REQUIRE(second.code == 200);
-        const auto item = crow::json::load(second.body)["folders"][0];
+        const auto second_body = crow::json::load(second.body);
+        const auto& item = second_body["folders"][0];
         REQUIRE(item["folder_id"].i() == first_id);
         REQUIRE_FALSE(item["created"].b());
 
