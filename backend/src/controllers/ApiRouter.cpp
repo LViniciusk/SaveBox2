@@ -581,10 +581,11 @@ crow::response ApiRouter::handle_batch_create_folders(const crow::request& req) 
         std::vector<crow::json::wvalue> result_items;
         result_items.reserve(created.size());
         for (const auto& folder : created) {
-            crow::json::wvalue item;
-            item["client_ref"] = folder.client_ref;
-            item["folder_id"] = folder.folder_id;
-            item["created"] = folder.created;
+            crow::json::wvalue item{
+                {"client_ref", folder.client_ref},
+                {"folder_id", folder.folder_id},
+                {"created", folder.created}
+            };
             result_items.push_back(std::move(item));
         }
         response["folders"] = std::move(result_items);

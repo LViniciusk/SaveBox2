@@ -5,8 +5,8 @@
 #include <stdlib.h>
 
 TEST_CASE("Service Google Drive - Vinculação e Lógica de Token", "[service][googledrive]") {
-    _putenv_s("GOOGLE_CLIENT_ID", "mock_client_id");
-    _putenv_s("GOOGLE_CLIENT_SECRET", "mock_client_secret");
+    set_test_environment("GOOGLE_CLIENT_ID", "mock_client_id");
+    set_test_environment("GOOGLE_CLIENT_SECRET", "mock_client_secret");
     
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);

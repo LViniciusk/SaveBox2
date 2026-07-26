@@ -258,8 +258,8 @@ TEST_CASE("API Batch Upload Init", "[api][upload][batch]") {
 }
 
 TEST_CASE("API Batch Upload Google Drive lifecycle", "[api][upload][batch][googledrive]") {
-    _putenv_s("GOOGLE_CLIENT_ID", "mock_client_id");
-    _putenv_s("GOOGLE_CLIENT_SECRET", "mock_client_secret");
+    set_test_environment("GOOGLE_CLIENT_ID", "mock_client_id");
+    set_test_environment("GOOGLE_CLIENT_SECRET", "mock_client_secret");
 
     std::string conn_str = get_secure_conn_string();
     DatabasePool pool(2, conn_str);

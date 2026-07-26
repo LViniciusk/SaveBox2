@@ -48,6 +48,19 @@ services:
     networks:
       - nanika_network
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: nanika_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    networks:
+      - nanika_network
+
 networks:
   nanika_network:
     driver: bridge

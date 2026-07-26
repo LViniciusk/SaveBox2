@@ -7,6 +7,14 @@
 
 #include "Services/EmailService.hpp"
 
+inline void set_test_environment(const char* name, const char* value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
 inline std::string get_secure_conn_string() {
     std::map<std::string, std::string> env_vars;
 
