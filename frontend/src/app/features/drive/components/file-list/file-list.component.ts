@@ -35,7 +35,7 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
               <span class="material-symbols-outlined">restore</span>
               Restaurar
             </button>
-            <div style="height: 1px; background: #e8eaed; margin: 4px 0;"></div>
+            <div class="menu-divider"></div>
             <button class="menu-item" (click)="onPermanentDelete(file, $event)" style="color: #d93025;">
               <span class="material-symbols-outlined" style="color: #d93025;">delete_forever</span>
               Excluir permanentemente
@@ -83,7 +83,7 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
                 {{ pinnedFoldersStore.isPinned(file.id) ? 'Desafixar do acesso rápido' : 'Fixar no acesso rápido' }}
               </button>
             }
-            <div style="height: 1px; background: #e8eaed; margin: 4px 0;"></div>
+            <div class="menu-divider"></div>
             <button class="menu-item" (click)="onDelete(file, $event)" style="color: #d93025;">
               <span class="material-symbols-outlined" style="color: #d93025;">delete</span>
               Mover para a lixeira
@@ -93,7 +93,7 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
       </ng-template>
 
       <ng-template #folderCardTpl let-file="file">
-        <div class="grid-card folder-card selectable-item" [attr.data-id]="file.id"
+        <div class="grid-card folder-card selectable-item" [class.file-card]="isLocked()" [class.locked-folder]="isLocked()" [attr.data-id]="file.id"
              [class.selected]="driveStore.selectedFileIds().has(file.id)"
              [class.dragging]="isDragged(file)"
              [class.drag-over]="dragOverFolderId() === file.id"
@@ -106,6 +106,25 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
              (click)="onFileClick(file, $event)"
              (dblclick)="onFileDblClick(file, $event)"
              (contextmenu)="onContextMenu(file, $event)">
+          @if (isLocked()) {
+            <div class="file-card-thumbnail">
+              <app-file-icon class="thumbnail-icon" [fileType]="file.type" [locked]="true" />
+            </div>
+            <div class="file-card-header">
+              <span class="file-name" [title]="getDisplayName(file)">{{ getDisplayName(file) }}</span>
+            </div>
+          } @else {
+            <div class="default-folder-visual" [class.has-folder-thumbnail]="!!getFolderThumbnail(file)" aria-hidden="true">
+              @if (getFolderThumbnail(file); as thumbnail) {
+                <img class="default-folder-preview-back" src="icons-test/folder-back.ico" alt="" />
+                <span class="default-folder-preview">
+                  <img class="default-folder-preview-image" [src]="thumbnail" alt="" />
+                </span>
+                <img class="default-folder-preview-front" src="icons-test/folder-front.ico" alt="" />
+              } @else {
+                <img class="default-folder-default" src="icons-test/folder-default.ico" alt="" />
+              }
+            </div>
           <div class="folder-card-content">
             <app-file-icon [fileType]="file.type" [locked]="isLocked()" />
             <span class="file-name" [title]="getDisplayName(file)">{{ getDisplayName(file) }}</span>
@@ -115,11 +134,16 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
               <span class="material-symbols-outlined">more_vert</span>
             </button>
           }
+          }
         </div>
       </ng-template>
 
       <ng-template #fileCardTpl let-file="file">
         <div class="grid-card file-card selectable-item" [attr.data-id]="file.id"
+             [class.video-card]="file.type === 'video'"
+             [class.image-card]="file.type === 'image'"
+             [class.mixed-folder-card]="file.isFolder"
+             [class.locked-folder]="file.isFolder && isLocked()"
              [class.selected]="driveStore.selectedFileIds().has(file.id)"
              [class.dragging]="isDragged(file)"
              [attr.draggable]="(!isLocked() && file.id !== -9999) ? 'true' : null"
@@ -131,6 +155,19 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
              (click)="onFileClick(file, $event)"
              (dblclick)="onFileDblClick(file, $event)"
              (contextmenu)="onContextMenu(file, $event)">
+          @if (file.isFolder && !isLocked()) {
+            <div class="default-folder-visual" [class.has-folder-thumbnail]="!!getFolderThumbnail(file)" aria-hidden="true">
+              @if (getFolderThumbnail(file); as thumbnail) {
+                <img class="default-folder-preview-back" src="icons-test/folder-back.ico" alt="" />
+                <span class="default-folder-preview">
+                  <img class="default-folder-preview-image" [src]="thumbnail" alt="" />
+                </span>
+                <img class="default-folder-preview-front" src="icons-test/folder-front.ico" alt="" />
+              } @else {
+                <img class="default-folder-default" src="icons-test/folder-default.ico" alt="" />
+              }
+            </div>
+          }
           <div class="file-card-header">
             <div class="folder-card-content">
               <app-file-icon [fileType]="file.type" [locked]="isLocked()" />
@@ -365,7 +402,7 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
             <span class="material-symbols-outlined">create_new_folder</span>
             Nova pasta
           </button>
-          <div style="height: 1px; background: #e8eaed; margin: 4px 0;"></div>
+          <div class="menu-divider"></div>
           <button class="menu-item" (click)="onUploadFile($event)">
             <span class="material-symbols-outlined">upload_file</span>
             Upload arquivo
@@ -802,6 +839,11 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
         width: 100%;
       }
 
+      .menu-divider {
+        height: 1px;
+        background: #e8eaed;
+        margin: 4px 0;
+      }
 
       .menu-item:hover {
         background: #f1f3f4;
@@ -867,6 +909,9 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
       }
 
       /* === GRID VIEW === */
+      .default-folder-visual {
+        display: none;
+      }
       .grid-layout {
         padding: 16px 24px;
         display: flex;
@@ -888,6 +933,8 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
         grid-template-columns: repeat(auto-fill, minmax(220px, 300px));
       }
       .grid-card {
+        width: 100%;
+        box-sizing: border-box;
         background: #f8f9fa;
         border: 1px solid #dadce0;
         border-radius: 8px;
@@ -911,6 +958,12 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
         padding: 0 8px 0 16px;
         height: 48px;
         justify-content: space-between;
+      }
+      .folder-card.locked-folder {
+        width: 100%;
+        min-width: 0;
+        align-items: stretch;
+        box-sizing: border-box;
       }
       .folder-card-content {
         display: flex;
@@ -969,6 +1022,254 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
         transform: scale(2.5);
         opacity: 0.15;
       }
+
+      /* Windows Explorer variant: scoped so the GDrive theme keeps its exact styling. */
+      :host-context(:root[data-theme='default']) .file-list-container {
+        background: var(--default-workspace-bg);
+        color: var(--default-workspace-text);
+        font-family: 'Segoe UI', sans-serif;
+        isolation: isolate;
+      }
+      :host-context(:root[data-theme='default']) .selection-box {
+        background: color-mix(in srgb, var(--default-workspace-selected) 72%, transparent);
+        border-color: var(--default-workspace-selected-border);
+      }
+      :host-context(:root[data-theme='default']) .file-list-header {
+        height: 30px;
+        padding: 0 12px;
+        border-color: var(--default-workspace-border);
+        background: var(--default-workspace-surface);
+      }
+      :host-context(:root[data-theme='default']) .file-list-body {
+        background: var(--default-workspace-bg);
+      }
+      :host-context(:root[data-theme='default']) .file-row {
+        height: 34px;
+        padding: 0 12px;
+        border-color: var(--default-workspace-border);
+        color: var(--default-workspace-text);
+        transition: none;
+      }
+      :host-context(:root[data-theme='default']) .file-row:hover,
+      :host-context(:root[data-theme='default']) .file-row:active {
+        background: var(--default-workspace-hover);
+      }
+      :host-context(:root[data-theme='default']) .file-row:focus-visible {
+        outline: 1px solid var(--default-workspace-selected-border);
+        outline-offset: -1px;
+        background: var(--default-workspace-selected);
+      }
+      :host-context(:root[data-theme='default']) .file-row.selected {
+        background: var(--default-workspace-selected) !important;
+      }
+      :host-context(:root[data-theme='default']) .file-row.selected .file-name,
+      :host-context(:root[data-theme='default']) .file-row.selected .col-owner,
+      :host-context(:root[data-theme='default']) .file-row.selected .col-modified,
+      :host-context(:root[data-theme='default']) .file-row.selected .col-size {
+        color: var(--default-workspace-text);
+      }
+      :host-context(:root[data-theme='default']) .file-row.dragging {
+        background: var(--default-workspace-surface-alt);
+      }
+      :host-context(:root[data-theme='default']) .file-row.drag-over {
+        background: var(--default-workspace-selected) !important;
+        outline-color: var(--default-workspace-selected-border) !important;
+      }
+      :host-context(:root[data-theme='default']) .sortable-header,
+      :host-context(:root[data-theme='default']) .col-owner,
+      :host-context(:root[data-theme='default']) .col-modified,
+      :host-context(:root[data-theme='default']) .col-size,
+      :host-context(:root[data-theme='default']) .col-quota {
+        color: var(--default-workspace-muted);
+      }
+      :host-context(:root[data-theme='default']) .sortable-header:hover,
+      :host-context(:root[data-theme='default']) .file-name {
+        color: var(--default-workspace-text);
+      }
+      :host-context(:root[data-theme='default']) .grid-layout {
+        flex: 1;
+        gap: 10px;
+        padding: 8px 12px 12px;
+        background: var(--default-workspace-bg);
+      }
+      :host-context(:root[data-theme='default']) .grid-sort-header {
+        min-height: 30px;
+        margin: 0;
+        border-bottom: 1px solid var(--default-workspace-border);
+      }
+      :host-context(:root[data-theme='default']) .grid-container {
+        gap: 8px 4px;
+      }
+      :host-context(:root[data-theme='default']) .folders-grid,
+      :host-context(:root[data-theme='default']) .files-grid,
+      :host-context(:root[data-theme='default']) .mixed-grid {
+        grid-template-columns: repeat(auto-fill, minmax(124px, 156px));
+      }
+      :host-context(:root[data-theme='default']) .grid-card {
+        height: 126px;
+        border: 1px solid transparent;
+        border-radius: 0;
+        background: transparent;
+        transition: none;
+        overflow: visible;
+      }
+      :host-context(:root[data-theme='default']) .grid-card:hover {
+        border-color: var(--default-workspace-border);
+        background: var(--default-workspace-hover);
+      }
+      :host-context(:root[data-theme='default']) .grid-card.selected {
+        border-color: var(--default-workspace-selected-border);
+        background: var(--default-workspace-selected);
+      }
+      :host-context(:root[data-theme='default']) .folder-card,
+      :host-context(:root[data-theme='default']) .mixed-folder-card {
+        flex-direction: column;
+        justify-content: flex-start;
+        padding: 8px 6px 4px;
+      }
+      :host-context(:root[data-theme='default']) .folder-card.locked-folder {
+        align-items: stretch;
+      }
+      :host-context(:root[data-theme='default']) .default-folder-visual {
+        position: relative;
+        display: block;
+        width: 84px;
+        height: 62px;
+        margin: 8px auto 7px;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+      :host-context(:root[data-theme='default']) .default-folder-visual::before {
+        display: none;
+      }
+      :host-context(:root[data-theme='default']) .default-folder-visual.has-folder-thumbnail {
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+      }
+      :host-context(:root[data-theme='default']) .default-folder-visual.has-folder-thumbnail::before {
+        display: none;
+      }
+      :host-context(:root[data-theme='default']) .default-folder-preview {
+        position: absolute;
+        inset: 8px 1px 4px;
+        border: 1px solid #b17e14;
+        background: var(--default-workspace-surface);
+        overflow: hidden;
+      }
+      :host-context(:root[data-theme='default']) .default-folder-default {
+        position: absolute;
+        inset: 0;
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        transform: scale(1.6);
+        pointer-events: none;
+      }
+      :host-context(:root[data-theme='default']) .default-folder-preview-image {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      :host-context(:root[data-theme='default']) .default-folder-preview-front {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        transform: scale(1.60);
+        pointer-events: none;
+      }
+      :host-context(:root[data-theme='default']) .default-folder-preview-back {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        transform: scale(1.6);
+        pointer-events: none;
+      }
+      :host-context(:root[data-theme='default']) .folder-card > .folder-card-content,
+      :host-context(:root[data-theme='default']) .mixed-folder-card .file-card-header {
+        width: 100%;
+        height: auto;
+        padding: 0;
+        justify-content: center;
+      }
+      :host-context(:root[data-theme='default']) .folder-card > .folder-card-content > app-file-icon,
+      :host-context(:root[data-theme='default']) .mixed-folder-card .file-card-header app-file-icon,
+      :host-context(:root[data-theme='default']) .mixed-folder-card .file-card-thumbnail {
+        display: none;
+      }
+      :host-context(:root[data-theme='default']) .folder-card.locked-folder > .folder-card-content > app-file-icon,
+      :host-context(:root[data-theme='default']) .mixed-folder-card.locked-folder .file-card-header app-file-icon {
+        display: block;
+      }
+      :host-context(:root[data-theme='default']) .folder-card-content {
+        justify-content: center;
+        gap: 0;
+      }
+      :host-context(:root[data-theme='default']) .folder-card-content .file-name {
+        max-height: 32px;
+        color: var(--default-workspace-text);
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 16px;
+        text-align: center;
+        white-space: normal;
+      }
+      :host-context(:root[data-theme='default']) .grid-action-btn {
+        position: absolute;
+        top: 2px;
+        right: 2px;
+        z-index: 2;
+        opacity: 0;
+        background: var(--default-context-bg);
+      }
+      :host-context(:root[data-theme='default']) .grid-card:hover .grid-action-btn,
+      :host-context(:root[data-theme='default']) .grid-card:focus-within .grid-action-btn {
+        opacity: 1;
+      }
+      :host-context(:root[data-theme='default']) .file-card:not(.mixed-folder-card) {
+        height: 126px;
+      }
+      :host-context(:root[data-theme='default']) .file-card:not(.mixed-folder-card) .file-card-header {
+        order: 2;
+        height: 34px;
+        padding: 3px 5px 2px;
+      }
+      :host-context(:root[data-theme='default']) .file-card:not(.mixed-folder-card) .file-card-header app-file-icon {
+        display: none;
+      }
+      :host-context(:root[data-theme='default']) .file-card-thumbnail {
+        order: 1;
+        flex: none;
+        height: 86px;
+        margin: 4px;
+        border: 1px solid var(--default-media-border);
+        background-color: var(--default-thumbnail-bg);
+        background-repeat: no-repeat;
+        background-size: contain;
+      }
+      :host-context(:root[data-theme='default']) .video-card .file-card-thumbnail {
+        border-color: #707070;
+        box-shadow: inset 0 0 0 2px #0d0d0d;
+      }
+      :host-context(:root[data-theme='default']) .image-card .file-card-thumbnail {
+        border-color: var(--default-workspace-border);
+      }
+      :host-context(:root[data-theme='default']) .thumbnail-icon {
+        opacity: .55;
+        transform: scale(2);
+      }
     `
   ],
 })
@@ -992,6 +1293,10 @@ export class FileListComponent implements OnInit, OnDestroy {
             // Load thumbnail lazily (cache prevents multiple loads)
             this.driveStore.loadThumbnail(f);
           }
+        });
+        this.sortedFolders().forEach(folder => {
+          const preview = this.folderPreviewFile(folder);
+          if (preview) this.driveStore.loadThumbnail(preview);
         });
       }
     });
@@ -1493,15 +1798,9 @@ export class FileListComponent implements OnInit, OnDestroy {
     }
 
     const currentId = this.driveStore.currentFolderId();
-    if (currentId !== null && mode !== 'storage') {
-      let parentId: number | null = null;
-      if (mode === 'trash') {
-        const currentFolder = this.driveStore.trashFiles().find(f => f.isFolder && f.id === currentId);
-        parentId = currentFolder?.parentId ?? null;
-      } else {
-        const currentFolder = this.driveStore.files().find(f => f.isFolder && f.id === currentId);
-        parentId = currentFolder?.parentId ?? null;
-      }
+    if (currentId !== null && mode !== 'storage' && mode !== 'trash') {
+      const currentFolder = this.driveStore.files().find(f => f.isFolder && f.id === currentId);
+      const parentId = currentFolder?.parentId ?? null;
 
       const parentVirtualFolder: DriveFile = {
         id: -9999,
@@ -1524,6 +1823,20 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   sortedFolders = computed(() => this.sortedFiles().filter(f => f.isFolder));
   sortedFilesOnly = computed(() => this.sortedFiles().filter(f => !f.isFolder));
+
+  private folderPreviewFile(folder: DriveFile): DriveFile | undefined {
+    return this.driveStore.files().find(file =>
+      !file.isFolder &&
+      !file.isHidden &&
+      file.folderId === folder.id &&
+      (file.type === 'image' || file.type === 'video')
+    );
+  }
+
+  getFolderThumbnail(folder: DriveFile): string | null {
+    const preview = this.folderPreviewFile(folder);
+    return preview ? this.driveStore.thumbnails()[preview.id] ?? null : null;
+  }
 
   getSortLabel() {
     switch (this.sortColumn()) {

@@ -47,11 +47,28 @@ describe('DriveWorkspaceComponent', () => {
     fixture.componentRef.setInput('currentView', 'drive');
   });
 
+  afterEach(() => {
+    delete document.documentElement.dataset['theme'];
+  });
+
   it('renders drive breadcrumbs and the list view', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('.breadcrumb-text')).toBeNull();
     expect(fixture.nativeElement.querySelector('app-file-list')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.view-mode-toggle')).not.toBeNull();
+  });
+
+  it('applies the compact workspace surface only to the Default theme', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    fixture.detectChanges();
+    const breadcrumb = fixture.nativeElement.querySelector('.breadcrumb') as HTMLElement;
+    expect(getComputedStyle(breadcrumb).borderBottomStyle).toBe('solid');
+    expect(getComputedStyle(breadcrumb).fontFamily).toContain('Segoe UI');
+
+    document.documentElement.dataset['theme'] = 'gdrive';
+    fixture.detectChanges();
+    expect(getComputedStyle(breadcrumb).borderBottomStyle).toBe('none');
+    expect(getComputedStyle(breadcrumb).fontFamily).toContain('Roboto');
   });
 
   it('renders each non-drive mode through its matching branch', () => {

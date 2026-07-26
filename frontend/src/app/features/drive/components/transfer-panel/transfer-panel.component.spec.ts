@@ -57,6 +57,16 @@ describe('TransferPanelComponent', () => {
     expect(fixture.nativeElement.querySelector('.transfer-card.paused')).not.toBeNull();
   });
 
+  it('uses the Default dark palette for transfer cards', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    store.transfers.set([transfer()]);
+    fixture.detectChanges();
+
+    const card = fixture.nativeElement.querySelector('.transfer-card') as HTMLElement;
+    expect(getComputedStyle(card).backgroundColor).toBe('rgb(32, 32, 32)');
+    expect(getComputedStyle(card.querySelector('.transfer-filename')!).color).toBe('rgb(243, 243, 243)');
+  });
+
   it('delegates transfer controls to the store', () => {
     store.transfers.set([
       transfer({ id: 'processing' }),

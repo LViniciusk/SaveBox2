@@ -328,6 +328,58 @@ import { DriveView } from '../../state/drive.types';
     .status-indicator .material-symbols-outlined { font-size: 18px; }
     .spinner { width: 14px; height: 14px; border: 2px solid #e2e8f0; border-top-color: #1a73e8; border-radius: 50%; animation: spin 1s linear infinite; }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+    :host-context(:root[data-theme='default']) {
+      color: var(--default-workspace-text);
+      font-family: 'Segoe UI', sans-serif;
+    }
+    :host-context(:root[data-theme='default']) .transfers-container { color: var(--default-workspace-text); }
+    :host-context(:root[data-theme='default']) .transfers-header { border-color: var(--default-workspace-border); }
+    :host-context(:root[data-theme='default']) .transfers-header h2 { color: var(--default-workspace-text); }
+    :host-context(:root[data-theme='default']) .clear-completed-btn {
+      background: var(--default-workspace-surface);
+      border-color: var(--default-context-border);
+      color: var(--default-workspace-text);
+    }
+    :host-context(:root[data-theme='default']) .clear-completed-btn:hover { background: var(--default-context-hover); border-color: var(--default-workspace-selected-border); }
+    :host-context(:root[data-theme='default']) .transfer-card,
+    :host-context(:root[data-theme='default']) .transfer-group { background: var(--default-workspace-surface); border-color: var(--default-workspace-border); }
+    :host-context(:root[data-theme='default']) .transfer-card:hover { border-color: var(--default-workspace-selected-border); box-shadow: none; }
+    :host-context(:root[data-theme='default']) .transfer-card.success,
+    :host-context(:root[data-theme='default']) .transfer-group.terminal-group { background: #1e3024; border-color: #36583f; }
+    :host-context(:root[data-theme='default']) .transfer-card.error { background: #351f21; border-color: #694044; }
+    :host-context(:root[data-theme='default']) .transfer-card.paused { background: #332d1c; border-color: #62532a; }
+    :host-context(:root[data-theme='default']) .transfer-filename,
+    :host-context(:root[data-theme='default']) .transfer-group-header,
+    :host-context(:root[data-theme='default']) .mini-group-header,
+    :host-context(:root[data-theme='default']) .mini-filename { color: var(--default-workspace-text); }
+    :host-context(:root[data-theme='default']) .transfer-meta,
+    :host-context(:root[data-theme='default']) .transfer-group-count,
+    :host-context(:root[data-theme='default']) .transfer-group-meta,
+    :host-context(:root[data-theme='default']) .transfer-group-item-status,
+    :host-context(:root[data-theme='default']) .mini-status,
+    :host-context(:root[data-theme='default']) .mini-status-msg { color: var(--default-workspace-muted); }
+    :host-context(:root[data-theme='default']) .transfer-type-badge,
+    :host-context(:root[data-theme='default']) .transfer-icon-area,
+    :host-context(:root[data-theme='default']) .mini-transfer-icon-wrapper { background: var(--default-context-hover); color: var(--default-workspace-muted); }
+    :host-context(:root[data-theme='default']) .transfer-progress-bar-container,
+    :host-context(:root[data-theme='default']) .mini-progress-track { background: var(--default-context-border); }
+    :host-context(:root[data-theme='default']) .transfer-progress-bar-fill,
+    :host-context(:root[data-theme='default']) .mini-progress-fill { background: var(--default-accent); }
+    :host-context(:root[data-theme='default']) .transfer-control-btn { color: var(--default-workspace-muted); }
+    :host-context(:root[data-theme='default']) .transfer-control-btn:hover { background: var(--default-context-hover); color: var(--default-workspace-text); }
+    :host-context(:root[data-theme='default']) .transfers-popup-wrapper { background: var(--default-context-bg); border-color: var(--default-context-border); box-shadow: var(--default-context-shadow); }
+    :host-context(:root[data-theme='default']) .transfers-popup-header { background: var(--default-workspace-surface); border-bottom: 1px solid var(--default-context-border); }
+    :host-context(:root[data-theme='default']) .transfers-popup-header:hover { background: var(--default-context-hover); }
+    :host-context(:root[data-theme='default']) .mini-transfer-group,
+    :host-context(:root[data-theme='default']) .mini-transfer-item { background: var(--default-context-bg); border-color: var(--default-context-border); }
+    :host-context(:root[data-theme='default']) .status-indicator.processing { color: var(--default-accent); }
+    :host-context(:root[data-theme='default']) .spinner { border-color: var(--default-context-border); border-top-color: var(--default-accent); }
+    :host-context(:root[data-theme='default']) .transfer-status-message,
+    :host-context(:root[data-theme='default']) .transfer-speed,
+    :host-context(:root[data-theme='default']) .transfer-eta { color: var(--default-workspace-muted) !important; }
+    :host-context(:root[data-theme='default']) .transfer-progress-bar-fill[style],
+    :host-context(:root[data-theme='default']) .mini-progress-fill[style] { background: var(--default-accent) !important; }
   `],
 })
 export class TransferPanelComponent {

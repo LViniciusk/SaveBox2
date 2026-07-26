@@ -19,6 +19,11 @@
               {
                 "glob": "**/*",
                 "input": "public"
+              },
+              {
+                "glob": "**/*",
+                "input": "src/icons-test",
+                "output": "icons-test"
               }
             ],
             "styles": [
@@ -73,6 +78,11 @@
               {
                 "glob": "**/*",
                 "input": "public"
+              },
+              {
+                "glob": "**/*",
+                "input": "src/icons-test",
+                "output": "icons-test"
               }
             ],
             "styles": [

@@ -23,8 +23,9 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
                   [attr.aria-label]="folder.available ? folder.name : folder.name + ', indisponível'"
                   (click)="navigate.emit(folder.id)"
                   (contextmenu)="openContextMenu(folder.id, folder, $event)">
-            <span class="material-symbols-outlined" aria-hidden="true">folder</span>
+            <img class="pinned-folder-icon" src="icons-test/folder-default.ico" alt="" aria-hidden="true" />
             <span class="pinned-name">{{ folder.name }}</span>
+            <span class="material-symbols-outlined pinned-pin-icon" aria-hidden="true">push_pin</span>
           </button>
         }
         @if (store.error()) {
@@ -62,13 +63,16 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
     .pinned-item.active { background: #c2e7ff; color: #001d35; }
     .pinned-item:disabled { cursor: default; opacity: .7; }
     .pinned-item .material-symbols-outlined { font-size: 18px; }
+    .pinned-folder-icon { width: 20px; height: 20px; flex: 0 0 20px; object-fit: contain; }
     .pinned-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pinned-pin-icon { margin-left: auto; font-size: 16px !important; color: #5f6368; }
     .pinned-loading, .pinned-error { padding: 4px 16px; color: #5f6368; font-size: 11px; }
     .pinned-error { color: #b3261e; }
     .default-variant .pinned-item { border-radius: 4px; color: var(--default-text); }
     .default-variant .pinned-item:hover:not(:disabled), .default-variant .pinned-item.active { background: var(--default-hover); }
     .default-variant .pinned-item.active { color: var(--default-accent); }
     .default-variant .pinned-title { color: var(--default-muted); }
+    .default-variant .pinned-pin-icon { color: var(--default-muted); }
     .default-variant .pinned-item { padding-left: 12px; }
     .action-menu { position: fixed; min-width: 200px; z-index: 1000; display: flex; flex-direction: column; padding: 6px 0; background: var(--surface, #fff); border-radius: 8px; box-shadow: 0 1px 3px rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15); }
     .menu-item { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 16px; border: 0; background: transparent; color: var(--text-primary, #3c4043); text-align: left; font: inherit; cursor: pointer; }

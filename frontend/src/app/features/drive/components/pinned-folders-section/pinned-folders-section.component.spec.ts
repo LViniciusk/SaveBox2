@@ -50,6 +50,7 @@ describe('PinnedFoldersSectionComponent', () => {
     const buttons = fixture.nativeElement.querySelectorAll('.pinned-item') as NodeListOf<HTMLButtonElement>;
     expect(buttons.length).toBe(3);
     expect(buttons[0].textContent).toContain('Projetos');
+    expect(buttons[0].querySelector('.pinned-folder-icon')?.getAttribute('src')).toContain('folder-default.ico');
     expect(buttons[0].getAttribute('aria-current')).toBeNull();
     expect(buttons[1].disabled).toBeTrue();
     expect(buttons[2].disabled).toBeTrue();

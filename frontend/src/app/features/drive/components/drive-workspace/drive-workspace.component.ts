@@ -5,6 +5,7 @@ import { DriveFile, DriveStore } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
 import { DriveDropZoneDirective } from '../../directives/drive-drop-zone.directive';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
+import { ThemeService } from '../../../../core/theme/theme.service';
 
 @Component({
   selector: 'app-drive-workspace',
@@ -45,6 +46,17 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
         </div>
       }
     </div>
+
+    @if (themeService.theme() === 'default' && (currentView() === 'drive' || currentView() === 'trash')) {
+      <div class="view-mode-toggle default-view-mode-toggle">
+        <button [class.active]="driveStore.displayMode() === 'list'" (click)="driveStore.setDisplayMode('list')" title="Modo Lista">
+          <span class="material-symbols-outlined">view_list</span>
+        </button>
+        <button [class.active]="driveStore.displayMode() === 'grid'" (click)="driveStore.setDisplayMode('grid')" title="Modo Grade">
+          <span class="material-symbols-outlined">grid_view</span>
+        </button>
+      </div>
+    }
 
     @if (currentView() === 'trash' && driveStore.trashFiles().length > 0) {
       <div class="trash-banner">
@@ -92,16 +104,41 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
     .view-mode-toggle button.active { background-color: #c2e7ff; color: #001d35; }
     .view-mode-toggle button.active:hover { background-color: #b3dcf4; }
     .view-mode-toggle button:first-child { border-right: 1px solid #747775; }
+    .default-view-mode-toggle { position: absolute; right: 12px; bottom: 12px; z-index: 5; margin: 0; }
     .trash-banner { display: flex; align-items: center; justify-content: space-between; background: #edf2fa; border: none; border-radius: 12px; padding: 14px 24px; margin: 0 24px 16px; box-sizing: border-box; }
     .trash-banner-text { font-size: 14px; color: #3c4043; font-family: 'Roboto', sans-serif; }
     .empty-trash-btn { background: #EDF2FA; border: none; border-radius: 20px; padding: 8px 20px; font-size: 14px; font-weight: 500; color: #0b57d0; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 150ms; font-family: 'Roboto', sans-serif; }
     .empty-trash-btn:hover { background: #d3e3fd; }
+    :host-context(:root[data-theme='default']) { background: var(--default-workspace-bg); color: var(--default-workspace-text); font-family: 'Segoe UI', sans-serif; }
+    :host-context(:root[data-theme='default']) .workspace-drop-zone { background: var(--default-workspace-bg); isolation: isolate; }
+    :host-context(:root[data-theme='default']) .workspace-drop-zone.drop-zone-active::after { inset: 0; border-radius: 0; border-color: var(--default-workspace-selected-border); background: color-mix(in srgb, var(--default-workspace-selected) 80%, transparent); color: var(--default-workspace-text); }
+    :host-context(:root[data-theme='default']) .breadcrumb { display: none; }
+    :host-context(:root[data-theme='default']) .breadcrumb { min-height: 38px; gap: 6px; padding: 5px 12px; border-bottom: 1px solid var(--default-workspace-border); color: var(--default-workspace-text); font-size: 13px; }
+    :host-context(:root[data-theme='default']) .breadcrumb-icon { color: var(--default-folder); font-size: 18px; }
+    :host-context(:root[data-theme='default']) .breadcrumb-text,
+    :host-context(:root[data-theme='default']) .breadcrumb-path,
+    :host-context(:root[data-theme='default']) .breadcrumb-link { font: 13px 'Segoe UI', sans-serif; }
+    :host-context(:root[data-theme='default']) .breadcrumb-link { color: var(--default-workspace-muted); padding: 2px 4px; }
+    :host-context(:root[data-theme='default']) .breadcrumb-link:hover:not(:disabled) { color: var(--default-workspace-text); background: var(--default-workspace-hover); text-decoration: none; }
+    :host-context(:root[data-theme='default']) .breadcrumb-link:disabled { color: var(--default-workspace-text); }
+    :host-context(:root[data-theme='default']) .breadcrumb-separator { color: var(--default-workspace-muted); }
+    :host-context(:root[data-theme='default']) .view-mode-toggle { border-color: var(--default-context-border); border-radius: var(--default-workspace-radius); }
+    :host-context(:root[data-theme='default']) .view-mode-toggle button { min-width: 34px; padding: 3px 7px; color: var(--default-workspace-muted); }
+    :host-context(:root[data-theme='default']) .view-mode-toggle button:first-child { border-color: var(--default-context-border); }
+    :host-context(:root[data-theme='default']) .view-mode-toggle button:hover { background: var(--default-workspace-hover); color: var(--default-workspace-text); }
+    :host-context(:root[data-theme='default']) .view-mode-toggle button.active,
+    :host-context(:root[data-theme='default']) .view-mode-toggle button.active:hover { background: var(--default-workspace-selected); color: var(--default-workspace-text); }
+    :host-context(:root[data-theme='default']) .trash-banner { margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--default-workspace-border); border-radius: 0; background: var(--default-workspace-surface-alt); }
+    :host-context(:root[data-theme='default']) .trash-banner-text { color: var(--default-workspace-muted); font-family: inherit; }
+    :host-context(:root[data-theme='default']) .empty-trash-btn { border-radius: var(--default-workspace-radius); background: transparent; color: #8fc8f4; font-family: inherit; }
+    :host-context(:root[data-theme='default']) .empty-trash-btn:hover { background: var(--default-context-hover); }
   `],
 })
 export class DriveWorkspaceComponent {
   readonly currentView = input.required<DriveView>();
   readonly locked = input(false);
   readonly driveStore = inject(DriveStore);
+  readonly themeService = inject(ThemeService);
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
   readonly videoSelected = output<DriveFile>();

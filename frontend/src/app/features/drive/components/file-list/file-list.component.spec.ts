@@ -19,7 +19,7 @@ describe('FileListComponent', () => {
     // Isolate dependencies with strict mocks (Ponytail philosophy: test logic, not framework)
     mockDriveStore = jasmine.createSpyObj('DriveStore', [
       'restoreItem', 'permanentDeleteItem', 'downloadFile', 'renameItem', 'moveItem', 'trashItem',
-      'navigateTo', 'batchTrashItems', 'batchRestoreItems', 'batchPermanentDeleteItems'
+      'navigateTo', 'batchTrashItems', 'batchRestoreItems', 'batchPermanentDeleteItems', 'loadThumbnail'
     ], {
       files: signal([]),
       trashFiles: signal([]),
@@ -63,6 +63,10 @@ describe('FileListComponent', () => {
     // Stub methods used by the signals to isolate the test from deep store logic
     spyOn(component, 'getTotalStorageMax').and.returnValue(1000);
     spyOn(component, 'getProxySize').and.returnValue(0); // Ignore proxy logic for these tests
+  });
+
+  afterEach(() => {
+    delete document.documentElement.dataset['theme'];
   });
 
   describe('getPercentage', () => {
@@ -202,6 +206,16 @@ describe('FileListComponent', () => {
     expect(mockDriveStore.navigateTo).toHaveBeenCalledWith(3);
   });
 
+  it('does not expose the virtual parent shortcut in the trash', () => {
+    const folder = { id: 7, isFolder: true, parentId: 3, decryptedName: 'Folder', type: 'folder', sizeBytes: 0 } as DriveFile;
+    fixture.componentRef.setInput('files', [folder]);
+    fixture.componentRef.setInput('viewMode', 'trash');
+    mockDriveStore.currentFolderId.set(7);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('[data-id="-9999"]')).toBeNull();
+  });
+
   it('validates drag targets and exposes eligible destination folders', () => {
     const file = { id: 1, isFolder: false, parentId: null, folderId: null } as DriveFile;
     const folder = { id: 2, isFolder: true, parentId: null, folderId: null } as DriveFile;
@@ -253,6 +267,80 @@ describe('FileListComponent', () => {
     mockAppState.isLocked.set(true);
     component.onContextMenu(file, new MouseEvent('contextmenu'));
     expect(component.activeMenuFileId()).toBeNull();
+  });
+
+  it('renders Explorer folder, video and image variants with thumbnail fallback', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    mockDriveStore.displayMode.set('grid');
+    const files = [
+      { id: 1, type: 'folder', decryptedName: 'Projetos', isFolder: true, sizeBytes: 0 },
+      { id: 2, type: 'video', decryptedName: 'demo.mp4', isFolder: false, sizeBytes: 2 },
+      { id: 3, type: 'image', decryptedName: 'captura.png', isFolder: false, sizeBytes: 1 },
+    ] as DriveFile[];
+    mockDriveStore.files.set(files);
+    mockDriveStore.thumbnails.set({ 2: 'data:image/png;base64,AA==' });
+    fixture.componentRef.setInput('files', files);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    fixture.detectChanges();
+
+    const folder = fixture.nativeElement.querySelector('.folder-card') as HTMLElement;
+    const video = fixture.nativeElement.querySelector('.video-card') as HTMLElement;
+    const image = fixture.nativeElement.querySelector('.image-card') as HTMLElement;
+    expect(folder.querySelector('.default-folder-visual')).not.toBeNull();
+    expect(video.querySelector('.file-card-thumbnail')?.getAttribute('style')).toContain('data:image/png');
+    expect(image.querySelector('.thumbnail-icon')).not.toBeNull();
+    expect(fixture.nativeElement.textContent).toContain('Projetos');
+    expect(fixture.nativeElement.textContent).toContain('demo.mp4');
+    expect(fixture.nativeElement.textContent).toContain('captura.png');
+    expect(getComputedStyle(folder).borderRadius).toBe('0px');
+    expect(mockDriveStore.loadThumbnail).toHaveBeenCalledWith(files[1]);
+    expect(mockDriveStore.loadThumbnail).toHaveBeenCalledWith(files[2]);
+  });
+
+  it('uses the first media thumbnail inside a folder and keeps empty folders plain', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    mockDriveStore.displayMode.set('grid');
+    const folder = { id: 1, type: 'folder', decryptedName: 'Com fotos', isFolder: true, sizeBytes: 0 } as DriveFile;
+    const emptyFolder = { id: 4, type: 'folder', decryptedName: 'Vazia', isFolder: true, sizeBytes: 0 } as DriveFile;
+    const child = { id: 2, type: 'image', decryptedName: 'foto.png', isFolder: false, folderId: 1, encryptedFdk: 'fdk' } as DriveFile;
+    const files = [folder, emptyFolder, child];
+    mockDriveStore.files.set(files);
+    mockDriveStore.thumbnails.set({ 2: 'data:image/png;base64,AA==' });
+    fixture.componentRef.setInput('files', [folder, emptyFolder]);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    fixture.detectChanges();
+
+    const cards = [...fixture.nativeElement.querySelectorAll('.folder-card')] as HTMLElement[];
+    expect(cards[0].querySelector('.default-folder-preview-image')?.getAttribute('src')).toContain('data:image/png');
+    expect(cards[1].querySelector('.default-folder-preview')).toBeNull();
+    expect(mockDriveStore.loadThumbnail).toHaveBeenCalledWith(child);
+  });
+
+  it('uses the dark context-menu variant only for the Default theme', () => {
+    const file = { id: 1, type: 'doc', decryptedName: 'arquivo.txt', isFolder: false, sizeBytes: 1 } as DriveFile;
+    mockDriveStore.files.set([file]);
+    fixture.componentRef.setInput('files', [file]);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    document.documentElement.dataset['theme'] = 'default';
+    component.onContextMenu(file, new MouseEvent('contextmenu', { clientX: 10, clientY: 10, cancelable: true }));
+    fixture.detectChanges();
+
+    const menu = fixture.nativeElement.querySelector('.action-menu') as HTMLElement;
+    expect(menu).not.toBeNull();
+    expect(menu.textContent).toContain('Renomear');
+    expect(menu.querySelectorAll('.menu-divider').length).toBe(1);
+    const defaultMenuRule = Array.from(document.styleSheets)
+      .flatMap(sheet => Array.from(sheet.cssRules))
+      .find((rule): rule is CSSStyleRule => rule instanceof CSSStyleRule
+        && rule.selectorText.includes('app-file-list .file-list-container .action-menu'));
+    expect(defaultMenuRule).toBeDefined();
+    expect(defaultMenuRule?.style.animationName).toBe('none');
+    expect(defaultMenuRule?.style.border).toContain('solid');
+
+    document.documentElement.dataset['theme'] = 'gdrive';
+    fixture.detectChanges();
+    expect(getComputedStyle(menu).animationName).toContain('fadeIn');
+    expect(getComputedStyle(menu).borderStyle).toBe('none');
   });
 
   it('pins and unpins folders from the context menu without files receiving the action', async () => {

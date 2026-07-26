@@ -123,11 +123,10 @@ interface BreadcrumbSegment {
     .storage-summary { margin: 24px 12px 0; color: var(--default-muted); font-size: 11px; }
     .storage-track { height: 4px; margin: 7px 0 4px; background: var(--default-border); border-radius: 2px; overflow: hidden; }
     .storage-track span { display: block; height: 100%; background: var(--default-accent); }
-    .storage-track.gdrive { background: #dbe7df; }
-    .storage-track.gdrive span { background: #34a853; }
+    .storage-track.gdrive { background: #33463a; }
+    .storage-track.gdrive span { background: #4caf70; }
     .storage-provider-label { margin-top: 12px; }
     .explorer-content { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; background: var(--default-content-bg); }
-    .explorer-content ::ng-deep .content-inner { border-radius: 0; }
     @media (max-width: 680px) { .explorer-sidebar { display: none; } .toolbar-action { padding: 0 4px; font-size: 0; } }
   `],
 })

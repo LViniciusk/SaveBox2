@@ -16,6 +16,10 @@ describe('FileIconComponent', () => {
     component = fixture.componentInstance;
   });
 
+  afterEach(() => {
+    delete document.documentElement.dataset['theme'];
+  });
+
   it('should return "lock" icon and "locked" class when locked is true', () => {
     fixture.componentRef.setInput('fileType', 'image');
     fixture.componentRef.setInput('locked', true);
@@ -30,6 +34,14 @@ describe('FileIconComponent', () => {
       fixture.componentRef.setInput('locked', false);
       expect(component.iconName()).toBe('folder');
       expect(component.iconClass()).toBe('folder');
+    });
+
+    it('uses the yellow folder token in the Default theme', () => {
+      document.documentElement.dataset['theme'] = 'default';
+      fixture.componentRef.setInput('fileType', 'folder');
+      fixture.detectChanges();
+
+      expect(getComputedStyle(fixture.nativeElement.querySelector('.file-icon')).color).toBe('rgb(244, 180, 26)');
     });
 
     it('should return correct icon for pdf', () => {

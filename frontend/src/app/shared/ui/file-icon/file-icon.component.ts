@@ -23,6 +23,9 @@ import { Component, input, computed } from '@angular/core';
         color: #5f6368;
         font-variation-settings: 'FILL' 1;
       }
+      :host-context(:root[data-theme='default']) .file-icon.folder {
+        color: var(--default-folder, #f4b41a);
+      }
       .file-icon.pdf {
         color: #ea4335;
       }

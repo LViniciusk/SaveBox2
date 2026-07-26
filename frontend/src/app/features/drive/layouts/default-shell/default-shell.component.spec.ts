@@ -40,12 +40,33 @@ describe('DefaultShellComponent', () => {
     fixture.componentRef.setInput('quota', { usedBytes: 50, maxBytes: 100 });
   });
 
+  afterEach(() => {
+    delete document.documentElement.dataset['theme'];
+  });
+
   it('renders Explorer chrome and the shared workspace slot', () => {
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('.explorer-titlebar')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.address-bar')?.textContent).toContain('Nanika');
     expect(fixture.nativeElement.querySelector('.workspace-stub')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.storage-track span').style.width).toBe('50%');
+  });
+
+  it('uses the dark Default palette across titlebar, toolbar, sidebar and address bar', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    fixture.detectChanges();
+
+    const titlebar = fixture.nativeElement.querySelector('.explorer-titlebar') as HTMLElement;
+    const toolbar = fixture.nativeElement.querySelector('.explorer-toolbar') as HTMLElement;
+    const sidebar = fixture.nativeElement.querySelector('.explorer-sidebar') as HTMLElement;
+    const addressBar = fixture.nativeElement.querySelector('.address-bar') as HTMLElement;
+    const nav = fixture.nativeElement.querySelector('.explorer-nav') as HTMLElement;
+
+    expect(getComputedStyle(titlebar).backgroundColor).toBe('rgb(32, 32, 32)');
+    expect(getComputedStyle(toolbar).backgroundColor).toBe('rgb(32, 32, 32)');
+    expect(getComputedStyle(sidebar).backgroundColor).toBe('rgb(27, 27, 27)');
+    expect(getComputedStyle(addressBar).backgroundColor).toBe('rgb(32, 32, 32)');
+    expect(getComputedStyle(nav).color).toBe('rgb(143, 200, 244)');
   });
 
   it('renders the current folder path and human-readable storage sizes', () => {
