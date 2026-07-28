@@ -1,13 +1,11 @@
 import { TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
-import { HttpEventType } from '@angular/common/http';
 import { PublicMediaPlayerComponent } from './public-media-player.component';
 import { ShareService } from '../drive/services/share.service';
 import { KasumiCryptoService } from '../../core/crypto/kasumi-crypto.service';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { VideoStreamService } from '../drive/services/video-stream.service';
-import { environment } from '../../../environments/environment';
 import { of, throwError } from 'rxjs';
 
 describe('PublicMediaPlayerComponent', () => {
@@ -18,7 +16,7 @@ describe('PublicMediaPlayerComponent', () => {
   let shareSpy: any;
 
   beforeEach(async () => {
-    shareSpy = jasmine.createSpyObj('ShareService', ['downloadSharedFileRange', 'downloadSharedFile']);
+    shareSpy = jasmine.createSpyObj('ShareService', ['downloadSharedFileRange', 'downloadSharedFile', 'downloadSharedFileInRanges']);
     kasumiSpy = jasmine.createSpyObj('KasumiCryptoService', ['decryptFile', 'extractMetadata']);
     const videoStreamSpy = jasmine.createSpyObj('VideoStreamService', ['destroyStream']);
 
@@ -141,7 +139,8 @@ describe('PublicMediaPlayerComponent', () => {
     );
     kasumiSpy.extractMetadata.and.returnValue(Promise.resolve({ metadata: null, dataOffset: 40, expectedSize: 10 }));
     await component.loadHeaderThumbnail();
-    expect(shareSpy.downloadSharedFileRange).toHaveBeenCalledTimes(3);
+    expect(shareSpy.downloadSharedFileRange).toHaveBeenCalledWith('share-1', 0, 512 * 1024 - 1);
+    expect(shareSpy.downloadSharedFileRange).toHaveBeenCalledWith('share-1', 0, 2 * 1024 * 1024 - 1);
     expect(component.isLoading()).toBeFalse();
 
     shareSpy.downloadSharedFileRange.and.returnValue(throwError(() => new Error('offline')));
@@ -154,7 +153,7 @@ describe('PublicMediaPlayerComponent', () => {
     setInputs({ filename: 'photo.jpg', isImage: true });
     const encrypted = new Blob(['encrypted']);
     const decrypted = new Blob(['raw']);
-    shareSpy.downloadSharedFile.and.returnValue(of(encrypted));
+    shareSpy.downloadSharedFileInRanges.and.returnValue(Promise.resolve(encrypted));
     kasumiSpy.decryptFile.and.returnValue(Promise.resolve(decrypted));
     spyOn(URL, 'createObjectURL').and.returnValue('blob:image');
     spyOn(URL, 'revokeObjectURL');
@@ -171,7 +170,6 @@ describe('PublicMediaPlayerComponent', () => {
 
   describe('downloadFile', () => {
     it('should download encrypted blob via HTTP, decrypt and trigger download via object URL', async () => {
-      // Arrange
       fixture.componentRef.setInput('shareId', 'share-123');
       fixture.componentRef.setInput('fdk', new Uint8Array([1, 2, 3]));
       fixture.componentRef.setInput('filename', 'test.mkv');
@@ -181,7 +179,7 @@ describe('PublicMediaPlayerComponent', () => {
 
       const fakeEncryptedBlob = new Blob(['encrypted data']);
       const fakeDecryptedBlob = new Blob(['decrypted data']);
-      
+      shareSpy.downloadSharedFileInRanges.and.returnValue(Promise.resolve(fakeEncryptedBlob));
       kasumiSpy.decryptFile.and.returnValue(Promise.resolve(fakeDecryptedBlob));
       
       spyOn(URL, 'createObjectURL').and.returnValue('blob:test-url');
@@ -196,20 +194,10 @@ describe('PublicMediaPlayerComponent', () => {
       spyOn(document.body, 'appendChild');
       spyOn(document.body, 'removeChild');
 
-      // Act
-      (component as any).downloadFile();
-
-      // Assert HTTP
-      const req = httpMock.expectOne(`${environment.apiUrl}/share/share-123/download`);
-      expect(req.request.method).toBe('GET');
-      
-      // Simulate successful response with blob
-      req.flush(fakeEncryptedBlob);
-
-      // Allow microtasks to process (decryptFile Promise)
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await (component as any).downloadFile();
 
       expect(kasumiSpy.decryptFile).toHaveBeenCalledWith(fakeEncryptedBlob, jasmine.any(Uint8Array));
+      expect(shareSpy.downloadSharedFileInRanges).toHaveBeenCalledWith('share-123', 100, jasmine.any(Function));
       expect(URL.createObjectURL).toHaveBeenCalledWith(fakeDecryptedBlob);
       expect(document.createElement).toHaveBeenCalledWith('a');
       expect(anchorSpy.download).toBe('test.mkv');
@@ -232,24 +220,26 @@ describe('PublicMediaPlayerComponent', () => {
 
       expect(anchorSpy.download).toBe('photo.png');
       expect(anchorSpy.click).toHaveBeenCalled();
-      expect(httpMock.match(() => true)).toEqual([]);
+      expect(shareSpy.downloadSharedFileInRanges).not.toHaveBeenCalled();
     });
 
-    it('should update progress with and without a response total', async () => {
-      setInputs({ filename: 'file.pdf', sizeBytes: 0 });
-      (component as any).downloadFile();
-      let req = httpMock.expectOne(`${environment.apiUrl}/share/share-1/download`);
-      req.event({ type: HttpEventType.DownloadProgress, loaded: 500, total: 1000 } as any);
-      expect(component.downloadProgress()).toBe(50);
-      req.event({ type: HttpEventType.DownloadProgress, loaded: 1024 * 1024 * 2 } as any);
-      expect(component.downloadProgress()).toBe(2);
-      req.flush(null);
-      expect(component.isDownloading()).toBeTrue();
+    it('should update progress while downloading ranges and handle errors', async () => {
+      setInputs({ filename: 'file.pdf', sizeBytes: 1000 });
+      let progressDuringDownload: number | null = null;
+      shareSpy.downloadSharedFileInRanges.and.callFake(async (_id: string, _size: number, onProgress?: (loaded: number, total: number) => void) => {
+        onProgress?.(500, 1000);
+        progressDuringDownload = component.downloadProgress();
+        return new Blob(['encrypted']);
+      });
+      kasumiSpy.decryptFile.and.returnValue(Promise.reject(new Error('bad decrypt')));
 
-      setInputs({ filename: 'file2.pdf' });
-      (component as any).downloadFile();
-      req = httpMock.expectOne(`${environment.apiUrl}/share/share-1/download`);
-      req.error(new ProgressEvent('error'));
+      await (component as any).downloadFile();
+      expect(progressDuringDownload as any).toBe(50);
+      expect(component.isDownloading()).toBeFalse();
+      expect(component.downloadProgress()).toBeNull();
+
+      shareSpy.downloadSharedFileInRanges.and.returnValue(Promise.reject(new Error('offline')));
+      await (component as any).downloadFile();
       expect(component.isDownloading()).toBeFalse();
       expect(component.downloadProgress()).toBeNull();
     });
@@ -267,17 +257,12 @@ describe('PublicMediaPlayerComponent', () => {
       spyOn(document.body, 'appendChild');
       spyOn(document.body, 'removeChild');
 
-      (component as any).downloadFile();
-      let req = httpMock.expectOne(`${environment.apiUrl}/share/share-1/download`);
-      req.flush(new Blob(['encrypted']));
-      await new Promise(resolve => setTimeout(resolve, 0));
+      shareSpy.downloadSharedFileInRanges.and.returnValue(Promise.resolve(new Blob(['encrypted'])));
+      await (component as any).downloadFile();
       expect(component.isDownloading()).toBeFalse();
 
       kasumiSpy.decryptFile.and.returnValue(Promise.reject(new Error('bad decrypt')));
-      (component as any).downloadFile();
-      req = httpMock.expectOne(`${environment.apiUrl}/share/share-1/download`);
-      req.flush(new Blob(['encrypted']));
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await (component as any).downloadFile();
       expect(component.isDownloading()).toBeFalse();
     });
   });

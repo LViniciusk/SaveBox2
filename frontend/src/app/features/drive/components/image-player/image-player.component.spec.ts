@@ -23,7 +23,7 @@ describe('ImagePlayerComponent', () => {
 
   beforeEach(async () => {
     drive = jasmine.createSpyObj('DriveService', ['downloadFile', 'downloadExternalMetadata', 'downloadExternalFileRange']);
-    share = jasmine.createSpyObj('ShareService', ['downloadSharedFile']);
+    share = jasmine.createSpyObj('ShareService', ['downloadSharedFile', 'downloadSharedFileInRanges']);
     crypto = jasmine.createSpyObj('CryptoService', ['decryptName']);
     kasumi = jasmine.createSpyObj('KasumiCryptoService', ['decryptFile']);
     store = {
@@ -37,6 +37,7 @@ describe('ImagePlayerComponent', () => {
     kasumi.decryptFile.and.resolveTo(new Blob(['pixels'], { type: 'image/png' }));
     drive.downloadFile.and.returnValue(of(new Blob(['encrypted'])));
     share.downloadSharedFile.and.returnValue(of(new Blob(['shared'])));
+    share.downloadSharedFileInRanges.and.resolveTo(new Blob(['shared']));
 
     await TestBed.configureTestingModule({
       imports: [ImagePlayerComponent],
@@ -69,7 +70,7 @@ describe('ImagePlayerComponent', () => {
   it('uses the share FDK and reports a missing local FDK', async () => {
     const shared = { ...image, shareUuid: 'share', shareFdk: new Uint8Array(32), encryptedFdk: undefined } as DriveFile;
     await (component as any).loadImage(shared);
-    expect(share.downloadSharedFile).toHaveBeenCalledWith('share');
+    expect(share.downloadSharedFileInRanges).toHaveBeenCalledWith('share', image.sizeBytes);
 
     const missing = { ...image, id: 3, encryptedFdk: undefined } as DriveFile;
     await (component as any).loadImage(missing);

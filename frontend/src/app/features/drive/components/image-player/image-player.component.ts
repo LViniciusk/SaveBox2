@@ -775,7 +775,7 @@ export class ImagePlayerComponent implements OnDestroy {
     let fdk: Uint8Array;
 
     if (file.shareUuid && file.shareFdk) {
-      encryptedBlob = await firstValueFrom(this.shareService.downloadSharedFile(file.shareUuid));
+      encryptedBlob = await this.shareService.downloadSharedFileInRanges(file.shareUuid, file.sizeBytes);
       fdk = file.shareFdk;
     } else {
       if (!file.encryptedFdk) throw new Error('Chave de criptografia nao encontrada (FDK)');

@@ -49,4 +49,21 @@ describe('ShareService', () => {
     expect(req.request.responseType).toBe('blob');
     req.flush(new Blob());
   });
+
+  it('should download a shared file using sequential ranges', async () => {
+    const promise = service.downloadSharedFileInRanges('share-123', 4_194_321);
+    await Promise.resolve();
+
+    const first = httpMock.expectOne(`${environment.apiUrl}/share/share-123/download`);
+    expect(first.request.headers.get('Range')).toBe('bytes=0-4194319');
+    first.flush(new Blob(['first']));
+    await Promise.resolve();
+
+    const second = httpMock.expectOne(`${environment.apiUrl}/share/share-123/download`);
+    expect(second.request.headers.get('Range')).toBe('bytes=4194320-4194320');
+    second.flush(new Blob(['second']));
+
+    const result = await promise;
+    expect(result.size).toBe(11);
+  });
 });

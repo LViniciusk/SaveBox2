@@ -13,7 +13,7 @@ describe('SharedFileComponent', () => {
   let kasumiSpy: jasmine.SpyObj<KasumiCryptoService>;
 
   beforeEach(async () => {
-    shareSpy = jasmine.createSpyObj('ShareService', ['getSharedFileMetadata', 'downloadSharedFile']);
+    shareSpy = jasmine.createSpyObj('ShareService', ['getSharedFileMetadata', 'downloadSharedFile', 'downloadSharedFileInRanges']);
     kasumiSpy = jasmine.createSpyObj('KasumiCryptoService', ['decryptName', 'decryptFile']);
     const mockRoute = {
       snapshot: { paramMap: { get: () => 'share-123' } }
@@ -143,9 +143,7 @@ describe('SharedFileComponent', () => {
   it('surfaces download failures and ignores downloads without an FDK', async () => {
     component.shareId = 'share-123';
     component.fdkUint8 = new Uint8Array([1]);
-    shareSpy.downloadSharedFile.and.returnValue(
-      throwError(() => ({ error: { error: 'Arquivo indisponível' } }))
-    );
+    shareSpy.downloadSharedFileInRanges.and.returnValue(Promise.reject({ error: { error: 'Arquivo indisponível' } }));
 
     await component.downloadAndDecryptFile();
 
@@ -154,6 +152,6 @@ describe('SharedFileComponent', () => {
 
     component.fdkUint8 = null;
     await component.downloadAndDecryptFile();
-    expect(shareSpy.downloadSharedFile).toHaveBeenCalledTimes(1);
+    expect(shareSpy.downloadSharedFileInRanges).toHaveBeenCalledTimes(1);
   });
 });

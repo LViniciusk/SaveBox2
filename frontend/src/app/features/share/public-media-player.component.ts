@@ -3,8 +3,6 @@ import { CommonModule } from '@angular/common';
 import { ShareService } from '../drive/services/share.service';
 import { KasumiCryptoService } from '../../core/crypto/kasumi-crypto.service';
 import { VideoStreamService } from '../drive/services/video-stream.service';
-import { HttpClient, HttpEvent, HttpEventType } from '@angular/common/http';
-import { environment } from '../../../environments/environment';
 import { DriveFile } from '../drive/state/drive.store';
 import { VideoPlayerComponent } from '../drive/components/video-player/video-player.component';
 import { FileIconComponent } from '../../shared/ui/file-icon/file-icon.component';
@@ -607,8 +605,6 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
   readonly downloadProgress = signal<number | null>(null);
 
   private abortController: AbortController | null = null;
-  private readonly http = inject(HttpClient);
-
   readonly publicDriveFile = signal<DriveFile>({
     id: 0,
     isFolder: false,
@@ -709,7 +705,10 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     this.error.set(null);
 
     try {
-      const encryptedBlob = await firstValueFrom(this.shareService.downloadSharedFile(this.shareId()));
+      const encryptedBlob = await this.shareService.downloadSharedFileInRanges(
+        this.shareId(),
+        this.sizeBytes() || this.publicDriveFile().sizeBytes
+      );
       const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdk());
       const mimeType = this.getMimeType(this.filename());
       this.decryptedBlob = new Blob([rawDecrypted], { type: mimeType });
@@ -729,7 +728,7 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected downloadFile() {
+  protected async downloadFile() {
     console.log('[PublicMediaPlayer] Iniciando download...', {
       shareId: this.shareId(),
       sizeBytes: this.sizeBytes(),
@@ -753,61 +752,34 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     this.isDownloading.set(true);
     this.downloadProgress.set(0);
     
-    this.http.get(`${environment.apiUrl}/share/${this.shareId()}/download`, {
-      responseType: 'blob',
-      reportProgress: true,
-      observe: 'events'
-    }).subscribe({
-      next: async (event: HttpEvent<Blob>) => {
-        console.log('[PublicMediaPlayer] HttpEvent recebido:', HttpEventType[event.type], event);
-
-        if (event.type === HttpEventType.DownloadProgress) {
-          const total = event.total || this.sizeBytes() || this.publicDriveFile().sizeBytes;
-          console.log('[PublicMediaPlayer] DownloadProgress stats:', { loaded: event.loaded, eventTotal: event.total, sizeBytes: this.sizeBytes(), finalTotal: total });
-          if (total && total > 0) {
-            const percent = Math.min(99, Math.round((100 * event.loaded) / total));
-            console.log('[PublicMediaPlayer] Novo percentual calculado:', percent);
-            this.downloadProgress.set(percent);
-            this.cdr.detectChanges();
-          } else if (event.loaded > 0) {
-            console.log('[PublicMediaPlayer] Total zerado, usando loaded em MB:', event.loaded);
-            this.downloadProgress.set(Math.min(99, Math.round(event.loaded / 1024 / 1024)));
-            this.cdr.detectChanges();
-          }
-        } else if (event.type === HttpEventType.Response) {
-          console.log('[PublicMediaPlayer] Response completo recebido. Tamanho do encryptedBlob:', event.body?.size);
-          const encryptedBlob = event.body;
-          if (encryptedBlob) {
-            this.downloadProgress.set(null); // Indicates decrypting phase or done
-            this.cdr.detectChanges();
-            try {
-              console.log('[PublicMediaPlayer] Iniciando descriptografia com Kasumi...');
-              const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdk());
-              console.log('[PublicMediaPlayer] Descriptografia concluida. Tamanho final:', rawDecrypted.size);
-              const url = URL.createObjectURL(rawDecrypted);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = this.filename();
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              URL.revokeObjectURL(url);
-            } catch (e) {
-              console.error('[PublicMediaPlayer] Erro ao descriptografar arquivo', e);
-            } finally {
-              this.isDownloading.set(false);
-              this.cdr.detectChanges();
-            }
-          }
+    try {
+      const total = this.sizeBytes() || this.publicDriveFile().sizeBytes;
+      const encryptedBlob = await this.shareService.downloadSharedFileInRanges(
+        this.shareId(),
+        total,
+        (loaded, size) => {
+          this.downloadProgress.set(Math.min(99, Math.round((100 * loaded) / size)));
+          this.cdr.detectChanges();
         }
-      },
-      error: (e) => {
-        console.error('[PublicMediaPlayer] Erro no download', e);
-        this.isDownloading.set(false);
-        this.downloadProgress.set(null);
-        this.cdr.detectChanges();
-      }
-    });
+      );
+
+      this.downloadProgress.set(null);
+      const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdk());
+      const url = URL.createObjectURL(rawDecrypted);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = this.filename();
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('[PublicMediaPlayer] Erro no download', e);
+    } finally {
+      this.isDownloading.set(false);
+      this.downloadProgress.set(null);
+      this.cdr.detectChanges();
+    }
   }
 
   protected onClose() {

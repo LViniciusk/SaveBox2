@@ -318,7 +318,7 @@ export class SharedFileComponent implements OnInit {
     this.error.set(null);
 
     try {
-      const encryptedBlob = await firstValueFrom(this.shareService.downloadSharedFile(this.shareId));
+      const encryptedBlob = await this.shareService.downloadSharedFileInRanges(this.shareId, this.sizeBytes());
       if (!this.fdkUint8) return;
       
       try {
