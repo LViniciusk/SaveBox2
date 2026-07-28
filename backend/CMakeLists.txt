@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_TESTS "Compilar suite de testes" ON)
+option(ENABLE_COVERAGE "Instrumentar os testes para cobertura" OFF)
 
 include(FetchContent)
 
@@ -140,6 +141,11 @@ if(BUILD_TESTS)
     add_executable(savebox_tests ${TEST_FILES} ${CORE_SOURCES})
 
     target_compile_options(savebox_tests PRIVATE -UASIO_NO_DEPRECATED -UBOOST_ASIO_NO_DEPRECATED)
+
+    if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(savebox_tests PRIVATE -O0 -g --coverage)
+        target_link_options(savebox_tests PRIVATE --coverage)
+    endif()
 
     if(WIN32)
         target_include_directories(savebox_tests PRIVATE include tests ${PQXX_INCLUDE_DIRS} ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})

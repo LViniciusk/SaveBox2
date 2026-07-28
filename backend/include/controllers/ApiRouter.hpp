@@ -2,12 +2,14 @@
 
 #include "crow_all.h"
 #include "middlewares/RateLimitMiddleware.hpp"
+#include "middlewares/CustomCorsMiddleware.hpp"
 #include "database/DatabasePool.hpp"
 #include "Services/AuthService.hpp"
 
 class FileManager;
 class FolderManager;
 class FileChunker;
+class GoogleDriveService;
 
 #include <optional>
 #include <cstdint>
@@ -17,24 +19,45 @@ class ApiRouter {
 public:
     ApiRouter() = default;
     ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr,
-              FileManager* file_mgr = nullptr, FileChunker* chunker = nullptr);
+              FileManager* file_mgr = nullptr, FileChunker* chunker = nullptr,
+              GoogleDriveService* gdrive = nullptr);
 
     std::string handle_healthcheck() const;
     crow::response handle_get_quota(const crow::request& req);
+    crow::response handle_delete_user(const crow::request& req);
+    crow::response handle_update_profile(const crow::request& req);
     crow::response handle_register(const crow::request& req);
     crow::response handle_login(const crow::request& req);
+    crow::response handle_google_login(const crow::request& req);
+    crow::response handle_refresh(const crow::request& req);
+    crow::response handle_logout(const crow::request& req);
+    crow::response handle_logout_global(const crow::request& req);
     crow::response handle_verify_email(const crow::request& req);
+    crow::response handle_update_profile_pic(const crow::request& req);
     crow::response handle_create_folder(const crow::request& req);
+    crow::response handle_batch_create_folders(const crow::request& req);
+    crow::response handle_get_pinned_folders(const crow::request& req);
+    crow::response handle_pin_folder(const crow::request& req, int folder_id);
+    crow::response handle_unpin_folder(const crow::request& req, int folder_id);
+    crow::response handle_reorder_pinned_folders(const crow::request& req);
     crow::response handle_init_file_upload(const crow::request& req);
+    crow::response handle_batch_init_uploads(const crow::request& req);
     crow::response handle_upload_chunk(const crow::request& req, int file_id);
     crow::response handle_download_file(const crow::request& req, int file_id);
     crow::response handle_list_folder_contents(const crow::request& req, int folder_id);
     crow::response handle_get_tree(const crow::request& req);
     crow::response handle_get_uploaded_chunks(const crow::request& req, int file_id);
+    crow::response handle_get_pending_uploads(const crow::request& req);
     crow::response handle_delete_file(const crow::request& req, int file_id);
+    crow::response handle_batch_delete(const crow::request& req);
+    crow::response handle_batch_hard_delete(const crow::request& req);
+    crow::response handle_batch_delete_folders(const crow::request& req);
+    crow::response handle_batch_hard_delete_folders(const crow::request& req);
     crow::response handle_delete_folder(const crow::request& req, int folder_id);
     crow::response handle_trash_folder(const crow::request& req, int folder_id);
     crow::response handle_trash_file(const crow::request& req, int file_id);
+    crow::response handle_hard_delete_folder(const crow::request& req, int folder_id);
+    crow::response handle_hard_delete_file(const crow::request& req, int file_id);
     crow::response handle_restore_folder(const crow::request& req, int folder_id);
     crow::response handle_restore_file(const crow::request& req, int file_id);
     crow::response handle_get_trash(const crow::request& req);
@@ -43,8 +66,20 @@ public:
     crow::response handle_update_folder(const crow::request& req, int folder_id);
     crow::response handle_share_file(const crow::request& req, int file_id);
     crow::response handle_get_shared_file(const crow::request& req, const std::string& uuid);
+    crow::response handle_list_shares(const crow::request& req, int file_id);
+    crow::response handle_revoke_share(const crow::request& req, const std::string& uuid);
+    crow::response handle_get_share_metadata(const crow::request& req, const std::string& uuid);
+    crow::response handle_link_google_drive(const crow::request& req);
+    crow::response handle_get_google_accounts(const crow::request& req);
+    crow::response handle_unlink_google_account(const crow::request& req, int account_id);
+    crow::response handle_generate_google_state(const crow::request& req);
+    crow::response handle_finalize_external_upload(const crow::request& req, int file_id);
+    crow::response handle_get_google_sync_map(const crow::request& req, int account_id);
+    crow::response handle_google_sync_cleanup(const crow::request& req, int account_id);
+    crow::response handle_init_vault(const crow::request& req);
+    crow::response handle_get_vault_verification(const crow::request& req);
 
-    void setup_routes(crow::App<crow::CORSHandler, RateLimitMiddleware>& app);
+    void setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware>& app);
 
 private:
     DatabasePool* pool_ = nullptr;
@@ -52,6 +87,8 @@ private:
     FolderManager* folder_mgr_ = nullptr;
     FileManager* file_mgr_ = nullptr;
     FileChunker* chunker_ = nullptr;
+    GoogleDriveService* gdrive_ = nullptr;
 
     std::optional<uint64_t> authenticate_request(const crow::request& req) const;
+    void trigger_async_gc_cleanup();
 };

@@ -1,0 +1,455 @@
+/* ================================================================
+   Nanika — Global Design System
+   Replicates Google Drive visual language with CSS custom properties.
+   ================================================================ */
+
+/* === RESET === */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  color: var(--text-primary);
+  background-color: var(--bg-main);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.5;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+/* === CSS CUSTOM PROPERTIES — Design Tokens === */
+:root,
+:root[data-theme='gdrive'],
+:root[data-theme='default'] {
+  /* ---- Colors: Google Blue Palette ---- */
+  --blue-50: #e8f0fe;
+  --blue-100: #d2e3fc;
+  --blue-200: #aecbfa;
+  --blue-300: #8ab4f8;
+  --blue-400: #669df6;
+  --blue-500: #4285f4;
+  --blue-600: #1a73e8;
+  --blue-700: #1967d2;
+  --blue-800: #185abc;
+  --blue-900: #174ea6;
+
+  /* ---- Colors: Google Red ---- */
+  --red-500: #ea4335;
+  --red-600: #d93025;
+  --red-50: #fce8e6;
+
+  /* ---- Colors: Google Green ---- */
+  --green-500: #34a853;
+  --green-600: #1e8e3e;
+  --green-50: #e6f4ea;
+
+  /* ---- Colors: Google Yellow ---- */
+  --yellow-500: #fbbc04;
+  --yellow-600: #f9ab00;
+
+  /* ---- Colors: Grays ---- */
+  --gray-50: #F8FAFD;
+  --gray-100: #f1f3f4;
+  --gray-200: #e8eaed;
+  --gray-300: #dadce0;
+  --gray-400: #bdc1c6;
+  --gray-500: #9aa0a6;
+  --gray-600: #5f6368;
+  --gray-700: #3c4043;
+  --gray-800: #202124;
+  --gray-900: #1a1a1a;
+
+  /* ---- Semantic Tokens ---- */
+  --text-primary: var(--gray-800);
+  --text-secondary: var(--gray-600);
+  --text-disabled: var(--gray-400);
+  --bg-main: var(--gray-50);
+  --bg-surface: #ffffff;
+  --bg-hover: var(--gray-100);
+  --bg-selected: var(--blue-50);
+  --border-color: var(--gray-300);
+  --divider-color: var(--gray-200);
+
+  /* ---- Primary Action ---- */
+  --primary: var(--blue-600);
+  --primary-hover: var(--blue-700);
+  --primary-active: var(--blue-800);
+  --primary-light: var(--blue-50);
+
+  /* ---- Elevation (Google Material Shadows) ---- */
+  --shadow-1: 0 1px 2px 0 rgba(60, 64, 67, 0.3),
+    0 1px 3px 1px rgba(60, 64, 67, 0.15);
+  --shadow-2: 0 1px 2px 0 rgba(60, 64, 67, 0.3),
+    0 2px 6px 2px rgba(60, 64, 67, 0.15);
+  --shadow-3: 0 1px 3px 0 rgba(60, 64, 67, 0.3),
+    0 4px 8px 3px rgba(60, 64, 67, 0.15);
+  --shadow-4: 0 2px 4px -1px rgba(60, 64, 67, 0.3),
+    0 8px 16px 4px rgba(60, 64, 67, 0.15);
+
+  /* ---- Layout ---- */
+  --topbar-height: 64px;
+  --sidebar-width: 256px;
+
+  /* ---- Border Radius ---- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+
+  /* ---- Transitions ---- */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 350ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Windows File Explorer-inspired semantic palette. The GDrive palette above
+   remains the fallback and is untouched when no theme is selected. */
+:root[data-theme='default'] {
+  --default-window-bg: #191919;
+  --default-titlebar-bg: #202020;
+  --default-toolbar-bg: #202020;
+  --default-sidebar-bg: #1b1b1b;
+  --default-content-bg: #191919;
+  --default-surface: #202020;
+  --default-text: #f3f3f3;
+  --default-muted: #b8b8b8;
+  --default-accent: #8fc8f4;
+  --default-hover: #2d2d2d;
+  --default-border: #383838;
+  --default-border-strong: #4a4a4a;
+  --default-workspace-bg: #191919;
+  --default-workspace-surface: #202020;
+  --default-workspace-surface-alt: #252525;
+  --default-workspace-text: #f3f3f3;
+  --default-workspace-muted: #b8b8b8;
+  --default-workspace-border: #383838;
+  --default-workspace-hover: #2d2d2d;
+  --default-workspace-selected: #263b4d;
+  --default-workspace-selected-border: #60a5d8;
+  --default-context-bg: #2b2b2b;
+  --default-context-border: #474747;
+  --default-context-hover: #3a3a3a;
+  --default-tile-bg: #1b1b1b;
+  --default-thumbnail-bg: #141414;
+  --default-folder: #f4b41a;
+  --default-folder-highlight: #ffd66b;
+  --default-media-border: #555555;
+  --default-workspace-radius: 2px;
+  --default-context-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  --bg-main: var(--default-window-bg);
+  --bg-surface: var(--default-surface);
+  --text-primary: var(--default-text);
+  --text-secondary: var(--default-muted);
+  --primary: var(--default-accent);
+  --primary-hover: #005a9e;
+  --border-color: var(--default-border);
+  --divider-color: var(--default-border);
+  --radius-md: 4px;
+  --radius-lg: 6px;
+}
+
+/* Default workspace overlays render above component boundaries, so their
+   theme variant lives globally but remains strictly scoped to FileList. */
+:root[data-theme='default'] app-file-list .file-list-container .action-menu,
+:root[data-theme='default'] app-file-list .file-list-container .sort-menu-dropdown,
+:root[data-theme='default'] app-file-list .file-list-container .submenu {
+  border: 1px solid var(--default-context-border);
+  border-radius: var(--default-workspace-radius);
+  background: var(--default-context-bg);
+  box-shadow: var(--default-context-shadow);
+  padding: 4px;
+  animation: none;
+}
+
+:root[data-theme='default'] app-file-list .file-list-container :is(.action-btn, .grid-action-btn, .bulk-close-btn, .bulk-btn) {
+  border-radius: var(--default-workspace-radius);
+  color: var(--default-workspace-muted);
+}
+
+:root[data-theme='default'] app-file-list .file-list-container :is(.action-btn, .grid-action-btn, .bulk-close-btn, .bulk-btn):hover {
+  background: var(--default-context-hover);
+  color: var(--default-workspace-text);
+}
+
+:root[data-theme='default'] app-file-list .file-list-container :is(.sort-btn-list, .sort-dropdown-btn) {
+  border: 1px solid transparent;
+  border-radius: var(--default-workspace-radius);
+  background: transparent;
+  color: var(--default-workspace-muted);
+  font-family: inherit;
+}
+
+:root[data-theme='default'] app-file-list .file-list-container :is(.sort-btn-list, .sort-dropdown-btn):hover {
+  border-color: var(--default-context-border);
+  background: var(--default-context-hover);
+  color: var(--default-workspace-text);
+}
+
+:root[data-theme='default'] app-file-list .file-list-container .bulk-action-bar {
+  top: 100px;
+  border: 1px solid var(--default-context-border);
+  border-radius: var(--default-workspace-radius);
+  background: var(--default-context-bg);
+  box-shadow: var(--default-context-shadow);
+}
+
+:root[data-theme='default'] app-file-list .file-list-container .bulk-selection-count {
+  color: var(--default-workspace-text);
+  font-family: inherit;
+}
+
+:root[data-theme='default'] app-file-list .file-list-container .menu-divider,
+:root[data-theme='default'] app-file-list .file-list-container .sort-divider {
+  background: var(--default-context-border);
+  margin: 4px 0;
+}
+
+:root[data-theme='default'] app-file-list .file-list-container .sort-section-title {
+  color: var(--default-workspace-muted);
+}
+
+:root[data-theme='default'] app-file-list .file-list-container .menu-item {
+  min-height: 30px;
+  padding: 5px 10px;
+  border-radius: 0;
+  color: var(--default-workspace-text);
+  font: 12px 'Segoe UI', sans-serif;
+  gap: 10px;
+}
+
+:root[data-theme='default'] app-file-list .file-list-container .menu-item:hover {
+  background: var(--default-context-hover);
+  color: var(--default-workspace-text);
+}
+
+:root[data-theme='default'] app-file-list .file-list-container .menu-item:focus-visible {
+  outline: 1px solid var(--default-workspace-selected-border);
+  outline-offset: -1px;
+  background: var(--default-workspace-selected);
+}
+
+:root[data-theme='default'] app-file-list .file-list-container .menu-item .material-symbols-outlined {
+  color: var(--default-workspace-muted);
+  font-size: 17px;
+}
+
+/* Default theme overlays and dialogs. */
+:root[data-theme='default'] :is(.dialog-backdrop, .modal-backdrop) {
+  background: rgba(0, 0, 0, .58) !important;
+}
+
+:root[data-theme='default'] :is(.dialog-card, .modal-content, .settings-modal) {
+  background: var(--default-context-bg) !important;
+  border: 1px solid var(--default-context-border) !important;
+  border-radius: var(--default-workspace-radius) !important;
+  box-shadow: var(--default-context-shadow) !important;
+  color: var(--default-workspace-text) !important;
+}
+
+:root[data-theme='default'] :is(.dialog-title, .modal-header h2, .modal-header h3, .section-title, .file-info) {
+  color: var(--default-workspace-text) !important;
+}
+
+:root[data-theme='default'] :is(.dialog-message, .modal-body p, .section-desc, .loading-state) {
+  color: var(--default-workspace-muted) !important;
+}
+
+:root[data-theme='default'] :is(.modal-header, .modal-footer) {
+  border-color: var(--default-context-border) !important;
+  background: var(--default-workspace-surface) !important;
+}
+
+:root[data-theme='default'] :is(.dialog-input, .form-group input) {
+  background: var(--default-workspace-surface-alt) !important;
+  border-color: var(--default-context-border) !important;
+  color: var(--default-workspace-text) !important;
+}
+
+:root[data-theme='default'] :is(.dialog-input, .form-group input):focus {
+  border-color: var(--default-workspace-selected-border) !important;
+  outline: none;
+}
+
+:root[data-theme='default'] :is(.close-btn, .cancel-btn, .dialog-btn) {
+  color: var(--default-workspace-muted) !important;
+}
+
+:root[data-theme='default'] :is(.close-btn, .cancel-btn, .dialog-btn):hover {
+  background: var(--default-context-hover) !important;
+  color: var(--default-workspace-text) !important;
+}
+
+:root[data-theme='default'] :is(.confirm-btn, .unlock-btn, .btn-primary) {
+  background: var(--default-accent) !important;
+  color: #10202d !important;
+}
+
+:root[data-theme='default'] :is(.confirm-btn, .unlock-btn, .btn-primary):hover:not(:disabled) {
+  background: var(--default-selected-border, #60a5d8) !important;
+}
+
+:root[data-theme='default'] .confirm-pill-btn {
+  background: #a33a36 !important;
+  color: #fff !important;
+}
+
+:root[data-theme='default'] .confirm-pill-btn:hover {
+  background: #c04a44 !important;
+}
+
+:root[data-theme='default'] .error-msg {
+  color: #f28b82 !important;
+}
+
+:root[data-theme='default'] app-pinned-folders-section .action-menu {
+  border: 1px solid var(--default-context-border) !important;
+  border-radius: var(--default-workspace-radius) !important;
+  background: var(--default-context-bg) !important;
+  box-shadow: var(--default-context-shadow) !important;
+}
+
+:root[data-theme='default'] app-pinned-folders-section .action-menu .menu-item {
+  color: var(--default-workspace-text) !important;
+}
+
+:root[data-theme='default'] app-pinned-folders-section .action-menu .menu-item:hover:not(:disabled) {
+  background: var(--default-context-hover) !important;
+}
+
+:root[data-theme='default'] app-pinned-folders-section .action-menu .menu-divider {
+  background: var(--default-context-border) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal :is(.switch-option, .theme-option, .account-item) {
+  background: var(--default-workspace-surface-alt) !important;
+  border-color: var(--default-context-border) !important;
+  color: var(--default-workspace-text) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal :is(.switch-option:hover, .theme-option:hover) {
+  background: var(--default-context-hover) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal :is(.switch-option.active, .theme-option.active) {
+  background: var(--default-workspace-selected) !important;
+  border-color: var(--default-workspace-selected-border) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal :is(.option-name, .section-title, label) {
+  color: var(--default-workspace-text) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal :is(.option-sub, .section-desc, .account-email) {
+  color: var(--default-workspace-muted) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal .option-icon,
+:root[data-theme='default'] app-topbar .settings-modal .account-avatar-icon {
+  color: var(--default-workspace-muted) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal :is(.switch-option.active .option-icon, .theme-option.active .option-icon) {
+  color: var(--default-accent) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal .toggle-slider {
+  background: var(--default-context-border) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal .toggle-switch input:checked + .toggle-slider {
+  background: var(--default-accent) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal .toggle-slider::before {
+  background: var(--default-workspace-text) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal .warning-box {
+  background: var(--default-context-hover) !important;
+  border-color: var(--default-context-border) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal .warning-icon {
+  color: var(--default-accent) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal :is(.google-link-btn, .btn-primary) {
+  background: var(--default-accent) !important;
+  color: #10202d !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal .google-link-btn.outline-btn {
+  background: transparent !important;
+  border-color: var(--default-context-border) !important;
+  color: var(--default-accent) !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal .unlink-btn-item:hover {
+  background: var(--default-context-hover) !important;
+  color: #f28b82 !important;
+}
+
+:root[data-theme='default'] app-topbar .settings-modal .logout-global-btn {
+  background: var(--default-context-hover) !important;
+  border-color: var(--default-context-border) !important;
+  color: var(--default-workspace-text) !important;
+}
+
+/* === SCROLLBAR (Webkit) === */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--gray-400);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gray-500);
+}
+
+/* === MATERIAL SYMBOLS DEFAULTS === */
+.material-symbols-outlined {
+  font-variation-settings:
+    'FILL' 0,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
+  user-select: none;
+}

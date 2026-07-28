@@ -11,6 +11,7 @@ O SaveBox 2.0 foi construído com a filosofia de Zero-Knowledge, atuando como um
 * **Links Públicos Seguros:** Compartilhamento de arquivos via UUID v4, compatível com a arquitetura E2EE.
 * **Segurança Anti-IDOR:** Todas as rotas validadas com JWT verificam a propriedade do arquivo no Banco de Dados antes de qualquer manipulação de disco.
 * **Exclusão em Cascata:** Exclusão recursiva de árvores de diretórios com limpeza automática de arquivos no disco rígido.
+* **Integração Google Drive:** Permite aos usuários vincularem suas contas do Google para salvar arquivos na nuvem de forma segura.
 
 ## Tecnologias Utilizadas
 
@@ -31,29 +32,43 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
 | `GET` | `/health` | Healthcheck do servidor. |
-| `POST` | `/register` | Registra um novo usuário (JSON: `username`, `password`). |
-| `GET` | `/verify?token=<uuid>` | Valida o token recebido por e-mail e ativa a conta. |
+| `POST` | `/register` | Registra um novo usuário. |
+| `GET` | `/verify?token=<codigo>` | Valida o codigo de 6 caracteres recebido por e-mail e ativa a conta. |
 | `POST` | `/login` | Autentica e retorna o JWT Bearer Token. |
+| `POST` | `/logout` | Invalida a sessão do usuário do dispositivo atual (remove JTI local). |
+| `POST` | `/logout/global` | Invalida globalmente todas as sessões do usuário. |
 | `GET` | `/users/me/quota` | Consulta limite e uso de armazenamento. |
+| `DELETE` | `/users/me` | Deleta permanentemente a conta do usuário. |
+| `POST` | `/api/auth/google` | Realiza login via Google. |
 
 ### Gerenciamento de Pastas
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
-| `POST` | `/folders` | Cria nova pasta (`encrypted_name`, `name_hash`, `parent_id`). |
+| `POST` | `/folders` | Cria nova pasta. |
+| `GET` | `/folders/pinned` | Lista as pastas fixadas do usuário, somente com `folder_id` e `position`. Pastas em soft delete não aparecem. |
+| `PUT` | `/folders/<id>/pin` | Fixa uma pasta ao final da lista. Operação idempotente; retorna `204`. |
+| `DELETE` | `/folders/<id>/pin` | Remove uma pasta fixada e normaliza as posições. Operação idempotente para pasta própria; retorna `204`. |
+| `PUT` | `/folders/pinned/order` | Reordena exatamente o conjunto de pins atual com `{ "folder_ids": [<id>, ...] }`; retorna `204`. |
 | `GET` | `/folders/<id>/contents` | Lista subpastas e arquivos diretos de uma pasta. |
-| `GET` | `/tree?file_limit=&file_offset=` | Retorna a árvore raiz do usuário com paginação. |
+| `GET` | `/tree` | Retorna a árvore raiz do usuário com paginação opcional. |
 | `PUT` | `/folders/<id>` | Renomeia ou move a pasta para outro `parent_id`. |
-| `DELETE` | `/folders/<id>` | Exclusão recursiva que apaga todo o conteudo de uma pasta. |
+| `DELETE` | `/folders/batch-delete` | Envia múltiplas pastas para a lixeira (Soft Delete em lote). |
+| `DELETE` | `/folders/<id>` | Exclusão recursiva que apaga todo o conteudo de uma pasta (Soft Delete). |
+
+As pastas fixadas persistem somente a associação entre usuário e pasta e sua posição; nenhum nome ou caminho é retornado. As rotas exigem JWT, usam `400` para JSON/ordem inválidos, `403` para pasta de outro usuário e `404` para pasta inexistente ou em soft delete. A associação é removida automaticamente quando a pasta ou o usuário é excluído permanentemente.
 
 ### Gerenciamento de Arquivos e Chunks
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
 | `POST` | `/files` | Inicializa o upload (retorna o `file_id` para os chunks). |
+| `POST` | `/files/batch-init` | Inicializa uploads de múltiplos arquivos de uma só vez. |
 | `POST` | `/files/<id>/chunks` | Envia um pedaço binário. Exige Header `X-Chunk-Index`. |
 | `GET` | `/files/<id>/uploaded-chunks` | Retorna array com índices de chunks já salvos. |
 | `GET` | `/files/<id>/download` | Baixa o arquivo. Suporta cabeçalho HTTP `Range`. |
 | `PUT` | `/files/<id>` | Renomeia ou move o arquivo de pasta. |
-| `DELETE` | `/files/<id>` | Deleta o arquivo físico e lógico. |
+| `DELETE` | `/files/batch-delete` | Envia múltiplos arquivos para a lixeira (Soft Delete em lote). |
+| `DELETE` | `/files/<id>` | Deleta o arquivo lógico (Soft Delete). |
+| `GET` | `/pending-uploads` | Lista uploads iniciados que ainda não foram concluídos. |
 
 ### Lixeira e Recuperação
 | Método | Endpoint | Descrição |
@@ -61,17 +76,94 @@ Todas as requisições (exceto `/health`, `/register`, `/login`, `/verify` e `/s
 | `GET` | `/trash` | Lista todos os itens deletados (Soft Deleted). |
 | `POST` | `/folders/<id>/restore` | Restaura pasta (resolve colisões de nome). |
 | `POST` | `/files/<id>/restore` | Restaura arquivo para local original ou raiz. |
+| `DELETE` | `/trash/folders/batch-delete` | **Hard Delete:** Deleta múltiplas pastas permanentemente. |
+| `DELETE` | `/trash/files/batch-delete` | **Hard Delete:** Deleta múltiplos arquivos permanentemente. |
+| `DELETE` | `/trash/folders/<id>` | **Hard Delete:** Deleta a pasta e seu conteúdo permanentemente. |
+| `DELETE` | `/trash/files/<id>` | **Hard Delete:** Deleta um arquivo permanentemente. |
 | `DELETE` | `/trash/empty` | **Hard Delete:** Limpa a lixeira permanentemente. |
 
 ### Compartilhamento (Links Públicos)
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
-| `POST` | `/files/<id>/share` | Gera e retorna um UUID v4 para acesso público. |
-| `GET` | `/share/<uuid>` | Rota pública sem JWT. Retorna cabeçalho `X-Encrypted-Name`. |
+| `POST` | `/files/<id>/share` | Gera e retorna um codigo de 7 caracteres para acesso público. |
+| `GET` | `/share/<codigo>` | Rota pública sem JWT. Retorna cabeçalho `X-Encrypted-Name`. |
+
+### Armazenamento Externo (Google Drive)
+| Método | Endpoint | Descrição |
+| :--- | :--- | :--- |
+| `GET` | `/api/storage/google/generate-state` | Gera um OAuth state seguro via cookies para o fluxo do OAuth2. |
+| `POST` | `/api/storage/google/link` | Finaliza a vinculação de uma conta Google através de um Authorization Code. |
+| `GET` | `/api/storage/google/accounts` | Lista todas as contas Google Drive vinculadas. |
+| `DELETE`| `/api/storage/google/accounts/<id>` | Desvincula e remove credenciais da conta Google Drive associada. |
+| `POST` | `/files/<id>/finalize-external` | Registra no banco de dados um arquivo concluído direto no Drive pelo frontend. |
+| `GET` | `/api/storage/google/accounts/<id>/sync-map` | Retorna o mapa de sincronização dos External IDs para o Client-Side Sync. |
+| `POST` | `/api/storage/google/accounts/<id>/sync-cleanup` | Recebe fantasmas locais da Nuvem e efetua limpeza Soft Delete em massa. |
+
+### Documentação (Swagger)
+| Método | Endpoint | Descrição |
+| :--- | :--- | :--- |
+| `GET` | `/api/docs` | Interface gráfica do Swagger UI. |
+| `GET` | `/api/docs/swagger.yaml` | Retorna o arquivo de especificação OpenAPI puro. |
 
 ---
 
-## Como Compilar e Rodar
+## Testes de Performance
+
+A suíte de Testes de Performance cobre desde microbenchmarking de CPU até testes de estresse em rede.
+
+### 1. Microbenchmarking (C++ / Catch2)
+
+Os benchmarks medem a eficiência do código na casa dos nanossegundos usando o Catch2.
+
+**Como compilar e executar:**
+
+```bash
+cd backend
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+mingw32-make -j8 savebox_tests
+
+.\savebox_tests.exe [#benchmark]
+```
+
+### 2. Load & Stress Testing (k6)
+
+Localizados na pasta `/performance_tests`, os scripts k6 estressam os recursos de rede, banco de dados e disco.
+
+Para executar, você precisará ter o k6 instalado e passar um token JWT válido:
+
+```bash
+# Teste de Cache Stampede
+k6 run performance_tests/load_auth_stampede.js
+
+# Teste de Estresse de Upload de Chunks
+# NOTA: Crie um arquivo no banco de dados e passe o ID dele
+k6 run -e JWT_TOKEN="token" -e FILE_ID="1" performance_tests/load_upload_chunks.js
+
+# Teste de Velocidade no Control Plane do Google Drive
+k6 run -e JWT_TOKEN="token" performance_tests/load_google_drive_proxy.js
+```
+
+### 3. Soak Testing (Deteção de Memory Leaks)
+
+Para garantir matematicamente que o nosso servidor C++ não possui vazamentos de memória da API C do OpenSSL, utilize o Valgrind envelopando o servidor em modo de Release ou Debug (preferencialmente Release com símbolos `-DCMAKE_BUILD_TYPE=RelWithDebInfo`).
+
+**Passo Crítico (Ambiente Linux ou WSL2):**
+
+1. Inicie o servidor via Valgrind:
+```bash
+valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./savebox_server
+```
+
+2. Num terminal paralelo, dispare o tráfego de maratona (duração de 4 a 8 horas):
+```bash
+k6 run -e JWT_TOKEN="token" performance_tests/soak_test.js
+```
+
+
+---
+
+## Como Compilar e Rodar (Localmente)
 
 O projeto utiliza o CMake para geração dos *build files*.
 
@@ -89,3 +181,18 @@ O projeto utiliza o CMake para geração dos *build files*.
 
 5. Inicie o Servidor:
    `./savebox_server.exe`
+
+## Como Rodar via Docker (Recomendado)
+
+O projeto já possui as configurações prontas de `docker-compose` para subir tanto o servidor da API quanto o banco de dados PostgreSQL simultaneamente.
+
+1. Na pasta raiz do projeto, garanta que o seu arquivo `.env` esteja configurado corretamente.
+2. Construa e suba os contêineres em background:
+   ```bash
+   docker-compose up -d --build
+   ```
+3. A API estará exposta na porta definida no arquivo.
+4. Para desligar e remover os contêineres:
+   ```bash
+   docker-compose down
+   ```

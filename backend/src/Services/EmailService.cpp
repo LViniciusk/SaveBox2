@@ -7,6 +7,8 @@
 #include <cctype>
 #include <cstdlib>
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 
 namespace {
 
@@ -54,6 +56,23 @@ namespace {
         return text;
     }
 
+    std::string url_encode(const std::string& value) {
+        std::ostringstream escaped;
+        escaped.fill('0');
+        escaped << std::hex;
+
+        for (char c : value) {
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
+                escaped << c;
+            } else {
+                escaped << std::uppercase;
+                escaped << '%' << std::setw(2) << int(static_cast<unsigned char>(c));
+                escaped << std::nouppercase;
+            }
+        }
+        return escaped.str();
+    }
+
 } 
 
 EmailService::EmailService(const std::string& resend_api_key, const std::string& validation_api_key)
@@ -79,11 +98,11 @@ cpr::Response EmailService::make_get_request(const std::string& url) const {
 
 bool EmailService::send_verification_email(const std::string& to_email, const std::string& token) const {
     nlohmann::json payload;
-    payload["from"] = "SaveBox@verify.lvinik.app";
+    payload["from"] = "Nanika@verify.lvinik.app";
     payload["to"] = to_email;
-    payload["subject"] = "SaveBox - Verifique sua conta";
+    payload["subject"] = "Nanika - Verifique sua conta";
     payload["html"] = "<p>Para verificar sua conta, clique no link: "
-                      "<a href='https://savebox.lvinik.app/verify?token=" + token + "'>"
+                      "<a href='https://nanika.lvinik.app/verify?token=" + token + "'>"
                       "Verificar conta</a></p>";
 
     auto response = make_post_request(
@@ -117,11 +136,10 @@ bool EmailService::is_domain_valid_via_api(const std::string& domain) const {
 
     const std::string url =
         "https://emailreputation.abstractapi.com/v1/?api_key=" + validation_api_key_ +
-        "&email=" + email_to_check;
+        "&email=" + url_encode(email_to_check);
 
     auto response = make_get_request(url);
 
-    // Resiliencia: em falha de rede/timeout/5xx, nao bloqueia cadastro.
     if (response.error.code != cpr::ErrorCode::OK || response.status_code >= 500 || response.status_code == 0) {
         return true;
     }

@@ -25,6 +25,9 @@ private:
                 if (pos != std::string::npos) {
                     std::string key = line.substr(0, pos);
                     std::string value = line.substr(pos + 1);
+                    if (!value.empty() && value.back() == '\r') {
+                        value.pop_back();
+                    }
                     env_vars[key] = value;
                 }
             }
@@ -52,7 +55,11 @@ public:
 
     std::string get_var(const std::string& key, const std::string& default_val = "") {
         if (env_vars.count(key)) return env_vars[key];
-        if (const char* sys_val = std::getenv(key.c_str())) return std::string(sys_val);
+        if (const char* sys_val = std::getenv(key.c_str())) {
+            std::string value(sys_val);
+            if (!value.empty() && value.back() == '\r') value.pop_back();
+            return value;
+        }
         return default_val;
     }
 
@@ -64,6 +71,7 @@ public:
 
         if (const char* sys_val = std::getenv(key.c_str())) {
             std::string value(sys_val);
+            if (!value.empty() && value.back() == '\r') value.pop_back();
             if (!value.empty()) {
                 return value;
             }
@@ -95,17 +103,17 @@ namespace DotEnv{
 
     inline std::string get_pepper() {
         auto& cfg = Utils::get();
-        return cfg.get_required_var("SAVEBOX_PEPPER");
+        return cfg.get_required_var("PASS_PEPPER");
     }
 
     inline std::string get_jwt_secret() {
         auto& cfg = Utils::get();
-        return cfg.get_required_var("SAVEBOX_JWT_SECRET");
+        return cfg.get_required_var("NANIKA_JWT_SECRET");
     }
 
     inline std::string get_storage_path() {
         auto& cfg = Utils::get();
-        return cfg.get_required_var("SAVEBOX_STORAGE_PATH");
+        return cfg.get_required_var("NANIKA_STORAGE_PATH");
     }
 
     inline std::string get_resend_api_key() {
@@ -116,6 +124,21 @@ namespace DotEnv{
     inline std::string get_email_validation_api_key() {
         auto& cfg = Utils::get();
         return cfg.get_required_var("EMAIL_VALIDATION_API_KEY");
+    }
+
+    inline std::string get_imgur_client_id() {
+        auto& cfg = Utils::get();
+        return cfg.get_required_var("IMGUR_CLIENT_ID");
+    }
+
+    inline uint16_t get_port() {
+        auto& cfg = Utils::get();
+        std::string port_str = cfg.get_var("PORT", "8080");
+        try {
+            return static_cast<uint16_t>(std::stoi(port_str));
+        } catch (...) {
+            return 8080;
+        }
     }
 }
 

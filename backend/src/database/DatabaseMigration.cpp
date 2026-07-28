@@ -13,14 +13,31 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 id BIGSERIAL PRIMARY KEY,
                 username VARCHAR(255) UNIQUE NOT NULL,
                 email VARCHAR(255) UNIQUE NOT NULL,
-                password_hash VARCHAR(255) NOT NULL,
+                password_hash VARCHAR(255) NULL,
+                auth_provider VARCHAR(50) DEFAULT 'local',
+                provider_id VARCHAR(255) NULL UNIQUE,
+                full_name VARCHAR(255) NULL,
+                avatar_url TEXT NULL,
                 is_email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                is_vault_initialized BOOLEAN NOT NULL DEFAULT FALSE,
+                vault_verification TEXT NULL,
                 verification_token VARCHAR(128) UNIQUE,
                 token_expires_at TIMESTAMP WITH TIME ZONE,
                 max_storage_bytes BIGINT DEFAULT 5368709120,
-                used_storage_bytes BIGINT DEFAULT 0,
+                used_storage_bytes BIGINT DEFAULT 0 CHECK (used_storage_bytes >= 0),
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                registration_ip VARCHAR(45)
+                deleted_at TIMESTAMP NULL,
+                registration_ip VARCHAR(45),
+                token_version INT DEFAULT 1
+        );
+        )");
+
+        // TABELA DE SESSÕES
+        w.exec(R"(
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id VARCHAR(7) PRIMARY KEY,
+                user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         )");
 
@@ -33,6 +50,34 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 encrypted_name TEXT NOT NULL,
                 name_hash VARCHAR(128) NOT NULL,
                 deleted_at TIMESTAMP NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT unique_folder_name UNIQUE (user_id, parent_id, name_hash)
+            );
+        )");
+
+        // TABELA DE PASTAS FIXADAS: somente associação e posição; nomes permanecem no cliente.
+        w.exec(R"(
+            CREATE TABLE IF NOT EXISTS pinned_folders (
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                folder_id BIGINT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, folder_id)
+            );
+        )");
+        w.exec("CREATE INDEX IF NOT EXISTS idx_pinned_folders_user_position ON pinned_folders(user_id, position);");
+
+        // TABELA DE ARMAZENAMENTO EXTERNO (Google Drive Multi-Account)
+        w.exec(R"(
+            CREATE TABLE IF NOT EXISTS user_external_storages (
+                id BIGSERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                provider VARCHAR(20) NOT NULL DEFAULT 'google_drive',
+                account_email VARCHAR(255) NULL,
+                account_picture VARCHAR(255) NULL,
+                refresh_token TEXT NOT NULL,
+                root_folder_id VARCHAR(255) NULL,
+                is_unlinking BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         )");
@@ -50,8 +95,17 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 size_bytes BIGINT NOT NULL DEFAULT 0,
                 total_chunks INTEGER NOT NULL DEFAULT 1,
                 is_upload_complete BOOLEAN NOT NULL DEFAULT FALSE,
+                is_hidden BOOLEAN NOT NULL DEFAULT FALSE,
+                storage_provider VARCHAR(20) DEFAULT 'local',
+                external_file_id VARCHAR(255) NULL,
+                external_storage_id BIGINT REFERENCES user_external_storages(id) ON DELETE CASCADE,
+                proxy_external_file_id VARCHAR(255) NULL,
+                proxy_physical_path TEXT UNIQUE NULL,
+                proxy_size_bytes BIGINT NULL,
+                proxy_encrypted_fdk TEXT NULL,
                 deleted_at TIMESTAMP NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT unique_file_name UNIQUE (user_id, folder_id, name_hash)
             );
         )");
 
@@ -59,8 +113,11 @@ bool DatabaseMigration::run(DatabasePool& pool) {
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS shared_links (
                 id SERIAL PRIMARY KEY,
-                file_id BIGINT REFERENCES files(id) ON DELETE CASCADE,
-                share_uuid VARCHAR(36) UNIQUE NOT NULL,
+                file_id BIGINT UNIQUE REFERENCES files(id) ON DELETE CASCADE,
+                share_uuid VARCHAR(7) UNIQUE NOT NULL,
+                encrypted_name_fdk TEXT DEFAULT '',
+                hourly_changes INT DEFAULT 1,
+                last_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         )");
@@ -80,8 +137,17 @@ bool DatabaseMigration::run(DatabasePool& pool) {
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS banned_ips (
                 ip VARCHAR(45) PRIMARY KEY,
-                banned_until TIMESTAMP NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
                 reason VARCHAR(255)
+            );
+        )");
+
+        // DELEÇÕES EXTERNAS PENDENTES (GC)
+        w.exec(R"(
+            CREATE TABLE IF NOT EXISTS pending_external_deletions (
+                id SERIAL PRIMARY KEY,
+                external_file_id VARCHAR(255) NOT NULL,
+                external_storage_id BIGINT NOT NULL
             );
         )");
 

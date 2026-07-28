@@ -9,7 +9,7 @@
 TEST_CASE("FileChunker - Escrita Cirurgica", "[storage][chunker]") {
     const std::string test_dir = "./test_storage_chunker/";
     const uint64_t fake_file_id = 999;
-    const uint64_t MAX_CHUNK = 5 * 1024 * 1024;
+    const uint64_t MAX_CHUNK = 4 * 1024 * 1024;
 
     std::filesystem::remove_all(test_dir);
     FileChunker chunker(test_dir);

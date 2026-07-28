@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   Savebox_Backend_Tests:
     runs-on: windows-latest
@@ -98,3 +101,78 @@ jobs:
           cd backend/build
           mkdir -p savebox_storage
           ./savebox_tests.exe --order rand --rng-seed time
+
+  Savebox_Backend_Coverage:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test_role
+          POSTGRES_PASSWORD: test_pass
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd "pg_isready -U test_role -d test_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install coverage dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake pkg-config git gcovr \
+            libasio-dev libssl-dev libsodium-dev libzip-dev \
+            libcurl4-openssl-dev libpq-dev postgresql-client \
+            nlohmann-json3-dev catch2
+
+      - name: Create .env
+        run: |
+          cat > .env <<'EOF'
+          DB_USER=test_role
+          DB_PASSWORD=test_pass
+          DB_NAME=test_db
+          DB_HOST=127.0.0.1
+          DB_PORT=5432
+          PASS_PEPPER=test-pepper
+          NANIKA_JWT_SECRET=test-jwt-secret
+          RESEND_API_KEY=test-resend
+          EMAIL_VALIDATION_API_KEY=test-email
+          NANIKA_STORAGE_PATH=./savebox_storage/
+          EOF
+
+      - name: Configure backend coverage
+        working-directory: ./backend
+        run: cmake -S . -B build-coverage -DBUILD_TESTS=ON -DENABLE_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build backend coverage
+        working-directory: ./backend
+        run: cmake --build build-coverage --parallel
+
+      - name: Run backend tests with reproducible seed
+        working-directory: ./backend/build-coverage
+        run: ./savebox_tests --order rand --rng-seed 12345
+
+      - name: Generate and enforce backend coverage
+        working-directory: ./backend
+        run: |
+          gcovr --root . \
+            --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \
+            --filter 'src/' \
+            --exclude 'src/main.cpp' \
+            --txt --html-details coverage.html \
+            --fail-under-line 50
+
+      - name: Upload backend coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.html

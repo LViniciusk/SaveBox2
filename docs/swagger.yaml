@@ -1,12 +1,16 @@
 openapi: 3.0.3
 info:
-  title: SaveBox API
-  description: API do SaveBox
+  title: Nanika API
+  description: API do Nanika
   version: 1.0.0
 
 servers:
+  - url: /
+    description: Servidor atual (Relativo)
+  - url: http://localhost:8000
+    description: Servidor local (Porta 8000)
   - url: http://localhost:8080
-    description: Servidor local
+    description: Servidor local (Porta 8080)
 
 tags:
   - name: Sistema
@@ -18,6 +22,7 @@ tags:
   - name: Árvore
   - name: Compartilhamento
   - name: Lixeira
+  - name: Google Drive
 
 components:
   securitySchemes:
@@ -72,6 +77,15 @@ components:
         token:
           type: string
 
+    GoogleLoginRequest:
+      type: object
+      required: [id_token, nonce]
+      properties:
+        id_token:
+          type: string
+        nonce:
+          type: string
+
     CreateFolderRequest:
       type: object
       required: [encrypted_name, name_hash]
@@ -96,27 +110,79 @@ components:
 
     InitUploadRequest:
       type: object
-      required: [folder_id, encrypted_name, name_hash, size_bytes, total_chunks]
+      required: [encrypted_name, name_hash, encrypted_fdk, size_bytes]
       properties:
         folder_id:
           type: integer
-          format: int64
           nullable: true
+          description: Opcional
         encrypted_name:
           type: string
         name_hash:
           type: string
+        encrypted_fdk:
+          type: string
         size_bytes:
           type: integer
-          format: int64
         total_chunks:
           type: integer
+          description: Necessário para o armazenamento local.
+        storage_provider:
+          type: string
+          enum: [local, google_drive]
+          default: local
 
     InitUploadResponse:
       type: object
       properties:
         file_id:
           type: integer
+        storage_provider:
+          type: string
+    BatchInitUploadRequest:
+      type: object
+      required: [files]
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitUploadRequest'
+          maxItems: 100
+
+    BatchInitUploadItemResponse:
+      type: object
+      properties:
+        file_id:
+          type: integer
+        name_hash:
+          type: string
+        storage_provider:
+          type: string
+          enum: [local, google_drive]
+        root_folder_id:
+          type: string
+          description: Apenas para google_drive
+        access_token:
+          type: string
+          description: Apenas para google_drive
+
+    BatchInitUploadResponse:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchInitUploadItemResponse'
+
+    BatchDeleteRequest:
+      type: object
+      required: [file_ids]
+      properties:
+        file_ids:
+          type: array
+          items:
+            type: integer
+          maxItems: 100
 
     ChunkUploadStatus:
       type: object
@@ -144,6 +210,7 @@ components:
       properties:
         share_uuid:
           type: string
+          description: codigo de 7 caracteres para acesso público.
 
 paths:
   /api/docs:
@@ -224,6 +291,67 @@ paths:
         '500':
           description: Erro interno
 
+  /verify:
+    get:
+      tags: [Autenticação]
+      summary: Verificação de e-mail e ativação de conta
+      parameters:
+        - name: codigo
+          in: query
+          required: true
+          schema:
+            type: string
+            description: codigo de 6 caracteres. TTL de 5 minutos.
+      responses:
+        '200':
+          description: Conta ativada com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '400':
+          description: Token inválido ou expirado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Bloqueio temporário (Força Bruta)
+        '500':
+          description: Erro interno
+
+  /logout:
+    post:
+      tags: [Autenticação]
+      summary: Invalidação da sessão atual (Dispositivo local)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Sessão local invalidada (JTI removido)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente, inválido ou revogado
+
+  /logout/global:
+    post:
+      tags: [Autenticação]
+      summary: Invalidação global (Kill Switch) para todos os dispositivos
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Todas as sessões invalidadas (Token version incrementado)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente, inválido ou revogado
+
   /login:
     post:
       tags: [Autenticação]
@@ -258,31 +386,44 @@ paths:
         '500':
           description: Erro interno
 
-  /verify:
-    get:
+  /api/auth/google:
+    post:
       tags: [Autenticação]
-      summary: Verifica e ativa conta por token
-      parameters:
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
+      summary: Login via Google OAuth2
+      description: Realiza a autenticação/registro silencioso usando o token ID enviado pelo Google.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleLoginRequest'
       responses:
         '200':
-          description: Conta ativada
+          description: Login efetuado
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/GenericMessageResponse'
+                $ref: '#/components/schemas/LoginResponse'
         '400':
-          description: Token ausente, inválido ou expirado
+          description: Parâmetro id_token inválido ou ausente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflito de provedor de credencial (e.g. e-mail já cadastrado via password)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
-          description: Erro interno
+          description: Erro interno do servidor
+        '502':
+          description: API do Google indisponível
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /users/me/quota:
     get:
@@ -302,6 +443,43 @@ paths:
           description: Token ausente ou inválido
         '500':
           description: Erro interno
+
+  /folders/batch-delete:
+    delete:
+      tags: [Pastas]
+      summary: Envia múltiplas pastas para a lixeira
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                folder_ids:
+                  type: array
+                  items:
+                    type: integer
+                  description: Array com até 100 IDs de pastas
+      responses:
+        '200':
+          description: Pastas processadas com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  deleted_count:
+                    type: integer
+        '400':
+          description: Formato inválido ou limite excedido
+        '401':
+          description: Não autorizado
+        '500':
+          description: Erro interno do servidor
 
   /folders:
     post:
@@ -328,6 +506,121 @@ paths:
           description: Token ausente ou inválido
         '409':
           description: Pasta já existe no mesmo diretório
+        '500':
+          description: Erro interno
+
+  /folders/pinned:
+    get:
+      tags: [Pastas]
+      summary: Lista as pastas fixadas do usuário
+      description: Retorna somente IDs e posições. Pastas em soft delete são ocultadas.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista ordenada de pastas fixadas
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [folders]
+                properties:
+                  folders:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [folder_id, position]
+                      properties:
+                        folder_id:
+                          type: integer
+                          format: int64
+                        position:
+                          type: integer
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /folders/pinned/order:
+    put:
+      tags: [Pastas]
+      summary: Reordena as pastas fixadas
+      description: A lista deve representar exatamente o conjunto atual de pins, sem duplicidades.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [folder_ids]
+              additionalProperties: false
+              properties:
+                folder_ids:
+                  type: array
+                  items:
+                    type: integer
+                    format: int64
+                    minimum: 1
+      responses:
+        '204':
+          description: Ordem atualizada
+        '400':
+          description: JSON inválido, IDs duplicados ou conjunto diferente dos pins atuais
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /folders/{folderId}/pin:
+    put:
+      tags: [Pastas]
+      summary: Fixa uma pasta
+      description: Operação idempotente; a pasta é adicionada ao final da lista.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Pasta fixada
+        '401':
+          description: Token ausente ou inválido
+        '403':
+          description: Pasta pertence a outro usuário
+        '404':
+          description: Pasta inexistente ou em soft delete
+        '500':
+          description: Erro interno
+    delete:
+      tags: [Pastas]
+      summary: Remove uma pasta fixada
+      description: Operação idempotente para uma pasta própria; as posições restantes são normalizadas.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: Pasta desafixada
+        '401':
+          description: Token ausente ou inválido
+        '403':
+          description: Pasta pertence a outro usuário
+        '404':
+          description: Pasta inexistente ou em soft delete
         '500':
           description: Erro interno
 
@@ -457,6 +750,63 @@ paths:
         '500':
           description: Erro interno
 
+  /files/batch-init:
+    post:
+      tags: [Arquivos]
+      summary: Inicializa upload de multiplos arquivos
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchInitUploadRequest'
+      responses:
+        '201':
+          description: Uploads inicializados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchInitUploadResponse'
+        '400':
+          description: JSON inválido
+        '401':
+          description: Token ausente ou inválido
+        '402':
+          description: Quota excedida
+        '409':
+          description: Arquivo já existe na pasta
+
+  /files/batch-delete:
+    delete:
+      tags: [Arquivos]
+      summary: Envia multiplos arquivos para a lixeira
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchDeleteRequest'
+      responses:
+        '200':
+          description: Arquivos processados
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted_count:
+                    type: integer
+        '400':
+          description: Lote excede limite ou invalido
+        '401':
+          description: Token ausente ou invalido
+        '500':
+          description: Erro interno
+
   /files:
     post:
       tags: [Arquivos]
@@ -553,6 +903,43 @@ paths:
         '500':
           description: Erro interno
 
+  /pending-uploads:
+    get:
+      tags: [Arquivos]
+      summary: Lista todos os uploads de arquivos incompletos do usuário
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de uploads pendentes retornada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pending_uploads:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        folder_id:
+                          type: integer
+                          nullable: true
+                        encrypted_name:
+                          type: string
+                        size_bytes:
+                          type: integer
+                        total_chunks:
+                          type: integer
+                        encrypted_fdk:
+                          type: string
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
   /files/{fileId}/download:
     get:
       tags: [Arquivos]
@@ -573,12 +960,22 @@ paths:
           description: Exemplo bytes=0-1023
       responses:
         '200':
-          description: Conteúdo completo
+          description: Conteúdo completo ou estratégia de download (para google_drive)
           content:
             application/octet-stream:
               schema:
                 type: string
                 format: binary
+            application/json:
+              schema:
+                type: object
+                properties:
+                  storage_provider:
+                    type: string
+                  external_file_id:
+                    type: string
+                  access_token:
+                    type: string
         '206':
           description: Conteúdo parcial
           content:
@@ -682,7 +1079,7 @@ paths:
             type: integer
       responses:
         '200':
-          description: UUID de compartilhamento gerado
+          description: codigo de compartilhamento gerado
           content:
             application/json:
               schema:
@@ -694,16 +1091,17 @@ paths:
         '500':
           description: Erro interno
 
-  /share/{uuid}:
+  /share/{token}:
     get:
       tags: [Compartilhamento]
       summary: Baixa arquivo por link público
       parameters:
-        - name: uuid
+        - name: codigo
           in: path
           required: true
           schema:
             type: string
+            description: codigo de 7 caracteres
       responses:
         '200':
           description: Arquivo retornado
@@ -801,6 +1199,133 @@ paths:
         '500':
           description: Erro interno
 
+  /trash/files/batch-delete:
+    delete:
+      tags: [Lixeira]
+      summary: Exclusão permanente em lote da lixeira
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchDeleteRequest'
+      responses:
+        '200':
+          description: Arquivos deletados permanentemente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Arquivos deletados permanentemente
+                  deleted_count:
+                    type: integer
+                    example: 3
+                  external_files:
+                    type: array
+                    items:
+                      type: string
+        '400':
+          description: JSON inválido, file_ids ausente ou limite excedido
+        '401':
+          description: Token ausente ou inválido
+
+  /trash/files/{fileId}:
+    delete:
+      tags: [Lixeira]
+      summary: Deleta arquivo permanentemente da lixeira
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Arquivo deletado permanentemente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Arquivo não encontrado na lixeira
+        '500':
+          description: Erro interno
+
+  /trash/folders/batch-delete:
+    delete:
+      tags: [Lixeira]
+      summary: Deleta múltiplas pastas permanentemente
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                folder_ids:
+                  type: array
+                  items:
+                    type: integer
+                  description: Array com até 100 IDs de pastas a serem excluídas permanentemente
+      responses:
+        '200':
+          description: Pastas deletadas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  deleted_count:
+                    type: integer
+        '400':
+          description: Formato inválido ou limite excedido
+        '401':
+          description: Não autorizado
+        '404':
+          description: Uma ou mais pastas não encontradas na lixeira
+        '500':
+          description: Erro interno
+
+  /trash/folders/{folderId}:
+    delete:
+      tags: [Lixeira]
+      summary: Deleta pasta permanentemente da lixeira
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: folderId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Pasta deletada permanentemente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Pasta não encontrada na lixeira
+        '500':
+          description: Erro interno
+
+
   /files/{fileId}/restore:
     post:
       tags: [Lixeira]
@@ -826,5 +1351,239 @@ paths:
           description: Arquivo não encontrado na lixeira
         '409':
           description: Conflito no destino
+        '500':
+          description: Erro interno
+
+  /api/storage/google/generate-state:
+    get:
+      tags: [Google Drive]
+      summary: Gera um estado CSRF para vinculação segura do Google Drive
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Estado gerado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  state:
+                    type: string
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /api/storage/google/link:
+    post:
+      tags: [Google Drive]
+      summary: Vincula conta do Google Drive
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [auth_code, state]
+              properties:
+                auth_code:
+                  type: string
+                  description: Authorization code retornado pelo Google OAuth
+                state:
+                  type: string
+                  description: O token CSRF (state) gerado previamente pela API
+      responses:
+        '200':
+          description: Conta vinculada com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  root_folder_id:
+                    type: string
+                  account_email:
+                    type: string
+        '400':
+          description: Falha na troca do token ou JSON inválido
+        '401':
+          description: Token ausente ou inválido
+        '409':
+          description: Conta já vinculada
+        '500':
+          description: Erro interno
+
+  /api/storage/google/accounts:
+    get:
+      tags: [Google Drive]
+      summary: Obtém a lista de contas do Google Drive vinculadas
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Lista de contas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        account_email:
+                          type: string
+                        root_folder_id:
+                          type: string
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /api/storage/google/accounts/{accountId}:
+    delete:
+      tags: [Google Drive]
+      summary: Desvincula uma conta do Google Drive específica
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: O ID da conta externa
+      responses:
+        '200':
+          description: Conta desvinculada com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '401':
+          description: Token ausente ou inválido
+        '404':
+          description: Conta não encontrada ou não pertence ao usuário
+        '500':
+          description: Erro interno
+
+  /files/{fileId}/finalize-external:
+    post:
+      tags: [Google Drive]
+      summary: Finaliza o registro de um upload feito externamente no Google Drive
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                external_file_id:
+                  type: string
+                  description: ID retornado pela API do Google Drive
+      responses:
+        '200':
+          description: Upload externo finalizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '400':
+          description: Arquivo não é do tipo google_drive ou JSON inválido
+        '401':
+          description: Token ausente ou inválido
+        '403':
+          description: Sem permissão para alterar o arquivo
+        '404':
+          description: Arquivo não encontrado
+        '409':
+          description: Upload já estava concluído
+        '500':
+          description: Erro interno
+
+  /api/storage/google/accounts/{accountId}/sync-map:
+    get:
+      tags: [Google Drive]
+      summary: Obtém o mapa de arquivos no Drive associados a uma conta
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Mapa de sincronização obtido
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        external_file_id:
+                          type: string
+        '401':
+          description: Token ausente ou inválido
+        '500':
+          description: Erro interno
+
+  /api/storage/google/accounts/{accountId}/sync-cleanup:
+    post:
+      tags: [Google Drive]
+      summary: Informa quais arquivos estão ausentes na nuvem para realizar limpeza local (Soft Delete)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                missing_external_ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: Limpeza executada com sucesso
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericMessageResponse'
+        '400':
+          description: Requisição inválida
+        '401':
+          description: Token ausente ou inválido
         '500':
           description: Erro interno

@@ -87,7 +87,7 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         crow::request req_init_broken;
         req_init_broken.add_header("Authorization", "Bearer " + token);
         req_init_broken.body = R"({"folder_id": )" + std::to_string(fake_folder_id)
-                             + R"(, "encrypted_name": "base64_broken_file", "name_hash": "file_hash_broken", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 10485760, "total_chunks": 2})";
+                             + R"(, "encrypted_name": "base64_broken_file", "name_hash": "file_hash_broken", "encrypted_fdk": "mock_encrypted_fdk", "size_bytes": 10485760, "total_chunks": 3})";
 
         crow::response res_init_broken = router.handle_init_file_upload(req_init_broken);
         REQUIRE(res_init_broken.code == 201);
@@ -126,6 +126,18 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
 
         crow::response res1 = router.handle_init_file_upload(req_init);
         REQUIRE(res1.code == 201);
+
+        auto init_body = crow::json::load(res1.body);
+        int file_id = init_body["file_id"].i();
+
+        crow::request req_chunk;
+        req_chunk.add_header("Authorization", "Bearer " + token);
+        req_chunk.add_header("X-Chunk-Index", "0");
+        req_chunk.body = std::string(100, '\xAB');
+
+        crow::response res_chunk = router.handle_upload_chunk(req_chunk, file_id);
+        REQUIRE(res_chunk.code == 200);
+        REQUIRE(res_chunk.body.find("completed") != std::string::npos);
 
         crow::response res2 = router.handle_init_file_upload(req_init);
         REQUIRE(res2.code == 409);
@@ -240,6 +252,49 @@ TEST_CASE("API de Arquivos - Upload em Chunks", "[api][files]") {
         crow::response res_init = router.handle_init_file_upload(req_init);
         REQUIRE(res_init.code == 400);
         REQUIRE(res_init.body.find("Valores numericos invalidos") != std::string::npos);
+    }
+
+    SECTION("Proteção contra Denial of Service (Payload JSON Malformado)") {
+        crow::request req_init;
+        req_init.add_header("Authorization", "Bearer " + token);
+        
+        // JSON quebrado propositadamente
+        req_init.body = R"({"folder_id": null, "encrypted_name": "quebrado" "name_hash": "missing_comma")";
+
+        crow::response res_init = router.handle_init_file_upload(req_init);
+        REQUIRE(res_init.code == 400);
+
+        // Tipos de dados errados
+        req_init.body = R"({"folder_id": "string_em_vez_de_int", "encrypted_name": "x", "name_hash": "y", "encrypted_fdk": "z", "size_bytes": "nao_numero", "total_chunks": 1})";
+        crow::response res_types = router.handle_init_file_upload(req_init);
+        REQUIRE((res_types.code == 400 || res_types.code == 403 || res_types.code == 500));
+    }
+
+    SECTION("Proteção contra Stored XSS e Injection em Nomes de Ficheiros") {
+        crow::request req_init;
+        req_init.add_header("Authorization", "Bearer " + token);
+        std::string malicious_xss = "<script>alert('XSS')</script>";
+        req_init.body = R"({"folder_id": null, "encrypted_name": "<script>alert('XSS')</script>", "name_hash": "xss_hash", "encrypted_fdk": "mock", "size_bytes": 10, "total_chunks": 1})";
+
+        crow::response res_init = router.handle_init_file_upload(req_init);
+        REQUIRE(res_init.code == 201);
+
+        crow::request req_tree;
+        req_tree.add_header("Authorization", "Bearer " + token);
+        crow::response res_tree = router.handle_get_pending_uploads(req_tree);
+        REQUIRE(res_tree.code == 200);
+
+        auto tree_json = crow::json::load(res_tree.body);
+        bool xss_found = false;
+        if (tree_json.has("pending_uploads")) {
+            for (const auto& file : tree_json["pending_uploads"]) {
+                if (file["encrypted_name"].s() == malicious_xss) {
+                    xss_found = true;
+                    break;
+                }
+            }
+        }
+        REQUIRE(xss_found == true);
     }
 
     {

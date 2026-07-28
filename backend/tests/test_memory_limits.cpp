@@ -8,7 +8,7 @@ TEST_CASE("File Chunker - Limites de Memória (Anti-OOM)", "[chunker][memory][se
     FileChunker chunker("temp_memory_test.bin");
 
     SECTION("Deve rejeitar chunks maiores que o limite de segurança") {
-        size_t malicious_chunk_size = 6 * 1024 * 1024;
+        size_t malicious_chunk_size = 5 * 1024 * 1024; // 5MB > 4MB (allowed)
         
         bool is_accepted = chunker.validate_chunk_size(malicious_chunk_size);
         

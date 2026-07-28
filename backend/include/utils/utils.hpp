@@ -3,6 +3,7 @@
 #include <string>
 #include <stdexcept>
 #include <openssl/rand.h>
+#include <random>
 
 namespace UuidUtils {
 
@@ -38,4 +39,31 @@ namespace UuidUtils {
         return uuid;
     }
 
-}
+} // namespace UuidUtils
+
+class Base62Generator {
+public:
+    static inline std::string mock_next_token = "";
+
+    static std::string generate(int length) {
+        if (!mock_next_token.empty()) {
+            std::string token = mock_next_token;
+            mock_next_token = ""; 
+            return token;
+        }
+
+        static const char charset[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        static const size_t max_index = sizeof(charset) - 2; 
+
+        thread_local std::random_device rd;
+        thread_local std::mt19937_64 gen(rd());
+        std::uniform_int_distribution<size_t> dist(0, max_index);
+
+        std::string result;
+        result.reserve(length);
+        for (int i = 0; i < length; ++i) {
+            result += charset[dist(gen)];
+        }
+        return result;
+    }
+};

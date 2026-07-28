@@ -17,10 +17,10 @@ bool FileChunker::validate_chunk_size(size_t chunk_size) const {
 bool FileChunker::write_chunk(uint64_t file_id, int chunk_index, const std::string& binary_data) {
     std::lock_guard<std::mutex> lock(m_locks[file_id % NUM_STRIPES]);
 
-    const uint64_t MAX_ALLOWED_CHUNK = 5 * 1024 * 1024;
+    const uint64_t MAX_ALLOWED_CHUNK = 4 * 1024 * 1024;
 
     if (binary_data.size() > MAX_ALLOWED_CHUNK) {
-        std::cerr << "[SECURITY] Tentativa de upload de chunk maior que 5MB para o arquivo: " << file_id << std::endl;
+        std::cerr << "[SECURITY] Tentativa de upload de chunk maior que 4MB para o arquivo: " << file_id << std::endl;
         return false;
     }
 
@@ -50,12 +50,18 @@ std::string FileChunker::read_entire_file(uint64_t file_id) const {
     auto file_path = temp_file_path_ / (std::to_string(file_id) + ".dat");
 
     std::ifstream ifs(file_path, std::ios::binary);
-    if (!ifs.is_open()) {
+    if (!ifs.is_open() || !ifs.good()) {
         throw std::runtime_error("NOT_FOUND_ON_DISK");
     }
 
-    return std::string(std::istreambuf_iterator<char>(ifs),
-                       std::istreambuf_iterator<char>());
+    std::string content{std::istreambuf_iterator<char>(ifs),
+                        std::istreambuf_iterator<char>()};
+
+    if (ifs.fail() && !ifs.eof()) {
+        throw std::runtime_error("IO_RESOURCE_EXHAUSTED");
+    }
+
+    return content;
 }
 
 size_t FileChunker::get_file_size(uint64_t file_id) const {
@@ -69,7 +75,7 @@ size_t FileChunker::get_file_size(uint64_t file_id) const {
 std::string FileChunker::read_file_portion(uint64_t file_id, size_t offset, size_t length) const {
     auto file_path = temp_file_path_ / (std::to_string(file_id) + ".dat");
     std::ifstream ifs(file_path, std::ios::binary);
-    if (!ifs.is_open()) {
+    if (!ifs.is_open() || !ifs.good()) {
         throw std::runtime_error("NOT_FOUND_ON_DISK");
     }
 
@@ -77,7 +83,11 @@ std::string FileChunker::read_file_portion(uint64_t file_id, size_t offset, size
     std::string buffer(length, '\0');
     ifs.read(&buffer[0], length);
     buffer.resize(ifs.gcount());
-    
+
+    if (ifs.fail() && !ifs.eof()) {
+        throw std::runtime_error("IO_RESOURCE_EXHAUSTED");
+    }
+
     return buffer;
 }
 

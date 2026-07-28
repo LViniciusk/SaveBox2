@@ -28,6 +28,8 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
         auto conn = pool.acquire_connection();
         pqxx::work txn(*conn);
         
+        txn.exec("DELETE FROM users WHERE username LIKE 'trash_user_%'");
+
         auto res1 = txn.exec(
             "INSERT INTO users (username, email, password_hash, is_email_verified) VALUES ('" + test_username_1 + "', '" + test_username_1 + "@test.com', 'hash_1', true) RETURNING id"
         );
@@ -212,6 +214,160 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
         crow::response res_restore_folder_a = router.handle_restore_folder(req_restore_folder_a, folder_a_id);
         REQUIRE(res_restore_folder_a.code == 409);
         REQUIRE(res_restore_folder_a.body.find("Item ja existe no destino") != std::string::npos);
+    }
+
+    SECTION("8. Restore Limbo Prevention - Ficheiro cuja pasta-mãe foi apagada volta à raiz") {
+        int folder_id = create_test_folder(fake_user_id, valid_token);
+        REQUIRE(folder_id != -1);
+
+        int file_id = 0;
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            auto res = txn.exec(
+                "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "
+                "VALUES ($1, $2, 'enc_file_b', 'hash_b', 'mock_encrypted_fdk', 100, 1, true) RETURNING id",
+                pqxx::params{fake_user_id, folder_id}
+            );
+            file_id = res[0][0].as<int>();
+            txn.commit();
+        }
+
+        crow::request req_trash_folder;
+        req_trash_folder.add_header("Authorization", "Bearer " + valid_token);
+        crow::response res_trash_folder = router.handle_trash_folder(req_trash_folder, folder_id);
+        REQUIRE(res_trash_folder.code == 200);
+
+        crow::request req_restore_file;
+        req_restore_file.add_header("Authorization", "Bearer " + valid_token);
+        crow::response res_restore_file = router.handle_restore_file(req_restore_file, file_id);
+        REQUIRE(res_restore_file.code == 200);
+
+        crow::request req_tree;
+        req_tree.add_header("Authorization", "Bearer " + valid_token);
+        crow::response res_tree = router.handle_get_tree(req_tree);
+        REQUIRE(res_tree.code == 200);
+        
+        auto tree_body = crow::json::load(res_tree.body);
+        bool found_in_root = false;
+        for (const auto& file : tree_body["files"]) {
+            if (file["id"].i() == file_id && file["folder_id"].t() == crow::json::type::Null) {
+                found_in_root = true;
+                break;
+            }
+        }
+        REQUIRE(found_in_root == true);
+    }
+
+    SECTION("9. IDOR e JWT Signature Tampering") {
+        int folder_id = create_test_folder(fake_user_id, valid_token);
+
+        std::string tampered_token = valid_token;
+        size_t dot_pos = tampered_token.find('.');
+        if (dot_pos != std::string::npos && dot_pos + 5 < tampered_token.length()) {
+            tampered_token[dot_pos + 5] = tampered_token[dot_pos + 5] == 'A' ? 'B' : 'A';
+        }
+        
+        crow::request req_tampered;
+        req_tampered.add_header("Authorization", "Bearer " + tampered_token);
+        crow::response res_tampered = router.handle_trash_folder(req_tampered, folder_id);
+        REQUIRE(res_tampered.code == 401);
+
+        std::string other_token = auth.generate_token(static_cast<uint64_t>(other_user_id));
+        crow::request req_idor;
+        req_idor.add_header("Authorization", "Bearer " + other_token);
+        crow::response res_idor = router.handle_trash_folder(req_idor, folder_id);
+        REQUIRE(res_idor.code == 404); 
+
+        crow::request req_legit;
+        req_legit.add_header("Authorization", "Bearer " + valid_token);
+        crow::response res_legit = router.handle_trash_folder(req_legit, folder_id);
+        REQUIRE(res_legit.code == 200);
+
+        crow::request req_idor_restore;
+        req_idor_restore.add_header("Authorization", "Bearer " + other_token);
+        crow::response res_idor_restore = router.handle_restore_folder(req_idor_restore, folder_id);
+        REQUIRE(res_idor_restore.code == 404);
+    }
+
+    SECTION("10. Batch Hard Delete") {
+        int file1_id = 0, file2_id = 0, file3_id = 0;
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            auto res1 = txn.exec(
+                "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete, deleted_at) "
+                "VALUES ($1, NULL, 'enc_file_b1', 'hash_b1', 'mock_encrypted_fdk', 100, 1, true, NOW()) RETURNING id",
+                pqxx::params{fake_user_id}
+            );
+            file1_id = res1[0][0].as<int>();
+
+            auto res2 = txn.exec(
+                "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete, deleted_at) "
+                "VALUES ($1, NULL, 'enc_file_b2', 'hash_b2', 'mock_encrypted_fdk', 200, 1, true, NOW()) RETURNING id",
+                pqxx::params{fake_user_id}
+            );
+            file2_id = res2[0][0].as<int>();
+            
+            auto res3 = txn.exec(
+                "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete, deleted_at) "
+                "VALUES ($1, NULL, 'enc_file_b3', 'hash_b3', 'mock_encrypted_fdk', 300, 1, true, NULL) RETURNING id",
+                pqxx::params{fake_user_id}
+            );
+            file3_id = res3[0][0].as<int>();
+
+            txn.commit();
+        }
+
+        // Test normal batch hard delete
+        crow::request req;
+        req.url = "/trash/files/batch-delete";
+        req.method = crow::HTTPMethod::Delete;
+        req.add_header("Authorization", "Bearer " + valid_token);
+        
+        crow::json::wvalue req_body;
+        req_body["file_ids"] = std::vector<int>{file1_id, file2_id, file3_id};
+        req.body = req_body.dump();
+        
+        crow::response res = router.handle_batch_hard_delete(req);
+        REQUIRE(res.code == 200);
+        auto body = crow::json::load(res.body);
+        REQUIRE(body["deleted_count"].i() == 2); // Only file1 and file2 are in trash
+
+        // Verification
+        {
+            auto conn = pool.acquire_connection();
+            pqxx::nontransaction txn(*conn);
+            auto count = txn.exec("SELECT COUNT(*) FROM files WHERE id IN (" + std::to_string(file1_id) + "," + std::to_string(file2_id) + ")");
+            REQUIRE(count[0][0].as<int>() == 0); // Both hard deleted
+
+            auto count3 = txn.exec("SELECT COUNT(*) FROM files WHERE id = " + std::to_string(file3_id));
+            REQUIRE(count3[0][0].as<int>() == 1); // Not deleted because not in trash
+        }
+        
+        // Anti-DoS Limits
+        std::vector<int> massive_ids;
+        for(int i = 0; i < 101; i++) massive_ids.push_back(i);
+        
+        crow::json::wvalue req_dos_body;
+        req_dos_body["file_ids"] = massive_ids;
+        req.body = req_dos_body.dump();
+        crow::response res_dos = router.handle_batch_hard_delete(req);
+        REQUIRE(res_dos.code == 400);
+        
+        // IDOR Test
+        crow::request req_idor;
+        req_idor.url = "/trash/files/batch-delete";
+        req_idor.method = crow::HTTPMethod::Delete;
+        req_idor.add_header("Authorization", "Bearer " + other_token);
+        
+        crow::json::wvalue req_idor_body;
+        req_idor_body["file_ids"] = std::vector<int>{file3_id};
+        req_idor.body = req_idor_body.dump();
+        
+        crow::response res_idor = router.handle_batch_hard_delete(req_idor);
+        REQUIRE(res_idor.code == 200);
+        REQUIRE(crow::json::load(res_idor.body)["deleted_count"].i() == 0); // Should delete 0 since file3 belongs to fake_user_id
     }
 
     {
