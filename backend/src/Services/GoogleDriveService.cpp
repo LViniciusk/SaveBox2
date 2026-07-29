@@ -653,14 +653,9 @@ void GoogleDriveService::revoke_file_public(uint64_t user_id, const std::string&
             }
         }
     }
-    if (storage_id == 0) return;
+    if (storage_id == 0) throw std::runtime_error("GOOGLE_REVOKE_PUBLIC_FAILED");
 
-    std::string access_token;
-    try {
-        access_token = get_access_token_for_storage(storage_id);
-    } catch (...) {
-        return;
-    }
+    std::string access_token = get_access_token_for_storage(storage_id);
 
     std::string list_url = "https://www.googleapis.com/drive/v3/files/" + external_file_id + "/permissions";
     cpr::Response r = make_get_request(
@@ -668,10 +663,18 @@ void GoogleDriveService::revoke_file_public(uint64_t user_id, const std::string&
         cpr::Header{{"Authorization", "Bearer " + access_token}}
     );
 
-    if (r.status_code == 200) {
+    if (r.status_code != 200) {
+        throw std::runtime_error("GOOGLE_REVOKE_PUBLIC_FAILED");
+    }
+
+    {
         picojson::value json_val;
         std::string err = picojson::parse(json_val, r.text);
-        if (err.empty() && json_val.is<picojson::object>()) {
+        if (!err.empty() || !json_val.is<picojson::object>()) {
+            throw std::runtime_error("GOOGLE_REVOKE_PUBLIC_FAILED");
+        }
+
+        {
             auto& obj = json_val.get<picojson::object>();
             auto perms_it = obj.find("permissions");
             if (perms_it != obj.end() && perms_it->second.is<picojson::array>()) {
@@ -684,11 +687,14 @@ void GoogleDriveService::revoke_file_public(uint64_t user_id, const std::string&
                             id_it != perm_obj.end() && id_it->second.is<std::string>()) {
                             std::string perm_id = id_it->second.get<std::string>();
                             std::string del_url = "https://www.googleapis.com/drive/v3/files/" + external_file_id + "/permissions/" + perm_id;
-                            cpr::Delete(
+                            const cpr::Response delete_response = cpr::Delete(
                                 cpr::Url{del_url},
                                 cpr::Header{{"Authorization", "Bearer " + access_token}},
                                 cpr::Timeout{5000}
                             );
+                            if (delete_response.status_code != 200 && delete_response.status_code != 204) {
+                                throw std::runtime_error("GOOGLE_REVOKE_PUBLIC_FAILED");
+                            }
                         }
                     }
                 }
@@ -723,6 +729,33 @@ std::string GoogleDriveService::get_access_token_for_user_file(uint64_t file_id)
     }
     if (storage_id == 0) throw std::runtime_error("STORAGE_NOT_FOUND");
     return get_access_token_for_storage(storage_id);
+}
+
+std::string GoogleDriveService::get_public_download_url(uint64_t file_id, const std::string& external_file_id) {
+    if (external_file_id.empty()) throw std::runtime_error("GOOGLE_DRIVE_FILE_NOT_FOUND");
+
+    const std::string token = get_access_token_for_user_file(file_id);
+    const std::string url = "https://www.googleapis.com/drive/v3/files/" + external_file_id + "?fields=webContentLink";
+    const cpr::Response response = make_get_request(
+        url,
+        cpr::Header{{"Authorization", "Bearer " + token}}
+    );
+
+    if (response.status_code != 200) {
+        std::cerr << "[GoogleDrive] get_public_download_url failed. Status="
+                  << response.status_code << std::endl;
+        throw std::runtime_error("GOOGLE_PUBLIC_LINK_FAILED");
+    }
+
+    try {
+        const auto body = nlohmann::json::parse(response.text);
+        if (!body.contains("webContentLink") || !body["webContentLink"].is_string()) {
+            throw std::runtime_error("GOOGLE_PUBLIC_LINK_FAILED");
+        }
+        return body["webContentLink"].get<std::string>();
+    } catch (const nlohmann::json::exception&) {
+        throw std::runtime_error("GOOGLE_PUBLIC_LINK_FAILED");
+    }
 }
 
 std::string GoogleDriveService::fetch_file_media(uint64_t file_id, const std::string& external_file_id, const std::string& range_header) {

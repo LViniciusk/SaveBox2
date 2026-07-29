@@ -3,7 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting, HttpTestingController } from '@angular/common/http/testing';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { of, Subject, throwError } from 'rxjs';
 import { CryptoService } from '../../../core/crypto/crypto.service';
 import { KasumiCryptoService } from '../../../core/crypto/kasumi-crypto.service';
 import { DriveService } from '../services/drive.service';
@@ -94,6 +94,48 @@ describe('UploadEngineService', () => {
 
     expect(result).toEqual({ paused: true });
     expect(drive.uploadChunk).not.toHaveBeenCalled();
+  });
+
+  it('aborts an in-flight local chunk and does not start another chunk', async () => {
+    const chunk = new Subject<void>();
+    drive.uploadChunk.and.returnValue(chunk.asObservable());
+    const controller = new AbortController();
+    const prepared = makePrepared(new Blob(['chunk-data']));
+    const promise = engine.execute(prepared, 11, 'local', {}, {
+      shouldPause: () => false,
+      shouldCancel: () => controller.signal.aborted,
+      signal: controller.signal,
+    }, { onProgress: () => undefined });
+
+    await Promise.resolve();
+    controller.abort();
+    const result = await promise;
+
+    expect(result).toEqual({ paused: false, cancelled: true });
+    expect(drive.uploadChunk).toHaveBeenCalledTimes(1);
+    expect(prepared.fdk.every(value => value === 0)).toBeTrue();
+    expect(chunk.observers.length).toBe(0);
+  });
+
+  it('aborts Google POST without finalizing the local record', async () => {
+    const controller = new AbortController();
+    const prepared = makePrepared(new Blob(['encrypted-data']));
+    const promise = engine.execute(prepared, 12, 'google_drive', {
+      access_token: 'token', root_folder_id: 'root', name_hash: 'remote-name',
+    }, {
+      shouldPause: () => false,
+      shouldCancel: () => controller.signal.aborted,
+      signal: controller.signal,
+    }, { onProgress: () => undefined });
+
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const request = http.expectOne('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart');
+    controller.abort();
+    const result = await promise;
+
+    expect(result).toEqual({ paused: false, cancelled: true });
+    expect(drive.finalizeExternalUpload).not.toHaveBeenCalled();
+    expect(request.cancelled).toBeTrue();
   });
 
   it('uploads Google Drive multipart data and finalizes the local file', async () => {

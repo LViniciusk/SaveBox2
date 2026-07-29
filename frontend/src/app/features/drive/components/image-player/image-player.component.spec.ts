@@ -59,7 +59,7 @@ describe('ImagePlayerComponent', () => {
 
   it('downloads, decrypts and caches an image in memory', async () => {
     await (component as any).loadImage(image);
-    expect(drive.downloadFileInRanges).toHaveBeenCalledWith(1, 100);
+    expect(drive.downloadFileInRanges).toHaveBeenCalledWith(1, 100, jasmine.any(AbortSignal));
     expect(kasumi.decryptFile).toHaveBeenCalled();
     expect(component.isLoading()).toBeFalse();
     expect(component.imageUrl()).toBeTruthy();
@@ -71,11 +71,26 @@ describe('ImagePlayerComponent', () => {
   it('uses the share FDK and reports a missing local FDK', async () => {
     const shared = { ...image, shareUuid: 'share', shareFdk: new Uint8Array(32), encryptedFdk: undefined } as DriveFile;
     await (component as any).loadImage(shared);
-    expect(share.downloadSharedFileInRanges).toHaveBeenCalledWith('share', image.sizeBytes);
+    expect(share.downloadSharedFileInRanges).toHaveBeenCalledWith('share', image.sizeBytes, undefined, jasmine.any(AbortSignal));
 
     const missing = { ...image, id: 3, encryptedFdk: undefined } as DriveFile;
     await (component as any).loadImage(missing);
     expect(component.error()).toContain('FDK');
+  });
+
+  it('uses the generic visualizer for MIME-detected images and audio', () => {
+    const genericImage = { ...image, id: 20, type: 'generic', mimeType: 'image/png' } as DriveFile;
+    fixture.componentRef.setInput('file', genericImage);
+    fixture.detectChanges();
+    expect(component.previewKind()).toBe('image');
+    expect(fixture.nativeElement.querySelector('.no-preview-wrapper')).toBeNull();
+
+    const audio = { ...image, id: 21, type: 'generic', mimeType: 'audio/mpeg', decryptedName: 'song.mp3' } as DriveFile;
+    fixture.componentRef.setInput('file', audio);
+    fixture.detectChanges();
+    expect(component.previewKind()).toBe('audio');
+    expect(fixture.nativeElement.querySelector('app-audio-player')).not.toBeNull();
+    expect(fixture.nativeElement.textContent).not.toContain('Nenhuma visualização disponível');
   });
 
   it('handles failed downloads without exposing an error after abort', async () => {

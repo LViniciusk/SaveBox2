@@ -1,6 +1,7 @@
 import { Component, input, output, inject, OnDestroy, OnInit, signal, computed, ViewChild, ElementRef, HostListener, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ShareService } from '../drive/services/share.service';
+import { DriveService } from '../drive/services/drive.service';
 import { KasumiCryptoService } from '../../core/crypto/kasumi-crypto.service';
 import { VideoStreamService } from '../drive/services/video-stream.service';
 import { DriveFile } from '../drive/state/drive.store';
@@ -570,11 +571,13 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
   readonly isVideo = input.required<boolean>();
   readonly isImage = input.required<boolean>();
   readonly storageProvider = input<string>('local');
+  readonly publicDownloadUrl = input<string | null>(null);
   readonly close = output<void>();
 
   @ViewChild('videoElement') videoElementRef?: ElementRef<HTMLVideoElement>;
 
   private readonly shareService = inject(ShareService);
+  private readonly driveService = inject(DriveService);
   private readonly kasumi = inject(KasumiCryptoService);
   readonly videoStreamService = inject(VideoStreamService);
   private readonly cdr = inject(ChangeDetectorRef);
@@ -634,9 +637,10 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
         sizeFormatted: this.getFormattedSize(),
         modifiedAt: new Date().toISOString(),
         owner: 'Nanika',
-        shareUuid: this.shareId(),
+        shareUuid: this.publicDownloadUrl() ? undefined : this.shareId(),
         shareFdk: this.fdk(),
-        storageProvider: this.storageProvider()
+        storageProvider: this.storageProvider(),
+        publicDownloadUrl: this.publicDownloadUrl() ?? undefined,
       });
       this.loadHeaderThumbnail();
     } else if (this.isImage()) {
@@ -656,7 +660,9 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
       const sizeBytes = Math.max(1, Math.min(requestedSize, maxHeaderFetchSize));
       try {
         const headerBlob = await import('rxjs').then(m => m.firstValueFrom(
-          this.shareService.downloadSharedFileRange(this.shareId(), 0, sizeBytes - 1)
+          this.publicDownloadUrl()
+            ? this.driveService.downloadPublicFileRange(this.publicDownloadUrl()!, 0, sizeBytes - 1)
+            : this.shareService.downloadSharedFileRange(this.shareId(), 0, sizeBytes - 1)
         ));
         const res = await this.kasumi.extractMetadata(headerBlob, this.fdk());
         if (res.metadata) {
@@ -708,10 +714,7 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     this.error.set(null);
 
     try {
-      const encryptedBlob = await this.shareService.downloadSharedFileInRanges(
-        this.shareId(),
-        this.sizeBytes() || this.publicDriveFile().sizeBytes
-      );
+      const encryptedBlob = await this.downloadEncryptedFile();
       const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdk());
       const mimeType = this.getMimeType(this.filename());
       this.decryptedBlob = new Blob([rawDecrypted], { type: mimeType });
@@ -756,15 +759,10 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     this.downloadProgress.set(0);
     
     try {
-      const total = this.sizeBytes() || this.publicDriveFile().sizeBytes;
-      const encryptedBlob = await this.shareService.downloadSharedFileInRanges(
-        this.shareId(),
-        total,
-        (loaded, size) => {
-          this.downloadProgress.set(Math.min(99, Math.round((100 * loaded) / size)));
-          this.cdr.detectChanges();
-        }
-      );
+      const encryptedBlob = await this.downloadEncryptedFile((loaded, size) => {
+        this.downloadProgress.set(Math.min(99, Math.round((100 * loaded) / size)));
+        this.cdr.detectChanges();
+      });
 
       this.downloadProgress.set(null);
       const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdk());
@@ -783,6 +781,14 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
       this.downloadProgress.set(null);
       this.cdr.detectChanges();
     }
+  }
+
+  private downloadEncryptedFile(onProgress?: (loaded: number, total: number) => void): Promise<Blob> {
+    const total = this.sizeBytes() || this.publicDriveFile().sizeBytes;
+    const publicUrl = this.publicDownloadUrl();
+    return publicUrl
+      ? this.driveService.downloadPublicFileInRanges(publicUrl, total, onProgress)
+      : this.shareService.downloadSharedFileInRanges(this.shareId(), total, onProgress);
   }
 
   protected onClose() {

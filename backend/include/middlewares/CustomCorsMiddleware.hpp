@@ -10,6 +10,11 @@ struct CustomCorsMiddleware {
     void before_handle(crow::request& /*req*/, crow::response& /*res*/, context& /*ctx*/) {}
 
     void after_handle(crow::request& req, crow::response& res, context& /*ctx*/) {
+        apply_headers(req, res);
+    }
+
+private:
+    static void apply_headers(crow::request& req, crow::response& res) {
         std::string origin = req.get_header_value("Origin");
         if (!origin.empty() && is_allowed_origin(origin)) {
             res.set_header("Access-Control-Allow-Origin", origin);
@@ -26,7 +31,6 @@ struct CustomCorsMiddleware {
         res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
     }
 
-private:
     static bool is_allowed_origin(std::string_view origin) {
         const char* configured = std::getenv("CORS_ALLOWED_ORIGINS");
         const std::string_view fallback = "http://localhost:4200";

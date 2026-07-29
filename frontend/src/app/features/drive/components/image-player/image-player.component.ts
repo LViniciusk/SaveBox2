@@ -1,20 +1,17 @@
 import { Component, input, output, inject, OnDestroy, signal, effect, untracked, HostListener, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { DriveStore, DriveFile } from '../../state/drive.store';
-import { DriveService } from '../../services/drive.service';
-import { ShareService } from '../../services/share.service';
-import { KasumiCryptoService } from '../../../../core/crypto/kasumi-crypto.service';
-import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.component';
 import { VideoPlayerComponent } from '../video-player/video-player.component';
-import { HttpClient, HttpEvent, HttpEventType } from '@angular/common/http';
-import { environment } from '../../../../../environments/environment';
-import { Observable, firstValueFrom } from 'rxjs';
+import { AudioPlayerComponent } from '../audio-player/audio-player.component';
+import { DecryptedMediaLoaderService } from '../../services/decrypted-media-loader.service';
+import { resolveFilePreviewKind } from '../../services/file-preview-resolver';
+import { ShareModalComponent } from '../share-modal/share-modal.component';
 
 @Component({
   selector: 'app-image-player',
   standalone: true,
-  imports: [CommonModule, FileIconComponent, VideoPlayerComponent],
+  imports: [CommonModule, FileIconComponent, VideoPlayerComponent, AudioPlayerComponent, ShareModalComponent],
   template: `
     <div class="player-backdrop" (click)="onClose()">
       
@@ -29,7 +26,7 @@ import { Observable, firstValueFrom } from 'rxjs';
         </div>
         
         <div class="header-right">
-          <button class="share-btn">
+          <button class="share-btn" (click)="$event.stopPropagation(); isShareOpen.set(true)">
             <span class="material-symbols-outlined">group</span> Compartilhar
           </button>
           @if (playlist().length > 1) {
@@ -58,13 +55,13 @@ import { Observable, firstValueFrom } from 'rxjs';
           }
         </button>
         <div class="divider"></div>
-        <button class="icon-btn" (click)="zoomOut()" [disabled]="currentZoom() <= 0.25 || file().type !== 'image'" title="Diminuir Zoom">
+        <button class="icon-btn" (click)="zoomOut()" [disabled]="currentZoom() <= 0.25 || previewKind() !== 'image'" title="Diminuir Zoom">
           <span class="material-symbols-outlined">remove</span>
         </button>
-        <button class="icon-btn" aria-label="Zoom" (click)="resetZoom()" title="Resetar Zoom" [disabled]="file().type !== 'image'" [class.active-zoom]="currentZoom() !== 1">
+        <button class="icon-btn" aria-label="Zoom" (click)="resetZoom()" title="Resetar Zoom" [disabled]="previewKind() !== 'image'" [class.active-zoom]="currentZoom() !== 1">
           <span class="material-symbols-outlined">search</span>
         </button>
-        <button class="icon-btn" (click)="zoomIn()" [disabled]="currentZoom() >= 3 || file().type !== 'image'" title="Aumentar Zoom">
+        <button class="icon-btn" (click)="zoomIn()" [disabled]="currentZoom() >= 3 || previewKind() !== 'image'" title="Aumentar Zoom">
           <span class="material-symbols-outlined">add</span>
         </button>
       </div>
@@ -77,7 +74,7 @@ import { Observable, firstValueFrom } from 'rxjs';
              (mousemove)="onMouseMove($event)"
              (mouseup)="onMouseUp()"
              (mouseleave)="onMouseUp()">
-        @if (file().type === 'video') {
+        @if (previewKind() === 'video') {
           <div class="video-preview-container">
             @if (!isVideoReady()) {
               @if (thumbnailData()) {
@@ -112,7 +109,7 @@ import { Observable, firstValueFrom } from 'rxjs';
             }
           </div>
         } @else {
-          @if (file().type === 'image' && imageUrl()) {
+          @if (previewKind() === 'image' && imageUrl()) {
             <img [src]="imageUrl()" 
                  class="image-node" 
                  [class.dragging]="isDragging"
@@ -120,7 +117,15 @@ import { Observable, firstValueFrom } from 'rxjs';
                  [style.transform]="'translate(' + translateX() + 'px, ' + translateY() + 'px) scale(' + currentZoom() + ')'" 
                  draggable="false"
                  (click)="$event.stopPropagation()" />
-          } @else if (file().type !== 'image' && !isLoading()) {
+          } @else if (previewKind() === 'audio') {
+            <div class="audio-preview-container" (click)="$event.stopPropagation()">
+              <app-audio-player
+                class="embedded-audio-player"
+                [file]="file()"
+                (close)="onClose()"
+                (downloadRequested)="downloadFile()" />
+            </div>
+          } @else if (previewKind() === 'unsupported' && !isLoading()) {
             <!-- No Preview Available -->
             <div class="no-preview-wrapper">
               <div class="share-card-dark" (click)="$event.stopPropagation()">
@@ -162,6 +167,12 @@ import { Observable, firstValueFrom } from 'rxjs';
           <span class="material-symbols-outlined error-icon">error</span>
           <div class="error-text">{{ error() }}</div>
           <button class="retry-btn" (click)="loadImage(file())">Tentar Novamente</button>
+        </div>
+      }
+
+      @if (isShareOpen()) {
+        <div class="player-share-modal" (click)="$event.stopPropagation()">
+          <app-share-modal [file]="file()" (close)="isShareOpen.set(false)" />
         </div>
       }
     </div>
@@ -344,6 +355,10 @@ import { Observable, firstValueFrom } from 'rxjs';
         display: flex;
         align-items: center;
         justify-content: center;
+      }
+      .audio-preview-container {
+        width: min(560px, calc(100vw - 48px));
+        max-width: 100%;
       }
       .spinning {
         animation: spin 1s linear infinite;
@@ -596,11 +611,7 @@ export class ImagePlayerComponent implements OnDestroy {
   readonly videoReady = output<void>();
 
   private readonly driveStore = inject(DriveStore);
-  private readonly driveService = inject(DriveService);
-  private readonly shareService = inject(ShareService);
-  private readonly cryptoService = inject(CryptoService);
-  private readonly kasumi = inject(KasumiCryptoService);
-  private readonly http = inject(HttpClient);
+  private readonly mediaLoader = inject(DecryptedMediaLoaderService);
 
   readonly isDownloading = computed(() => this.driveStore.isDownloading());
   readonly downloadProgress = computed(() => this.driveStore.downloadProgress() > 0 ? this.driveStore.downloadProgress() : null);
@@ -608,10 +619,12 @@ export class ImagePlayerComponent implements OnDestroy {
   readonly isLoading = signal(true);
   readonly error = signal<string | null>(null);
   readonly imageUrl = signal<string | null>(null);
+  readonly previewKind = computed(() => resolveFilePreviewKind(this.file()));
   readonly currentZoom = signal(1);
   readonly translateX = signal(0);
   readonly translateY = signal(0);
   readonly isVideoReady = signal(false);
+  readonly isShareOpen = signal(false);
 
   isDragging = false;
   private hasDragged = false;
@@ -624,7 +637,7 @@ export class ImagePlayerComponent implements OnDestroy {
 
   readonly thumbnailData = computed(() => {
     const current = this.file();
-    if (current.type === 'video') {
+    if (this.previewKind() === 'video') {
       return this.driveStore.thumbnails()[current.id] || null;
     }
     return null;
@@ -662,9 +675,10 @@ export class ImagePlayerComponent implements OnDestroy {
           this.translateY.set(0);
           this.isVideoReady.set(false);
           this.isDragging = false;
-          if (current.type === 'image') {
+          const kind = resolveFilePreviewKind(current);
+          if (kind === 'image') {
             this.loadImage(current);
-          } else if (current.type === 'video') {
+          } else if (kind === 'video') {
             this.isLoading.set(false);
             this.error.set(null);
             this.imageUrl.set(null);
@@ -756,7 +770,7 @@ export class ImagePlayerComponent implements OnDestroy {
   }
 
   private async prefetchFile(file: DriveFile) {
-    if (file.type !== 'image') return;
+    if (resolveFilePreviewKind(file) !== 'image') return;
     this.fetchInFlight.add(file.id);
     try {
       const url = await this.downloadAndDecrypt(file, this.prefetchAbortController.signal);
@@ -771,39 +785,8 @@ export class ImagePlayerComponent implements OnDestroy {
   }
 
   private async downloadAndDecrypt(file: DriveFile, signal: AbortSignal): Promise<string> {
-    let encryptedBlob: Blob;
-    let fdk: Uint8Array;
-
-    if (file.shareUuid && file.shareFdk) {
-      encryptedBlob = await this.shareService.downloadSharedFileInRanges(file.shareUuid, file.sizeBytes);
-      fdk = file.shareFdk;
-    } else {
-      if (!file.encryptedFdk) throw new Error('Chave de criptografia nao encontrada (FDK)');
-
-      const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
-      const fdkString = atob(fdkBase64);
-      fdk = new Uint8Array(fdkString.length);
-      for (let i = 0; i < fdkString.length; i++) {
-        fdk[i] = fdkString.charCodeAt(i);
-      }
-
-      if (file.storageProvider === 'google_drive') {
-        const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
-        const gdriveUrl = `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`;
-        const extReq$ = this.driveService.downloadExternalFileRange(gdriveUrl, meta.access_token, 0, file.sizeBytes - 1);
-        encryptedBlob = await firstValueFrom(extReq$);
-      } else {
-        encryptedBlob = await this.driveService.downloadFileInRanges(file.id, file.sizeBytes);
-      }
-    }
-
-    if (signal.aborted) throw new Error('Aborted');
-
-    const decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk);
-
-    if (signal.aborted) throw new Error('Aborted');
-
-    return URL.createObjectURL(decryptedBlob);
+    const resource = await this.mediaLoader.load(file, signal);
+    return resource.url;
   }
 
   protected onClose() {
@@ -836,7 +819,7 @@ export class ImagePlayerComponent implements OnDestroy {
   }
 
   protected onWheel(event: WheelEvent) {
-    if (this.file().type === 'video') return;
+    if (this.previewKind() !== 'image') return;
     if (event.deltaY < 0) {
       this.zoomIn();
     } else if (event.deltaY > 0) {

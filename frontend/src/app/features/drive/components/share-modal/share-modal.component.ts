@@ -108,7 +108,7 @@ import { firstValueFrom } from 'rxjs';
         display: flex;
         align-items: center;
         justify-content: center;
-        z-index: 1000;
+        z-index: 4000;
         animation: fadeIn 0.2s ease-out;
       }
       .modal-content {

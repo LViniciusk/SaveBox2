@@ -14,6 +14,7 @@ class FileListStubComponent {
   readonly uploadFileRequested = output<void>();
   readonly videoSelected = output<DriveFile>();
   readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
+  readonly previewRequested = output<any>();
   readonly shareRequested = output<DriveFile>();
 }
 

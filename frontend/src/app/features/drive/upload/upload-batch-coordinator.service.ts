@@ -10,7 +10,9 @@ import {
   UploadBatchSummary,
 } from './upload.models';
 import { UploadEngineService } from './upload-engine.service';
-import { UploadQueue } from './upload-queue';
+import { UploadQueue, UploadQueueTask } from './upload-queue';
+import { isUploadAbortError } from './abortable-observable';
+import { firstValueFromAbortable } from './abortable-observable';
 
 export const BATCH_API_LIMIT = 100;
 export const BATCH_WINDOW_SIZE = 10;
@@ -45,7 +47,7 @@ export class UploadBatchCoordinatorService {
     candidates: readonly UploadBatchCandidate[],
     callbacks: UploadBatchCallbacks
   ): Promise<UploadBatchSummary> {
-    const summary: UploadBatchSummary = { total: candidates.length, succeeded: 0, paused: 0, failed: 0 };
+    const summary: UploadBatchSummary = { total: candidates.length, succeeded: 0, paused: 0, cancelled: 0, failed: 0 };
     let stop = false;
 
     for (let offset = 0; offset < candidates.length && !stop; offset += BATCH_WINDOW_SIZE) {
@@ -62,8 +64,9 @@ export class UploadBatchCoordinatorService {
       if (!valid.length) continue;
 
       let response: BatchUploadResponseItem[];
+      const batchAbort = this.abortWhenAllCancelled(valid.map(item => item.candidate));
       try {
-        response = (await firstValueFrom(this.driveService.batchInitUploads(valid.map(item => ({
+        const batchRequest = this.driveService.batchInitUploads(valid.map(item => ({
           folder_id: item.candidate.folderId,
           encrypted_name: item.prepared.encryptedName,
           name_hash: item.prepared.nameHash,
@@ -71,10 +74,14 @@ export class UploadBatchCoordinatorService {
           size_bytes: item.prepared.encryptedSize,
           total_chunks: item.prepared.totalChunks,
           storage_provider: item.candidate.provider,
-        })) ))).files;
+        })));
+        response = (await firstValueFromAbortable(batchRequest, batchAbort.signal)).files;
         this.validateResponse(valid, response);
       } catch (error) {
-        for (const item of valid) this.fail(item.candidate, error, callbacks, summary);
+        for (const item of valid) {
+          if (item.candidate.control.shouldCancel() || isUploadAbortError(error)) this.cancel(item.candidate, callbacks, summary);
+          else this.fail(item.candidate, error, callbacks, summary);
+        }
         stop = this.statusOf(error) === 401;
         if (stop) {
           for (const pending of candidates.slice(offset + window.length)) {
@@ -82,16 +89,26 @@ export class UploadBatchCoordinatorService {
           }
         }
         continue;
+      } finally {
+        batchAbort.dispose();
       }
 
       const byHash = new Map(response.map(item => [item.name_hash, item]));
-      const localTasks: Array<() => Promise<void>> = [];
-      const googleTasks: Array<() => Promise<void>> = [];
+      const localTasks: UploadQueueTask<void>[] = [];
+      const googleTasks: UploadQueueTask<void>[] = [];
 
       for (const item of valid) {
         const init = byHash.get(item.prepared.nameHash)!;
+        if (item.candidate.control.shouldCancel()) {
+          await this.cleanupInitializedFile(init.file_id);
+          this.cancel(item.candidate, callbacks, summary);
+          continue;
+        }
         callbacks.onInitialized(item.candidate, item.prepared, init);
-        const task = () => this.execute(item, init, callbacks, summary);
+        const task: UploadQueueTask<void> = {
+          run: () => this.execute(item, init, callbacks, summary),
+          signal: item.candidate.control.signal,
+        };
         (item.candidate.provider === 'google_drive' ? googleTasks : localTasks).push(task);
       }
 
@@ -112,11 +129,15 @@ export class UploadBatchCoordinatorService {
     const prepared: PreparedCandidate[] = [];
     const queue = new UploadQueue(PREPARATION_CONCURRENCY);
     await queue.run(candidates.map(candidate => async () => {
-      if (candidate.control.shouldCancel()) return;
+      if (candidate.control.shouldCancel()) {
+        this.cancel(candidate, callbacks, summary);
+        return;
+      }
       try {
-        prepared.push({ candidate, prepared: await this.uploadEngine.prepareUpload(candidate.file) });
+        prepared.push({ candidate, prepared: await this.uploadEngine.prepareUpload(candidate.file, candidate.control.signal) });
       } catch (error) {
-        this.fail(candidate, error, callbacks, summary);
+        if (candidate.control.shouldCancel() || isUploadAbortError(error)) this.cancel(candidate, callbacks, summary);
+        else this.fail(candidate, error, callbacks, summary);
       }
     }));
     return prepared;
@@ -137,7 +158,10 @@ export class UploadBatchCoordinatorService {
         item.candidate.control,
         { onProgress: update => callbacks.onProgress(item.candidate, update.progress, update.transferredBytes, update.totalBytes) }
       );
-      if (result.paused) {
+      if (result.cancelled || item.candidate.control.shouldCancel()) {
+        summary.cancelled++;
+        callbacks.onResult({ transferId: item.candidate.transferId, status: 'cancelled' });
+      } else if (result.paused) {
         summary.paused++;
         callbacks.onResult({ transferId: item.candidate.transferId, status: 'paused' });
       } else {
@@ -182,6 +206,37 @@ export class UploadBatchCoordinatorService {
   private fail(candidate: UploadBatchCandidate, error: unknown, callbacks: UploadBatchCallbacks, summary: UploadBatchSummary): void {
     summary.failed++;
     callbacks.onResult({ transferId: candidate.transferId, status: 'error', error });
+  }
+
+  private cancel(candidate: UploadBatchCandidate, callbacks: UploadBatchCallbacks, summary: UploadBatchSummary): void {
+    summary.cancelled++;
+    callbacks.onResult({ transferId: candidate.transferId, status: 'cancelled' });
+  }
+
+  private async cleanupInitializedFile(fileId: number): Promise<void> {
+    try {
+      await firstValueFrom(this.driveService.trashFile(fileId));
+      await firstValueFrom(this.driveService.hardDeleteFile(fileId));
+    } catch (error: any) {
+      if (error?.status !== 404) console.error('Falha ao limpar upload cancelado', error);
+    }
+  }
+
+  private abortWhenAllCancelled(candidates: readonly UploadBatchCandidate[]): { signal: AbortSignal; dispose: () => void } {
+    const controller = new AbortController();
+    const listeners: Array<() => void> = [];
+    const check = () => {
+      if (candidates.every(candidate => candidate.control.shouldCancel() || candidate.control.signal?.aborted)) controller.abort();
+    };
+    for (const candidate of candidates) {
+      const signal = candidate.control.signal;
+      if (!signal) continue;
+      const listener = () => check();
+      signal.addEventListener('abort', listener);
+      listeners.push(() => signal.removeEventListener('abort', listener));
+    }
+    check();
+    return { signal: controller.signal, dispose: () => listeners.forEach(remove => remove()) };
   }
 
   private statusOf(error: unknown): number | undefined {

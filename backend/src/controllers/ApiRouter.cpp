@@ -1750,12 +1750,10 @@ crow::response ApiRouter::handle_share_file(const crow::request& req, int file_i
 
     try {
         if (gdrive_) {
-            try {
-                auto [provider, ext_id] = file_mgr_->get_file_storage_info(static_cast<uint64_t>(file_id), user_id);
-                if (provider == "google_drive" && !ext_id.empty()) {
-                    gdrive_->make_file_public(user_id, ext_id);
-                }
-            } catch (...) {}
+            auto [provider, ext_id] = file_mgr_->get_file_storage_info(static_cast<uint64_t>(file_id), user_id);
+            if (provider == "google_drive" && !ext_id.empty()) {
+                gdrive_->make_file_public(user_id, ext_id);
+            }
         }
 
         std::string uuid = file_mgr_->share_file(static_cast<uint64_t>(file_id), user_id, encrypted_name_fdk);
@@ -1767,6 +1765,9 @@ crow::response ApiRouter::handle_share_file(const crow::request& req, int file_i
         std::string msg = e.what();
         if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Arquivo nao encontrado"})");
         if (msg == "TOO_MANY_REQUESTS") return crow::response(429, R"({"error":"Muitas alteracoes de compartilhamento. Tente novamente mais tarde."})");
+        if (msg == "GOOGLE_MAKE_PUBLIC_FAILED" || msg == "GOOGLE_TOKEN_REFRESH_FAILED") {
+            return crow::response(502, R"({"error":"Nao foi possivel publicar o arquivo no Google Drive"})");
+        }
         std::cerr << "Exception in handle_share_file: " << msg << std::endl;
         return crow::response(500, R"({"error":"Erro interno"})");
     }
@@ -1795,12 +1796,10 @@ crow::response ApiRouter::handle_revoke_share(const crow::request& req, const st
 
     try {
         if (gdrive_) {
-            try {
-                auto [provider, ext_id] = file_mgr_->get_share_storage_info(uuid, user_id);
-                if (provider == "google_drive" && !ext_id.empty()) {
-                    gdrive_->revoke_file_public(user_id, ext_id);
-                }
-            } catch (...) {}
+            auto [provider, ext_id] = file_mgr_->get_share_storage_info(uuid, user_id);
+            if (provider == "google_drive" && !ext_id.empty()) {
+                gdrive_->revoke_file_public(user_id, ext_id);
+            }
         }
 
         file_mgr_->revoke_share(uuid, user_id);
@@ -1808,6 +1807,9 @@ crow::response ApiRouter::handle_revoke_share(const crow::request& req, const st
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Link nao encontrado ou nao pertence ao utilizador"})");
+        if (msg == "GOOGLE_REVOKE_PUBLIC_FAILED" || msg == "GOOGLE_TOKEN_REFRESH_FAILED") {
+            return crow::response(502, R"({"error":"Nao foi possivel revogar o arquivo publico no Google Drive"})");
+        }
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -1815,10 +1817,20 @@ crow::response ApiRouter::handle_revoke_share(const crow::request& req, const st
 crow::response ApiRouter::handle_get_share_metadata(const crow::request& req, const std::string& uuid) {
     try {
         auto meta = file_mgr_->get_shared_file_metadata(uuid);
+        if (gdrive_) {
+            const auto info = file_mgr_->get_shared_file_info(uuid);
+            if (info.storage_provider == "google_drive" && !info.external_file_id.empty()) {
+                meta["public_download_url"] = gdrive_->get_public_download_url(
+                    info.file_id,
+                    info.external_file_id
+                );
+            }
+        }
         return crow::response(200, meta);
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "NOT_FOUND") return crow::response(404, R"({"error":"Link de compartilhamento expirado ou inexistente"})");
+        if (msg == "GOOGLE_PUBLIC_LINK_FAILED") return crow::response(502, R"({"error":"Nao foi possivel obter o link publico do Google Drive"})");
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }

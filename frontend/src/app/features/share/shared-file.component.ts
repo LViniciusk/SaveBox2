@@ -54,7 +54,8 @@ import { firstValueFrom } from 'rxjs';
           [sizeBytes]="sizeBytes()"
           [isVideo]="isVideo()"
           [isImage]="isImage()"
-          [storageProvider]="metadata()?.storage_provider || 'local'">
+          [storageProvider]="metadata()?.storage_provider || 'local'"
+          [publicDownloadUrl]="metadata()?.public_download_url || null">
         </app-public-media-player>
       }
     </div>

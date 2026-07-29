@@ -22,6 +22,7 @@ export interface UploadProgressUpdate {
 export interface UploadExecutionControl {
   shouldPause(): boolean;
   shouldCancel(): boolean;
+  signal?: AbortSignal;
 }
 
 export interface UploadEngineCallbacks {
@@ -30,6 +31,7 @@ export interface UploadEngineCallbacks {
 
 export interface UploadExecutionResult {
   paused: boolean;
+  cancelled?: boolean;
 }
 
 export interface BatchUploadRequestItem {
@@ -60,7 +62,7 @@ export interface UploadBatchCandidate {
 
 export interface UploadBatchResult {
   transferId: string;
-  status: 'success' | 'paused' | 'error';
+  status: 'success' | 'paused' | 'cancelled' | 'error';
   error?: unknown;
 }
 
@@ -68,7 +70,18 @@ export interface UploadBatchSummary {
   total: number;
   succeeded: number;
   paused: number;
+  cancelled: number;
   failed: number;
+}
+
+export class UploadAbortError extends DOMException {
+  constructor() {
+    super('Upload cancelled', 'AbortError');
+  }
+}
+
+export function throwIfUploadCancelled(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new UploadAbortError();
 }
 
 export interface FolderUploadFile {

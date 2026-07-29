@@ -37,6 +37,7 @@ class GDriveShellStubComponent {
   readonly uploadFolderRequested = output<void>();
   readonly videoSelected = output<any>();
   readonly imageSelected = output<any>();
+  readonly previewRequested = output<any>();
   readonly shareRequested = output<any>();
   readonly pinnedFolderNavigate = output<number>();
   readonly emptyTrashRequested = output<void>();
@@ -73,6 +74,13 @@ class ImagePlayerStubComponent {
   readonly closeVideo = output<void>();
   readonly playVideo = output<any>();
   readonly videoReady = output<void>();
+}
+
+@Component({ selector: 'app-audio-player', standalone: true, template: '' })
+class AudioPlayerStubComponent {
+  readonly file = input.required<any>();
+  readonly close = output<void>();
+  readonly downloadRequested = output<void>();
 }
 
 @Component({ selector: 'app-share-modal', standalone: true, template: '' })
@@ -150,6 +158,7 @@ describe('VaultHomeComponent theme switching', () => {
           UnlockModalStubComponent,
           VideoPlayerStubComponent,
           ImagePlayerStubComponent,
+          AudioPlayerStubComponent,
           ShareModalStubComponent,
         ],
       },

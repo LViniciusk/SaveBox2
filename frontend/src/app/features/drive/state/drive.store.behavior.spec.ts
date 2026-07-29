@@ -167,7 +167,7 @@ describe('DriveStore public behavior', () => {
         status: 'error',
         error: new Error('batch failed'),
       });
-      return Promise.resolve({ total: 1, succeeded: 0, paused: 0, failed: 1 });
+      return Promise.resolve({ total: 1, succeeded: 0, paused: 0, cancelled: 0, failed: 1 });
     });
 
     await (store as any).uploadBatchFiles([{ file: new File(['x'], 'x.txt'), folderId: null }], false);
@@ -186,7 +186,7 @@ describe('DriveStore public behavior', () => {
     const file = new File(['data'], 'photo.png', { type: 'image/png' });
     (store as any).activeUploads.set('upload_batch', {
       transferId: 'upload', file, fileId: 77, folderId: 12, provider: 'local', isHiddenProxy: false,
-      prepared: { encryptedName: 'cipher-name', encryptedFdk: 'cipher-fdk', encryptedSize: 128 },
+      prepared: { encryptedName: 'cipher-name', encryptedFdk: 'cipher-fdk', encryptedSize: 128, thumbnail: 'data:image/webp;base64,thumb' },
     });
 
     (store as any).appendCompletedUploadToTree('upload_batch');
@@ -198,6 +198,7 @@ describe('DriveStore public behavior', () => {
       folderId: 12, decryptedName: 'photo.png', type: 'image', encryptedName: 'cipher-name',
     }));
     expect(store.selectedFileIds()).toEqual(new Set([99]));
+    expect(store.thumbnails()[77]).toBe('data:image/webp;base64,thumb');
     expect(loadTree).toHaveBeenCalledTimes(1);
   });
 
@@ -411,6 +412,22 @@ describe('DriveStore public behavior', () => {
     expect(store.thumbnails()[22]).toContain('data:image');
   });
 
+  it('expands the header range when a large thumbnail does not fit the initial probe', async () => {
+    const kasumi = TestBed.inject(KasumiCryptoService) as jasmine.SpyObj<KasumiCryptoService>;
+    kasumi.extractMetadata.and.returnValues(
+      Promise.reject(new Error('Partial blob is too small to contain the full metadata block')),
+      Promise.resolve({ metadata: JSON.stringify({ thumb: 'data:image/webp;base64,large' }) } as any),
+    );
+    crypto.decryptName.and.resolveTo(btoa('fdk'));
+    drive.downloadFileRange.and.returnValues(of(new Blob(['small'])), of(new Blob(['header-with-thumbnail'])));
+
+    await store.loadThumbnail({ id: 24, encryptedFdk: 'encrypted', storageProvider: 'local', sizeBytes: 2 * 1024 * 1024 } as DriveFile);
+
+    expect(drive.downloadFileRange).toHaveBeenCalledWith(24, 0, 131071);
+    expect(drive.downloadFileRange).toHaveBeenCalledWith(24, 0, 1048575);
+    expect(store.thumbnails()[24]).toContain('large');
+  });
+
   it('retries a 400 response only when it reports an incomplete upload', async () => {
     jasmine.clock().install();
     try {
@@ -446,7 +463,7 @@ describe('DriveStore public behavior', () => {
     store.pauseTransfer('bytes');
     expect(store.transfers()[0].status).toBe('paused');
     await store.cancelTransfer('bytes');
-    expect(store.transfers().some(t => t.id === 'bytes')).toBeFalse();
+    expect(store.transfers().find(t => t.id === 'bytes')?.status).toBe('cancelled');
   });
 
   it('cancels a recovered upload and cleans its incomplete server file', async () => {
@@ -459,6 +476,6 @@ describe('DriveStore public behavior', () => {
 
     expect(drive.trashFile).toHaveBeenCalledWith(9);
     expect(drive.hardDeleteFile).toHaveBeenCalledWith(9);
-    expect(store.transfers()).toEqual([]);
+    expect(store.transfers().find(t => t.id === 'pending_9')?.status).toBe('cancelled');
   });
 });

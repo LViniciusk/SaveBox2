@@ -42,7 +42,7 @@ describe('UploadBatchCoordinatorService', () => {
 
     const summary = await coordinator.upload(candidates, callbacks(results));
 
-    expect(summary).toEqual({ total: 6, succeeded: 6, paused: 0, failed: 0 });
+    expect(summary).toEqual({ total: 6, succeeded: 6, paused: 0, cancelled: 0, failed: 0 });
     expect(drive.batchInitUploads).toHaveBeenCalledTimes(1);
     for (const call of drive.batchInitUploads.calls.allArgs()) {
       expect(call[0].length).toBeLessThanOrEqual(100);
@@ -78,7 +78,7 @@ describe('UploadBatchCoordinatorService', () => {
 
     const summary = await coordinator.upload([item], callbacks(results));
 
-    expect(summary).toEqual({ total: 1, succeeded: 0, paused: 0, failed: 1 });
+    expect(summary).toEqual({ total: 1, succeeded: 0, paused: 0, cancelled: 0, failed: 1 });
     expect(engine.execute).not.toHaveBeenCalled();
     expect(results).toEqual(['file-1.txt:error']);
   });
@@ -96,7 +96,7 @@ describe('UploadBatchCoordinatorService', () => {
 
     const summary = await coordinator.upload([item], callbacks([]));
 
-    expect(summary).toEqual({ total: 1, succeeded: 1, paused: 0, failed: 0 });
+    expect(summary).toEqual({ total: 1, succeeded: 1, paused: 0, cancelled: 0, failed: 0 });
     expect(engine.execute).toHaveBeenCalledWith(
       jasmine.anything(),
       7,
@@ -122,7 +122,7 @@ describe('UploadBatchCoordinatorService', () => {
 
     const summary = await coordinator.upload(candidates, callbacks(results));
 
-    expect(summary).toEqual({ total: 2, succeeded: 0, paused: 1, failed: 1 });
+    expect(summary).toEqual({ total: 2, succeeded: 0, paused: 1, cancelled: 0, failed: 1 });
     expect(results).toEqual(['file-1.txt:paused', 'file-2.txt:error']);
   });
 
@@ -156,7 +156,7 @@ describe('UploadBatchCoordinatorService', () => {
 
     const summary = await coordinator.upload(candidates, callbacks(results));
 
-    expect(summary).toEqual({ total: 2, succeeded: 0, paused: 0, failed: 2 });
+    expect(summary).toEqual({ total: 2, succeeded: 0, paused: 0, cancelled: 0, failed: 2 });
     expect(drive.batchInitUploads).not.toHaveBeenCalled();
     expect(results).toEqual(['file-1.txt:error', 'file-2.txt:error']);
   });
@@ -169,7 +169,7 @@ describe('UploadBatchCoordinatorService', () => {
 
     const summary = await coordinator.upload(candidates, callbacks(results));
 
-    expect(summary).toEqual({ total: 6, succeeded: 0, paused: 0, failed: 6 });
+    expect(summary).toEqual({ total: 6, succeeded: 0, paused: 0, cancelled: 0, failed: 6 });
     expect(drive.batchInitUploads).toHaveBeenCalledTimes(1);
     expect(results).toHaveSize(6);
   });
@@ -188,6 +188,23 @@ describe('UploadBatchCoordinatorService', () => {
     expect(summary.succeeded).toBe(101);
     expect(drive.batchInitUploads.calls.count()).toBe(11);
     expect(drive.batchInitUploads.calls.allArgs().every(([items]) => items.length <= 100)).toBeTrue();
+  });
+
+  it('does not prepare or initialize a candidate cancelled before the window starts', async () => {
+    const item = candidate(1);
+    const controller = new AbortController();
+    controller.abort();
+    item.control = {
+      shouldPause: () => false,
+      shouldCancel: () => controller.signal.aborted,
+      signal: controller.signal,
+    };
+
+    const summary = await coordinator.upload([item], callbacks([]));
+
+    expect(summary).toEqual({ total: 1, succeeded: 0, paused: 0, cancelled: 1, failed: 0 });
+    expect(engine.prepareUpload).not.toHaveBeenCalled();
+    expect(drive.batchInitUploads).not.toHaveBeenCalled();
   });
 
   function candidate(index: number, provider: 'local' | 'google_drive' = 'local'): UploadBatchCandidate {

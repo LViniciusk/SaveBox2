@@ -3,11 +3,12 @@ import { CommonModule } from '@angular/common';
 import { VideoStreamService } from '../../services/video-stream.service';
 import { DriveFile } from '../../state/drive.store';
 import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.component';
+import { ShareModalComponent } from '../share-modal/share-modal.component';
 
 @Component({
   selector: 'app-video-player',
   standalone: true,
-  imports: [CommonModule, FileIconComponent],
+  imports: [CommonModule, FileIconComponent, ShareModalComponent],
   template: `
     <div #playerBackdrop
          class="player-backdrop" 
@@ -33,7 +34,7 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
             @if (isPublicShare()) {
               <span class="file-size-badge">{{ file().sizeFormatted }}</span>
             } @else {
-              <button class="share-btn">
+              <button class="share-btn" (click)="$event.stopPropagation(); isShareOpen.set(true)">
                 <span class="material-symbols-outlined">group</span> Compartilhar
               </button>
             }
@@ -170,8 +171,14 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
                                 (click)="setSpeed(speed)">
                           {{ speed === 1 ? 'Normal' : speed + 'x' }}
                         </button>
-                      }
-                    </div>
+      }
+
+      @if (isShareOpen()) {
+        <div class="player-share-modal" (click)="$event.stopPropagation()">
+          <app-share-modal [file]="file()" (close)="isShareOpen.set(false)" />
+        </div>
+      }
+    </div>
                   }
                   <button class="control-btn" (click)="isSpeedMenuOpen.set(!isSpeedMenuOpen())" title="Configurações / Velocidade">
                     <span class="material-symbols-outlined">settings</span>
@@ -771,6 +778,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
   readonly isSpeedMenuOpen = signal(false);
   readonly centerFlashIcon = signal<string | null>(null);
   readonly videoRenderedWidth = signal<number | null>(null);
+  readonly isShareOpen = signal(false);
 
   private idleTimer: any = null;
   private flashTimeout: any = null;

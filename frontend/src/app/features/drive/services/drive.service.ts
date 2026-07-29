@@ -3,6 +3,7 @@ import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { Observable, firstValueFrom, map } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 import { BatchUploadRequestItem, BatchUploadResponseItem, FolderBatchResponseItem } from '../upload/upload.models';
+import { firstValueFromAbortable } from '../upload/abortable-observable';
 
 export interface QuotaResponse {
   used_bytes: number;
@@ -24,6 +25,7 @@ export interface DriveFileDto {
   size_bytes: number;
   encrypted_fdk: string;
   is_hidden: boolean;
+  mime_type?: string;
 }
 
 export interface TreeResponse {
@@ -199,14 +201,14 @@ export class DriveService {
     );
   }
 
-  async downloadFileInRanges(fileId: number, totalSize: number): Promise<Blob> {
+  async downloadFileInRanges(fileId: number, totalSize: number, signal?: AbortSignal): Promise<Blob> {
     if (totalSize <= 0) throw new Error('Tamanho criptografado desconhecido');
 
     const chunks: Blob[] = [];
     const rangeSize = 4 * 1024 * 1024;
     for (let start = 0; start < totalSize; start += rangeSize) {
       const end = Math.min(start + rangeSize - 1, totalSize - 1);
-      chunks.push(await firstValueFrom(this.downloadFileRange(fileId, start, end)));
+      chunks.push(await firstValueFromAbortable(this.downloadFileRange(fileId, start, end), signal));
     }
     return new Blob(chunks, { type: 'application/octet-stream' });
   }
@@ -236,6 +238,41 @@ export class DriveService {
       },
       responseType: 'blob'
     });
+  }
+
+  downloadPublicFileRange(url: string, start: number, end: number): Observable<Blob> {
+    return this.http.get(url, {
+      headers: new HttpHeaders().set('Range', `bytes=${start}-${end}`),
+      observe: 'response',
+      responseType: 'blob',
+    }).pipe(
+      map(response => {
+        if ((response.status !== 200 && response.status !== 206) || !response.body) {
+          throw new Error('Resposta Range pública inválida');
+        }
+        return response.body;
+      })
+    );
+  }
+
+  async downloadPublicFileInRanges(
+    url: string,
+    totalSize: number,
+    onProgress?: (loaded: number, total: number) => void,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const rangeSize = 4_194_320;
+    if (totalSize <= 0) {
+      return firstValueFromAbortable(this.http.get(url, { responseType: 'blob' }), signal);
+    }
+
+    const chunks: Blob[] = [];
+    for (let start = 0; start < totalSize; start += rangeSize) {
+      const end = Math.min(start + rangeSize - 1, totalSize - 1);
+      chunks.push(await firstValueFromAbortable(this.downloadPublicFileRange(url, start, end), signal));
+      onProgress?.(end + 1, totalSize);
+    }
+    return new Blob(chunks, { type: 'application/octet-stream' });
   }
 
   getLinkedGoogleAccounts(): Observable<any[]> {

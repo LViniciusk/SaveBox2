@@ -44,4 +44,14 @@ describe('FolderUploadCoordinatorService', () => {
     drive.batchCreateFolders.and.returnValue(of({ folders: [{ client_ref: 'wrong', folder_id: 1, created: true }] }));
     await expectAsync(service.prepare([item], null)).toBeRejectedWithError('Resposta de pastas inconsistente');
   });
+
+  it('prepares explicit folder sources with an abort signal', async () => {
+    drive.batchCreateFolders.and.callFake((_root: number | null, items: Array<{ client_ref: string }>) => of({ folders: [
+      { client_ref: items[0].client_ref, folder_id: 42, created: false },
+    ] }));
+    const item = new File(['a'], 'a.txt');
+    const result = await service.prepareSources([{ file: item, relativePath: 'Projeto/a.txt' }], null, new AbortController().signal);
+
+    expect(result).toEqual([{ file: item, folderId: 42 }]);
+  });
 });

@@ -6,6 +6,7 @@ import { KasumiCryptoService } from '../../core/crypto/kasumi-crypto.service';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { VideoStreamService } from '../drive/services/video-stream.service';
+import { DriveService } from '../drive/services/drive.service';
 import { of, throwError } from 'rxjs';
 
 describe('PublicMediaPlayerComponent', () => {
@@ -14,9 +15,11 @@ describe('PublicMediaPlayerComponent', () => {
   let httpMock: HttpTestingController;
   let kasumiSpy: any;
   let shareSpy: any;
+  let driveSpy: any;
 
   beforeEach(async () => {
     shareSpy = jasmine.createSpyObj('ShareService', ['downloadSharedFileRange', 'downloadSharedFile', 'downloadSharedFileInRanges']);
+    driveSpy = jasmine.createSpyObj('DriveService', ['downloadPublicFileRange', 'downloadPublicFileInRanges']);
     kasumiSpy = jasmine.createSpyObj('KasumiCryptoService', ['decryptFile', 'extractMetadata']);
     const videoStreamSpy = jasmine.createSpyObj('VideoStreamService', ['destroyStream']);
 
@@ -27,6 +30,7 @@ describe('PublicMediaPlayerComponent', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: ShareService, useValue: shareSpy },
+        { provide: DriveService, useValue: driveSpy },
         { provide: KasumiCryptoService, useValue: kasumiSpy },
         { provide: VideoStreamService, useValue: videoStreamSpy }
       ]

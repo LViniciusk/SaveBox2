@@ -19,7 +19,7 @@ describe('VideoStreamService', () => {
     cryptoSpy = jasmine.createSpyObj('CryptoService', ['isVaultUnlocked', 'decryptName']);
     const kasumiSpy = jasmine.createSpyObj('KasumiCryptoService', ['extractMetadata']);
     driveSpy = jasmine.createSpyObj('DriveService', [
-      'downloadExternalMetadata', 'downloadExternalFileRange', 'downloadFileRange'
+      'downloadExternalMetadata', 'downloadExternalFileRange', 'downloadPublicFileRange', 'downloadFileRange'
     ]);
     shareSpy = jasmine.createSpyObj('ShareService', ['downloadSharedFileRange']);
 
@@ -181,6 +181,21 @@ describe('VideoStreamService', () => {
       expect(driveSpy.downloadExternalFileRange).toHaveBeenCalledWith(
         'https://drive/file', 'token', 10, 20
       );
+    });
+
+    it('uses the public Google link without sending an access token', async () => {
+      const blob = new Blob(['public']);
+      driveSpy.downloadPublicFileRange.and.returnValue(of(blob));
+
+      const result = await (service as any).fetchRange(
+        1, 10, 20, new AbortController(), 'https://drive/public-link', null, null
+      );
+
+      expect(result).toBe(blob);
+      expect(driveSpy.downloadPublicFileRange).toHaveBeenCalledWith(
+        'https://drive/public-link', 10, 20
+      );
+      expect(driveSpy.downloadExternalFileRange).not.toHaveBeenCalled();
     });
 
     it('fails immediately when the range request is already aborted', async () => {

@@ -240,7 +240,7 @@ export class VideoStreamService {
         for (let i = 0; i < fdkString.length; i++) fdk[i] = fdkString.charCodeAt(i);
       }
 
-      let gdriveUrl: string | null = null;
+      let gdriveUrl: string | null = fileToPlay.publicDownloadUrl ?? null;
       let gdriveToken: string | null = null;
 
       if (!fileToPlay.shareFdk && fileToPlay.storageProvider === 'google_drive') {
@@ -1278,6 +1278,8 @@ export class VideoStreamService {
         ? this.shareService.downloadSharedFileRange(shareUuid, start, end)
         : (gdriveUrl && gdriveToken)
         ? this.driveService.downloadExternalFileRange(gdriveUrl, gdriveToken, start, end)
+        : gdriveUrl
+        ? this.driveService.downloadPublicFileRange(gdriveUrl, start, end)
         : this.driveService.downloadFileRange(fileId, start, end);
 
       request$.pipe(

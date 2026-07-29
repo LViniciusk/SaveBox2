@@ -1,13 +1,15 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { firstValueFrom, Observable } from 'rxjs';
+import { Observable } from 'rxjs';
 import { environment } from '../../../../environments/environment';
+import { firstValueFromAbortable } from '../upload/abortable-observable';
 
 export interface EncryptedFileMetadata {
   encrypted_name: string;
   size_bytes: number;
   storage_provider?: 'local' | 'google_drive';
   external_file_id?: string;
+  public_download_url?: string;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -35,16 +37,17 @@ export class ShareService {
   async downloadSharedFileInRanges(
     shareId: string,
     totalSize: number,
-    onProgress?: (loaded: number, total: number) => void
+    onProgress?: (loaded: number, total: number) => void,
+    signal?: AbortSignal
   ): Promise<Blob> {
     if (totalSize <= 0) {
-      return firstValueFrom(this.downloadSharedFile(shareId));
+      return firstValueFromAbortable(this.downloadSharedFile(shareId), signal);
     }
 
     const chunks: Blob[] = [];
     for (let start = 0; start < totalSize; start += ShareService.MAX_RANGE_SIZE) {
       const end = Math.min(start + ShareService.MAX_RANGE_SIZE - 1, totalSize - 1);
-      chunks.push(await firstValueFrom(this.downloadSharedFileRange(shareId, start, end)));
+      chunks.push(await firstValueFromAbortable(this.downloadSharedFileRange(shareId, start, end), signal));
       onProgress?.(end + 1, totalSize);
     }
 

@@ -5,6 +5,7 @@ import { DriveFile, QuotaState } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
 import { PinnedFoldersSectionComponent } from '../../components/pinned-folders-section/pinned-folders-section.component';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
+import { FilePreviewRequest } from '../../services/file-preview-resolver';
 
 interface BreadcrumbSegment {
   id: number | null;
@@ -81,8 +82,7 @@ interface BreadcrumbSegment {
             [locked]="locked()"
             (createFolderRequested)="createFolderRequested.emit()"
             (uploadFileRequested)="uploadFileRequested.emit()"
-            (videoSelected)="videoSelected.emit($event)"
-            (imageSelected)="imageSelected.emit($event)"
+            (previewRequested)="previewRequested.emit($event)"
             (shareRequested)="shareRequested.emit($event)"
             (emptyTrashRequested)="emptyTrashRequested.emit()"
             (dropStarted)="dropStarted.emit()"
@@ -94,13 +94,13 @@ interface BreadcrumbSegment {
     </div>
   `,
   styles: [`
-    :host { display: block; height: 100vh; color: var(--text-primary); }
-    .default-shell { height: 100%; display: flex; flex-direction: column; background: var(--default-window-bg); font-family: 'Segoe UI', sans-serif; }
-    .explorer-titlebar { height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; background: var(--default-titlebar-bg); border-bottom: 1px solid var(--default-border); }
+    :host { display: block; height: 100vh; height: 100dvh; min-height: 0; color: var(--text-primary); overflow: hidden; }
+    .default-shell { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--default-window-bg); font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+    .explorer-titlebar { height: 40px; flex: 0 0 40px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; background: var(--default-titlebar-bg); border-bottom: 1px solid var(--default-border); }
     .window-title { display: flex; align-items: center; gap: 8px; font-size: 13px; }
     .window-title .material-symbols-outlined { color: var(--default-accent); font-size: 18px; }
     .window-actions { display: flex; gap: 20px; color: var(--default-muted); font-size: 16px; }
-    .explorer-toolbar { min-height: 52px; display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--default-toolbar-bg); border-bottom: 1px solid var(--default-border); }
+    .explorer-toolbar { min-height: 52px; height: 52px; flex: 0 0 52px; box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--default-toolbar-bg); border-bottom: 1px solid var(--default-border); }
     .toolbar-icon, .toolbar-action { border: 1px solid transparent; background: transparent; border-radius: 4px; color: var(--default-muted); min-height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; }
     .toolbar-icon:not(:disabled):hover, .toolbar-action:hover { background: var(--default-hover); border-color: var(--default-border); color: var(--default-text); }
     .toolbar-icon:disabled { opacity: .45; cursor: default; }
@@ -113,8 +113,8 @@ interface BreadcrumbSegment {
     .address-segment.current { color: var(--default-text); cursor: default; }
     .address-separator { color: var(--default-muted); }
     .address-bar input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; }
-    .explorer-body { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; }
-    .explorer-sidebar { width: 220px; flex-shrink: 0; padding: 12px 8px; background: var(--default-sidebar-bg); border-right: 1px solid var(--default-border); overflow-y: auto; }
+    .explorer-body { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+    .explorer-sidebar { width: 220px; flex: 0 0 220px; min-height: 0; box-sizing: border-box; padding: 12px 8px; background: var(--default-sidebar-bg); border-right: 1px solid var(--default-border); overflow: hidden; }
     .sidebar-heading { padding: 8px 12px 5px; color: var(--default-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
     .explorer-nav { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 4px; padding: 8px 12px; background: transparent; color: var(--default-text); text-align: left; font-size: 13px; }
     .explorer-nav:hover, .explorer-nav.active { background: var(--default-hover); }
@@ -149,6 +149,7 @@ export class DefaultShellComponent {
   readonly pinnedFolderNavigate = output<number>();
   readonly videoSelected = output<DriveFile>();
   readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
+  readonly previewRequested = output<FilePreviewRequest>();
   readonly shareRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
   readonly externalDrop = output<DroppedItems>();

@@ -206,6 +206,45 @@ describe('FileListComponent', () => {
     expect(mockDriveStore.navigateTo).toHaveBeenCalledWith(3);
   });
 
+  it('routes audio through the generic preview event without the legacy image event', () => {
+    const audio = { id: 9, isFolder: false, decryptedName: 'song.m4a', type: 'audio', sizeBytes: 1 } as DriveFile;
+    fixture.componentRef.setInput('files', [audio]);
+    fixture.detectChanges();
+    const preview = jasmine.createSpy('preview');
+    const legacy = jasmine.createSpy('legacy');
+    component.previewRequested.subscribe(preview);
+    component.imageSelected.subscribe(legacy);
+
+    component.onFileDblClick(audio, new Event('dblclick'));
+
+    expect(preview).toHaveBeenCalledWith(jasmine.objectContaining({ file: audio }));
+    expect(legacy).not.toHaveBeenCalled();
+  });
+
+  it('routes the context-menu preview through the same generic event as double click', () => {
+    const video = { id: 10, isFolder: false, decryptedName: 'movie.mp4', type: 'video', sizeBytes: 1 } as DriveFile;
+    fixture.componentRef.setInput('files', [video]);
+    fixture.detectChanges();
+    const preview = jasmine.createSpy('preview');
+    component.previewRequested.subscribe(preview);
+
+    component.onPlayOriginal(video, new Event('click'));
+
+    expect(preview).toHaveBeenCalledWith({ file: video, playlist: [video] });
+  });
+
+  it('opens unsupported files through the generic preview event too', () => {
+    const archive = { id: 11, isFolder: false, decryptedName: 'archive.zip', type: 'archive', sizeBytes: 1 } as DriveFile;
+    fixture.componentRef.setInput('files', [archive]);
+    fixture.detectChanges();
+    const preview = jasmine.createSpy('preview');
+    component.previewRequested.subscribe(preview);
+
+    component.onFileDblClick(archive, new Event('dblclick'));
+
+    expect(preview).toHaveBeenCalledWith({ file: archive, playlist: [archive] });
+  });
+
   it('does not expose the virtual parent shortcut in the trash', () => {
     const folder = { id: 7, isFolder: true, parentId: 3, decryptedName: 'Folder', type: 'folder', sizeBytes: 0 } as DriveFile;
     fixture.componentRef.setInput('files', [folder]);
@@ -354,7 +393,7 @@ describe('FileListComponent', () => {
     const unlockedFolder = fixture.nativeElement.querySelector('.folder-card') as HTMLElement;
     expect(unlockedFolder.querySelector('.default-preview-viewport')).not.toBeNull();
     expect(unlockedFolder.querySelector('.folder-art-stage')).toBeNull();
-    expect(unlockedFolder.querySelectorAll('.folder-art-layer')).toHaveSize(1);
+    expect(unlockedFolder.querySelectorAll('.folder-art-layer')).toHaveSize(2);
     expect(unlockedFolder.querySelector('app-default-locked-preview')).toBeNull();
     expect(fixture.nativeElement.querySelector('.image-card app-default-locked-preview')).toBeNull();
     expect(fixture.nativeElement.querySelector('.video-card .file-card-thumbnail')).not.toBeNull();
@@ -365,8 +404,9 @@ describe('FileListComponent', () => {
     document.documentElement.dataset['theme'] = 'default';
     mockDriveStore.displayMode.set('grid');
     const folder = { id: 31, type: 'folder', encryptedName: 'folder', decryptedName: 'Folder', isFolder: true, sizeBytes: 0 } as DriveFile;
-    mockDriveStore.files.set([folder]);
-    mockDriveStore.thumbnails.set({ 31: 'data:image/png;base64,AA==' });
+    const child = { id: 32, type: 'image', encryptedName: 'image', decryptedName: 'image.png', isFolder: false, folderId: 31, sizeBytes: 1 } as DriveFile;
+    mockDriveStore.files.set([folder, child]);
+    mockDriveStore.thumbnails.set({ 32: 'data:image/png;base64,AA==' });
     fixture.componentRef.setInput('files', [folder]);
     fixture.componentRef.setInput('viewMode', 'drive');
     mockAppState.isLocked.set(false);

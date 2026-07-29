@@ -5,6 +5,7 @@ import { DriveWorkspaceComponent } from '../../components/drive-workspace/drive-
 import { DriveFile, QuotaState } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
+import { FilePreviewRequest } from '../../services/file-preview-resolver';
 
 @Component({
   selector: 'app-gdrive-shell',
@@ -30,8 +31,7 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
             [locked]="locked()"
             (createFolderRequested)="createFolderRequested.emit()"
             (uploadFileRequested)="uploadFileRequested.emit()"
-            (videoSelected)="videoSelected.emit($event)"
-            (imageSelected)="imageSelected.emit($event)"
+            (previewRequested)="previewRequested.emit($event)"
             (shareRequested)="shareRequested.emit($event)"
             (emptyTrashRequested)="emptyTrashRequested.emit()"
             (dropStarted)="dropStarted.emit()"
@@ -71,6 +71,7 @@ export class GDriveShellComponent {
   readonly pinnedFolderNavigate = output<number>();
   readonly videoSelected = output<DriveFile>();
   readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
+  readonly previewRequested = output<FilePreviewRequest>();
   readonly shareRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
   readonly externalDrop = output<DroppedItems>();

@@ -50,7 +50,7 @@ import { DriveView } from '../../state/drive.types';
                 @if (isGroupExpanded(group.id)) {
                   <div class="transfer-group-items" [id]="'transfer-group-items-' + group.id" role="region">
                     @for (transfer of visibleGroupTransfers(group); track transfer.id) {
-                      <div class="transfer-group-item" [class.success]="transfer.status === 'success'" [class.error]="transfer.status === 'error'" [class.paused]="transfer.status === 'paused'">
+                      <div class="transfer-group-item" [class.success]="transfer.status === 'success'" [class.error]="transfer.status === 'error'" [class.paused]="transfer.status === 'paused'" [class.cancelled]="transfer.status === 'cancelled' || transfer.status === 'cancelling'">
                         <div class="transfer-group-item-name" [title]="transfer.fileName">{{ transfer.fileName }}</div>
                         <div class="transfer-group-item-status">
                           @if (transfer.status === 'processing') {
@@ -60,6 +60,10 @@ import { DriveView } from '../../state/drive.types';
                             <span>Pausado</span>
                             <button class="transfer-control-btn" (click)="transfer.type === 'upload' ? driveStore.resumeUpload(transfer.id) : driveStore.resumeDownload(transfer.id)" title="Retomar arquivo"><span class="material-symbols-outlined">play_arrow</span></button>
                             <button class="transfer-control-btn cancel" (click)="driveStore.cancelTransfer(transfer.id)" title="Cancelar arquivo"><span class="material-symbols-outlined">close</span></button>
+                          } @else if (transfer.status === 'cancelling') {
+                            <span>Cancelando...</span>
+                          } @else if (transfer.status === 'cancelled') {
+                            <span>Cancelado</span>
                           } @else if (transfer.status === 'success') {
                             <span>Concluído</span>
                           } @else if (transfer.status === 'error') {
@@ -95,7 +99,7 @@ import { DriveView } from '../../state/drive.types';
           <div class="transfers-list">
             @for (t of driveStore.transfers(); track t.id) {
               @if (!t.groupId) {
-              <div class="transfer-card" [class.error]="t.status === 'error'" [class.success]="t.status === 'success'" [class.paused]="t.status === 'paused'">
+              <div class="transfer-card" [class.error]="t.status === 'error'" [class.success]="t.status === 'success'" [class.paused]="t.status === 'paused'" [class.cancelled]="t.status === 'cancelled' || t.status === 'cancelling'">
                 <div class="transfer-icon-area">
                   @if (t.type === 'upload') {
                     <span class="material-symbols-outlined transfer-type-icon upload">upload</span>
@@ -164,6 +168,10 @@ import { DriveView } from '../../state/drive.types';
                     <button class="transfer-control-btn cancel" (click)="driveStore.cancelTransfer(t.id)" title="Cancelar e limpar">
                       <span class="material-symbols-outlined">close</span>
                     </button>
+                  } @else if (t.status === 'cancelling') {
+                    <div class="status-indicator paused"><span>Cancelando...</span></div>
+                  } @else if (t.status === 'cancelled') {
+                    <div class="status-indicator paused"><span>Cancelado</span></div>
                   } @else if (t.status === 'success') {
                     <div class="status-indicator success">
                       <span class="material-symbols-outlined">check_circle</span>
@@ -214,7 +222,7 @@ import { DriveView } from '../../state/drive.types';
             }
             @for (t of visibleMiniTransfers(); track t.id) {
               @if (!t.groupId || isGroupExpanded(t.groupId)) {
-              <div class="mini-transfer-item" [class.success]="t.status === 'success'" [class.error]="t.status === 'error'" [class.paused]="t.status === 'paused'">
+              <div class="mini-transfer-item" [class.success]="t.status === 'success'" [class.error]="t.status === 'error'" [class.paused]="t.status === 'paused'" [class.cancelled]="t.status === 'cancelled' || t.status === 'cancelling'">
                 <div class="mini-transfer-icon-wrapper">
                   @if (t.type === 'upload') {
                     <span class="material-symbols-outlined mini-icon">upload</span>
@@ -228,6 +236,10 @@ import { DriveView } from '../../state/drive.types';
                     <span class="mini-status">
                       @if (t.status === 'processing') {
                         {{ t.progress }}%
+                      } @else if (t.status === 'cancelling') {
+                        Cancelando...
+                      } @else if (t.status === 'cancelled') {
+                        Cancelado
                       } @else if (t.status === 'success') {
                         <span class="material-symbols-outlined success-icon">check_circle</span>
                       } @else if (t.status === 'error') {
@@ -451,7 +463,7 @@ export class TransferPanelComponent {
   }
 
   groupTransfers(group: { transferIds: readonly string[] }): TransferItem[] {
-    const rank: Record<TransferItem['status'], number> = { error: 0, paused: 1, processing: 2, pending: 3, success: 4 };
+    const rank: Record<TransferItem['status'], number> = { error: 0, cancelled: 1, cancelling: 2, paused: 3, processing: 4, pending: 5, success: 6 };
     return group.transferIds
       .map(id => this.transferById().get(id))
       .filter((transfer): transfer is TransferItem => !!transfer)

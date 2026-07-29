@@ -1,6 +1,6 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpEventType } from '@angular/common/http';
-import { firstValueFrom } from 'rxjs';
+import { Subscription } from 'rxjs';
 import { CryptoService } from '../../../core/crypto/crypto.service';
 import { KasumiCryptoService } from '../../../core/crypto/kasumi-crypto.service';
 import { DriveService } from '../services/drive.service';
@@ -10,7 +10,10 @@ import {
   UploadExecutionControl,
   UploadExecutionResult,
   UploadProvider,
+  UploadAbortError,
+  throwIfUploadCancelled,
 } from './upload.models';
+import { firstValueFromAbortable, isUploadAbortError } from './abortable-observable';
 
 const CHUNK_SIZE = 4 * 1024 * 1024;
 
@@ -21,31 +24,42 @@ export class UploadEngineService {
   private readonly kasumi = inject(KasumiCryptoService);
   private readonly http = inject(HttpClient);
 
-  async prepareUpload(file: File): Promise<PreparedUpload> {
-    const encryptedName = await this.cryptoService.encryptName(file.name);
-    const nameHash = await this.cryptoService.hashName(file.name);
+  async prepareUpload(file: File, signal?: AbortSignal): Promise<PreparedUpload> {
     const fdk = new Uint8Array(32);
-    crypto.getRandomValues(fdk);
-    const encryptedFdk = await this.cryptoService.encryptName(
-      btoa(String.fromCharCode(...fdk))
-    );
+    try {
+      throwIfUploadCancelled(signal);
+      const encryptedName = await this.cryptoService.encryptName(file.name);
+      throwIfUploadCancelled(signal);
+      const nameHash = await this.cryptoService.hashName(file.name);
+      throwIfUploadCancelled(signal);
+      crypto.getRandomValues(fdk);
+      const encryptedFdk = await this.cryptoService.encryptName(
+        btoa(String.fromCharCode(...fdk))
+      );
+      throwIfUploadCancelled(signal);
 
-    let metadata: string | undefined;
-    const thumbnail = await generateThumbnail(file);
-    if (thumbnail) metadata = JSON.stringify({ thumb: thumbnail });
+      let metadata: string | undefined;
+      const thumbnail = await generateThumbnail(file, signal);
+      throwIfUploadCancelled(signal);
+      if (thumbnail) metadata = JSON.stringify({ thumb: thumbnail });
 
-    const encryptedBlob = await this.kasumi.encryptFile(file, fdk, undefined, metadata);
-    return {
-      file,
-      encryptedBlob,
-      encryptedName,
-      nameHash,
-      encryptedFdk,
-      fdk,
-      totalChunks: Math.ceil(encryptedBlob.size / CHUNK_SIZE),
-      encryptedSize: encryptedBlob.size,
-      thumbnail: thumbnail ?? undefined,
-    };
+      const encryptedBlob = await this.kasumi.encryptFile(file, fdk, undefined, metadata);
+      throwIfUploadCancelled(signal);
+      return {
+        file,
+        encryptedBlob,
+        encryptedName,
+        nameHash,
+        encryptedFdk,
+        fdk,
+        totalChunks: Math.ceil(encryptedBlob.size / CHUNK_SIZE),
+        encryptedSize: encryptedBlob.size,
+        thumbnail: thumbnail ?? undefined,
+      };
+    } catch (error) {
+      if (signal?.aborted) fdk.fill(0);
+      throw error;
+    }
   }
 
   async execute(
@@ -56,10 +70,18 @@ export class UploadEngineService {
     control: UploadExecutionControl,
     callbacks: UploadEngineCallbacks
   ): Promise<UploadExecutionResult> {
-    if (provider === 'google_drive') {
-      return this.uploadGoogleDrive(prepared, fileId, initRes, control, callbacks);
+    try {
+      if (provider === 'google_drive') {
+        return await this.uploadGoogleDrive(prepared, fileId, initRes, control, callbacks);
+      }
+      return await this.uploadLocal(prepared, fileId, control, callbacks);
+    } catch (error) {
+      if (isUploadAbortError(error) || control.shouldCancel()) {
+        prepared.fdk.fill(0);
+        return { paused: false, cancelled: true };
+      }
+      throw error;
     }
-    return this.uploadLocal(prepared, fileId, control, callbacks);
   }
 
   private async uploadLocal(
@@ -70,20 +92,24 @@ export class UploadEngineService {
   ): Promise<UploadExecutionResult> {
     let uploadedChunks = new Set<number>();
     try {
-      const res = await firstValueFrom(this.driveService.getUploadedChunks(fileId));
+      const res = await firstValueFromAbortable(this.driveService.getUploadedChunks(fileId), control.signal);
       uploadedChunks = new Set(res.uploaded_chunks);
-    } catch {
+    } catch (error) {
       // Fallback: retry every chunk when the progress endpoint is unavailable.
+      if (isUploadAbortError(error)) throw error;
     }
 
     for (let i = 0; i < prepared.totalChunks; i++) {
-      if (control.shouldPause() || control.shouldCancel()) return { paused: true };
+      if (control.shouldCancel()) return { paused: false, cancelled: true };
+      if (control.shouldPause()) return { paused: true };
 
       if (!uploadedChunks.has(i)) {
         const start = i * CHUNK_SIZE;
         const end = Math.min(start + CHUNK_SIZE, prepared.encryptedBlob.size);
-        await firstValueFrom(this.driveService.uploadChunk(fileId, i, prepared.encryptedBlob.slice(start, end)));
+        await firstValueFromAbortable(this.driveService.uploadChunk(fileId, i, prepared.encryptedBlob.slice(start, end)), control.signal);
       }
+
+      if (control.shouldCancel()) return { paused: false, cancelled: true };
 
       const progress = Math.round(((i + 1) / prepared.totalChunks) * 100);
       const transferredBytes = Math.min((i + 1) * CHUNK_SIZE, prepared.encryptedBlob.size);
@@ -100,7 +126,8 @@ export class UploadEngineService {
     control: UploadExecutionControl,
     callbacks: UploadEngineCallbacks
   ): Promise<UploadExecutionResult> {
-    if (control.shouldPause() || control.shouldCancel()) return { paused: true };
+    if (control.shouldCancel()) return { paused: false, cancelled: true };
+    if (control.shouldPause()) return { paused: true };
 
     const metadata = {
       name: initRes.name_hash || 'file',
@@ -112,6 +139,7 @@ export class UploadEngineService {
     const closeDelim = `\r\n--${boundary}--\r\n`;
     const metadataPart = JSON.stringify(metadata);
     const arrayBuffer = await prepared.encryptedBlob.arrayBuffer();
+    throwIfUploadCancelled(control.signal);
     const chunks = [
       new TextEncoder().encode(
         firstDelimiter +
@@ -123,19 +151,36 @@ export class UploadEngineService {
       new Uint8Array(arrayBuffer),
       new TextEncoder().encode(closeDelim)
     ];
-    const bodyUint8 = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
+    let bodyUint8: Uint8Array | null = new Uint8Array(chunks.reduce((size, chunk) => size + chunk.length, 0));
     let offset = 0;
     for (const chunk of chunks) {
+      throwIfUploadCancelled(control.signal);
       bodyUint8.set(chunk, offset);
       offset += chunk.length;
     }
+    const requestBody = new Blob([bodyUint8.buffer as ArrayBuffer]);
+    bodyUint8 = null;
 
     let uploadRes: any;
     try {
       uploadRes = await new Promise<any>((resolve, reject) => {
-        this.http.post<any>(
+        let settled = false;
+        let subscription: Subscription | undefined;
+        const removeAbortListener = () => control.signal?.removeEventListener('abort', onAbort);
+        const finish = (callback: () => void) => {
+          if (settled) return;
+          settled = true;
+          removeAbortListener();
+          callback();
+        };
+        const onAbort = () => {
+          subscription?.unsubscribe();
+          finish(() => reject(new UploadAbortError()));
+        };
+        control.signal?.addEventListener('abort', onAbort, { once: true });
+        subscription = this.http.post<any>(
           'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart',
-          new Blob([bodyUint8]),
+          requestBody,
           {
             headers: {
               'Authorization': `Bearer ${initRes.access_token}`,
@@ -154,37 +199,41 @@ export class UploadEngineService {
                 totalBytes: event.total!,
               });
             } else if (event.type === HttpEventType.Response) {
-              resolve(event.body);
+              finish(() => resolve(event.body));
             }
           },
-          error: reject
+          error: error => finish(() => reject(error))
         });
+        if (control.signal?.aborted) onAbort();
       });
     } catch (error: any) {
+      if (isUploadAbortError(error) || control.shouldCancel()) return { paused: false, cancelled: true };
       if (error?.message === 'PAUSED') return { paused: true };
       throw error;
     }
 
-    if (control.shouldPause() || control.shouldCancel()) return { paused: true };
+    if (control.shouldCancel()) return { paused: false, cancelled: true };
+    if (control.shouldPause()) return { paused: true };
     if (!uploadRes?.id) throw new Error('Google Drive upload failed: ID missing from response');
-    await firstValueFrom(this.driveService.finalizeExternalUpload(fileId, uploadRes.id));
+    await firstValueFromAbortable(this.driveService.finalizeExternalUpload(fileId, uploadRes.id), control.signal);
+    if (control.shouldCancel()) return { paused: false, cancelled: true };
     return { paused: false };
   }
 }
 
 export const THUMBNAIL_MAX_DIMENSION = 1280;
 
-export async function generateThumbnail(file: File): Promise<string | null> {
+export async function generateThumbnail(file: File, signal?: AbortSignal): Promise<string | null> {
   if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) return null;
 
   if (file.type.startsWith('image/')) {
-    return generateImageThumbnail(file);
+    return generateImageThumbnail(file, signal);
   }
 
-  return generateVideoThumbnail(file);
+  return generateVideoThumbnail(file, signal);
 }
 
-async function generateImageThumbnail(file: File): Promise<string | null> {
+async function generateImageThumbnail(file: File, signal?: AbortSignal): Promise<string | null> {
   if (typeof globalThis.createImageBitmap === 'function') {
     try {
       const bitmap = await globalThis.createImageBitmap(file);
@@ -198,24 +247,28 @@ async function generateImageThumbnail(file: File): Promise<string | null> {
     }
   }
 
-  return loadImageElementThumbnail(file);
+  return loadImageElementThumbnail(file, signal);
 }
 
-function loadImageElementThumbnail(file: File): Promise<string | null> {
+function loadImageElementThumbnail(file: File, signal?: AbortSignal): Promise<string | null> {
   return new Promise(resolve => {
     const url = URL.createObjectURL(file);
     const image = document.createElement('img');
     const finish = (value: string | null) => {
       URL.revokeObjectURL(url);
+      signal?.removeEventListener('abort', onAbort);
       resolve(value);
     };
+    const onAbort = () => finish(null);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) return finish(null);
     image.onload = () => finish(renderThumbnail(image, image.naturalWidth || image.width, image.naturalHeight || image.height));
     image.onerror = () => finish(null);
     image.src = url;
   });
 }
 
-function generateVideoThumbnail(file: File): Promise<string | null> {
+function generateVideoThumbnail(file: File, signal?: AbortSignal): Promise<string | null> {
   return new Promise(resolve => {
     const url = URL.createObjectURL(file);
     const video = document.createElement('video');
@@ -224,8 +277,12 @@ function generateVideoThumbnail(file: File): Promise<string | null> {
       if (finished) return;
       finished = true;
       URL.revokeObjectURL(url);
+      signal?.removeEventListener('abort', onAbort);
       resolve(value);
     };
+    const onAbort = () => finish(null);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) return finish(null);
     video.muted = true;
     video.playsInline = true;
     video.preload = 'metadata';

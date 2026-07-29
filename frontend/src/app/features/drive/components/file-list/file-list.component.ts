@@ -6,13 +6,14 @@ import { CommonModule } from '@angular/common';
 import { DialogService } from '../../../../core/dialog/dialog.service';
 import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 import { DefaultLockedPreviewComponent } from '../../../../shared/ui/default-locked-preview/default-locked-preview.component';
+import { FilePreviewRequest, resolveFilePreviewKind } from '../../services/file-preview-resolver';
 
 @Component({
   selector: 'app-file-list',
   standalone: true,
   imports: [FileIconComponent, DefaultLockedPreviewComponent, CommonModule],
   host: {
-    style: 'display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%;'
+    style: 'display: flex; flex-direction: column; flex: 1 1 auto; height: 100%; min-height: 0; min-width: 0; width: 100%; overflow: hidden;'
   },
   template: `
     <div class="file-list-container" (contextmenu)="onContainerContextMenu($event)" (click)="onContainerClick($event)" (mousedown)="onContainerMouseDown($event)">
@@ -42,8 +43,8 @@ import { DefaultLockedPreviewComponent } from '../../../../shared/ui/default-loc
               Excluir permanentemente
             </button>
           } @else {
-            @if (file.type === 'video') {
-              @if (hasProxy(file)) {
+            @if (!file.isFolder) {
+              @if (file.type === 'video' && hasProxy(file)) {
                 <div class="menu-item-wrapper" (mouseenter)="checkSubmenuBounds($event)">
                   <button class="menu-item" style="justify-content: space-between;">
                     <div style="display: flex; align-items: center; gap: 12px;">
@@ -443,11 +444,13 @@ import { DefaultLockedPreviewComponent } from '../../../../shared/ui/default-loc
     `
       .file-list-container {
         width: 100%;
+        height: 100%;
         display: flex;
         flex-direction: column;
-        flex: 1;
-        min-height: 100%;
-        overflow: visible;
+        flex: 1 1 auto;
+        min-height: 0;
+        overflow: hidden;
+        box-sizing: border-box;
         position: relative;
       }
       .selection-box {
@@ -590,9 +593,11 @@ import { DefaultLockedPreviewComponent } from '../../../../shared/ui/default-loc
       }
 
       .file-list-body {
-        flex: 1;
+        flex: 1 1 auto;
+        min-height: 0;
         overflow-y: auto;
-        min-height: 200px;
+        overflow-x: hidden;
+        box-sizing: border-box;
       }
 
       .file-row {
@@ -924,11 +929,18 @@ import { DefaultLockedPreviewComponent } from '../../../../shared/ui/default-loc
 
       /* === GRID VIEW === */
       .grid-layout {
+        flex: 1 1 auto;
+        min-height: 0;
+        height: auto;
         padding: 16px 24px;
         display: flex;
         flex-direction: column;
         gap: 24px;
         overflow-y: auto;
+        overflow-x: hidden;
+        align-content: start;
+        align-items: stretch;
+        box-sizing: border-box;
       }
       .grid-section-title {
         font-size: 14px;
@@ -939,6 +951,9 @@ import { DefaultLockedPreviewComponent } from '../../../../shared/ui/default-loc
       .grid-container {
         display: grid;
         gap: 16px;
+        width: 100%;
+        align-content: start;
+        align-items: start;
       }
       .folders-grid, .files-grid, .mixed-grid {
         grid-template-columns: repeat(auto-fill, minmax(220px, 300px));
@@ -1337,6 +1352,7 @@ export class FileListComponent implements OnInit, OnDestroy {
   @Output() uploadFileRequested = new EventEmitter<void>();
   @Output() videoSelected = new EventEmitter<DriveFile>();
   @Output() imageSelected = new EventEmitter<{ file: DriveFile, playlist: DriveFile[] }>();
+  @Output() previewRequested = new EventEmitter<FilePreviewRequest>();
   @Output() shareRequested = new EventEmitter<DriveFile>();
 
   readonly isLocked = this.appState.isLocked;
@@ -1653,15 +1669,18 @@ export class FileListComponent implements OnInit, OnDestroy {
   }
 
   onPlayOriginal(file: DriveFile, event: Event) {
-    event.stopPropagation();
-    this.closeMenu();
-    this.videoSelected.emit({ ...file, forceOriginal: true });
+    this.openPreview(file, event);
   }
 
   onPlayProxy(file: DriveFile, event: Event) {
+    this.openPreview(file, event);
+  }
+
+  private openPreview(file: DriveFile, event: Event): void {
     event.stopPropagation();
     this.closeMenu();
-    this.videoSelected.emit(file);
+    const playlist = this.sortedFiles().filter(item => !item.isFolder);
+    this.previewRequested.emit({ file, playlist });
   }
 
   hasProxy(file: DriveFile): boolean {
@@ -2085,7 +2104,9 @@ export class FileListComponent implements OnInit, OnDestroy {
       this.driveStore.navigateTo(file.id);
     } else {
       const playlist = this.sortedFiles().filter(f => !f.isFolder);
-      this.imageSelected.emit({ file, playlist });
+      this.previewRequested.emit({ file, playlist });
+      // Compatibility for consumers that still listen to the legacy output.
+      if (resolveFilePreviewKind(file) !== 'audio') this.imageSelected.emit({ file, playlist: [...playlist] });
     }
   }
 

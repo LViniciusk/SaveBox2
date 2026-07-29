@@ -15,6 +15,7 @@ import { DriveView } from '../../state/drive.types';
 import { CommonModule } from '@angular/common';
 import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
+import { FilePreviewRequest } from '../../services/file-preview-resolver';
 
 /**
  * Main vault page — Google Drive clone layout.
@@ -62,8 +63,7 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
         (dropStarted)="onDropStarted()"
         (externalDrop)="onDropped($event)"
         (dropError)="onDropError($event)"
-        (videoSelected)="activeVideoFile.set($event)"
-        (imageSelected)="onImageSelected($event)"
+        (previewRequested)="onPreviewRequested($event)"
         (shareRequested)="onShareRequested($event)"
         (pinnedFolderNavigate)="onPinnedFolderNavigate($event)"
         (emptyTrashRequested)="onEmptyTrash()">
@@ -83,8 +83,7 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
         (dropStarted)="onDropStarted()"
         (externalDrop)="onDropped($event)"
         (dropError)="onDropError($event)"
-        (videoSelected)="activeVideoFile.set($event)"
-        (imageSelected)="onImageSelected($event)"
+        (previewRequested)="onPreviewRequested($event)"
         (shareRequested)="onShareRequested($event)"
         (pinnedFolderNavigate)="onPinnedFolderNavigate($event)"
         (emptyTrashRequested)="onEmptyTrash()">
@@ -386,9 +385,22 @@ export class VaultHomeComponent implements OnInit {
     this.shareFile.set(file);
   }
 
+  onVideoSelected(file: DriveFile): void {
+    this.onPreviewRequested({
+      file,
+      playlist: this.driveStore.files().filter(item => !item.isFolder),
+    });
+  }
+
   onImageSelected(payload: { file: DriveFile, playlist: DriveFile[] }) {
     this.activeImagePlaylist.set(payload.playlist);
+    this.activeVideoFile.set(null);
     this.activeImageFile.set(payload.file);
+  }
+
+  onPreviewRequested(request: FilePreviewRequest): void {
+    const payload = { file: request.file, playlist: [...request.playlist] };
+    this.onImageSelected(payload);
   }
 
   @HostListener('document:contextmenu', ['$event'])

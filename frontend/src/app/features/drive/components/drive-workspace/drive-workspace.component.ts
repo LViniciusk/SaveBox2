@@ -6,6 +6,7 @@ import { DriveView } from '../../state/drive.types';
 import { DriveDropZoneDirective } from '../../directives/drive-drop-zone.directive';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
 import { ThemeService } from '../../../../core/theme/theme.service';
+import { FilePreviewRequest } from '../../services/file-preview-resolver';
 
 @Component({
   selector: 'app-drive-workspace',
@@ -66,7 +67,7 @@ import { ThemeService } from '../../../../core/theme/theme.service';
     }
 
     @if (currentView() === 'trash') {
-      <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" (videoSelected)="videoSelected.emit($event)" (imageSelected)="imageSelected.emit($event)" />
+      <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" (previewRequested)="previewRequested.emit($event)" />
     } @else if (currentView() === 'transfers') {
       <app-transfer-panel [currentView]="currentView()" />
     } @else {
@@ -76,8 +77,7 @@ import { ThemeService } from '../../../../core/theme/theme.service';
         [quota]="driveStore.quota()"
         (createFolderRequested)="createFolderRequested.emit()"
         (uploadFileRequested)="uploadFileRequested.emit()"
-        (videoSelected)="videoSelected.emit($event)"
-        (imageSelected)="imageSelected.emit($event)"
+        (previewRequested)="previewRequested.emit($event)"
         (shareRequested)="shareRequested.emit($event)" />
     }
 
@@ -87,8 +87,8 @@ import { ThemeService } from '../../../../core/theme/theme.service';
     </div>
   `,
   styles: [`
-    :host { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; width: 100%; }
-    .workspace-drop-zone { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; width: 100%; }
+    :host { display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+    .workspace-drop-zone { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
     .workspace-drop-zone > app-transfer-panel {
       display: flex;
       flex: 1 1 auto;
@@ -153,6 +153,7 @@ export class DriveWorkspaceComponent {
   readonly uploadFileRequested = output<void>();
   readonly videoSelected = output<DriveFile>();
   readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
+  readonly previewRequested = output<FilePreviewRequest>();
   readonly shareRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
   readonly externalDrop = output<DroppedItems>();
