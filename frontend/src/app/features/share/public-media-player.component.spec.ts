@@ -130,17 +130,49 @@ describe('PublicMediaPlayerComponent', () => {
     expect(component.thumbnailUrl()).toBeNull();
   });
 
+  it('starts thumbnail loading when initialized with a video', () => {
+    fixture.destroy();
+    Object.assign(component as any, {
+      shareId: () => 'share-1',
+      fdk: () => new Uint8Array([1, 2]),
+      filename: () => 'movie.mp4',
+      sizeBytes: () => 2048,
+      isVideo: () => true,
+      isImage: () => false,
+      storageProvider: () => 'local'
+    });
+    const loadHeaderThumbnail = spyOn(component, 'loadHeaderThumbnail').and.resolveTo();
+
+    component.ngOnInit();
+
+    expect(loadHeaderThumbnail).toHaveBeenCalled();
+    expect(component.publicDriveFile().encryptedName).toBe('movie.mp4');
+  });
+
   it('should retry short thumbnails and finish gracefully on errors', async () => {
-    setInputs({ filename: 'movie.mp4', isVideo: true });
+    fixture.destroy();
+
+    // Exercise the method directly so zoneless input change detection cannot
+    // start a concurrent ngOnInit thumbnail request.
+    Object.assign(component as any, {
+      shareId: () => 'share-1',
+      fdk: () => new Uint8Array([1, 2]),
+      filename: () => 'movie.mp4',
+      sizeBytes: () => 3 * 1024 * 1024,
+      isVideo: () => true,
+      isImage: () => false,
+      storageProvider: () => 'local'
+    });
+
     const header = new Blob(['header']);
-    shareSpy.downloadSharedFileRange.and.returnValues(
-      throwError(() => new Error('too small')),
-      of(header)
+    shareSpy.downloadSharedFileRange.and.callFake((_shareId: string, _start: number, end: number) =>
+      end === 512 * 1024 - 1 ? throwError(() => new Error('too small')) : of(header)
     );
     kasumiSpy.extractMetadata.and.returnValue(Promise.resolve({ metadata: null, dataOffset: 40, expectedSize: 10 }));
     await component.loadHeaderThumbnail();
-    expect(shareSpy.downloadSharedFileRange).toHaveBeenCalledWith('share-1', 0, 512 * 1024 - 1);
-    expect(shareSpy.downloadSharedFileRange).toHaveBeenCalledWith('share-1', 0, 2 * 1024 * 1024 - 1);
+    const ranges = shareSpy.downloadSharedFileRange.calls.allArgs();
+    expect(ranges.some((args: unknown[]) => args[2] === 512 * 1024 - 1)).toBeTrue();
+    expect(ranges.some((args: unknown[]) => args[2] === 2 * 1024 * 1024 - 1)).toBeTrue();
     expect(component.isLoading()).toBeFalse();
 
     shareSpy.downloadSharedFileRange.and.returnValue(throwError(() => new Error('offline')));

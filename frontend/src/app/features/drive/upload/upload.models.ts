@@ -9,6 +9,8 @@ export interface PreparedUpload {
   fdk: Uint8Array;
   totalChunks: number;
   encryptedSize: number;
+  /** Encrypted metadata thumbnail kept client-side for optimistic tree updates. */
+  thumbnail?: string;
 }
 
 export interface UploadProgressUpdate {

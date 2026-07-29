@@ -166,6 +166,22 @@ describe('DriveService', () => {
     req.flush(new Blob());
   });
 
+  it('should download a preview using sequential Range requests', async () => {
+    const promise = service.downloadFileInRanges(100, 4 * 1024 * 1024 + 1);
+    await Promise.resolve();
+
+    const first = httpMock.expectOne(`${environment.apiUrl}/files/100/download`);
+    expect(first.request.headers.get('Range')).toBe('bytes=0-4194303');
+    first.flush(new Blob(['first']));
+    await Promise.resolve();
+
+    const second = httpMock.expectOne(`${environment.apiUrl}/files/100/download`);
+    expect(second.request.headers.get('Range')).toBe('bytes=4194304-4194304');
+    second.flush(new Blob(['second']));
+
+    expect((await promise).size).toBe(11);
+  });
+
   it('should trash file', () => {
     service.trashFile(100).subscribe();
     const req = httpMock.expectOne(`${environment.apiUrl}/files/100`);

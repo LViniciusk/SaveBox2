@@ -649,8 +649,11 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
   async loadHeaderThumbnail() {
     this.isLoading.set(true);
     this.error.set(null);
+    const knownSize = this.sizeBytes() || this.publicDriveFile().sizeBytes;
+    const maxHeaderFetchSize = knownSize > 0 ? Math.min(2 * 1024 * 1024, knownSize) : 2 * 1024 * 1024;
 
-    const tryFetchSize = async (sizeBytes: number): Promise<boolean> => {
+    const tryFetchSize = async (requestedSize: number): Promise<boolean> => {
+      const sizeBytes = Math.max(1, Math.min(requestedSize, maxHeaderFetchSize));
       try {
         const headerBlob = await import('rxjs').then(m => m.firstValueFrom(
           this.shareService.downloadSharedFileRange(this.shareId(), 0, sizeBytes - 1)
@@ -672,8 +675,8 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
         }
         return true;
       } catch (e: any) {
-        if (e?.message?.includes('too small') && sizeBytes < 2 * 1024 * 1024) {
-          return await tryFetchSize(2 * 1024 * 1024);
+        if (e?.message?.includes('too small') && sizeBytes < maxHeaderFetchSize) {
+          return await tryFetchSize(maxHeaderFetchSize);
         }
         console.warn('[PublicMediaPlayer] Erro ao extrair miniatura do cabecalho Kasumi', e);
         return false;

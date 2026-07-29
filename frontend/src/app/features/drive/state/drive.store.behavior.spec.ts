@@ -1,8 +1,9 @@
 import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { of, Subject, throwError } from 'rxjs';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpErrorResponse } from '@angular/common/http';
 import { DriveFile, DriveStore } from './drive.store';
 import { DriveService } from '../services/drive.service';
 import { CryptoService } from '../../../core/crypto/crypto.service';
@@ -10,6 +11,8 @@ import { KasumiCryptoService } from '../../../core/crypto/kasumi-crypto.service'
 import { DialogService } from '../../../core/dialog/dialog.service';
 import { VideoTranscoderService } from '../services/video-transcoder.service';
 import { AppStateService, AppStatus } from '../../../core/state/app-state.service';
+import { UploadBatchCoordinatorService } from '../upload/upload-batch-coordinator.service';
+import { UploadEngineService } from '../upload/upload-engine.service';
 
 describe('DriveStore public behavior', () => {
   let store: DriveStore;
@@ -125,6 +128,77 @@ describe('DriveStore public behavior', () => {
     expect(store.transfers().filter(t => t.isRecovery).map(t => [t.id, t.progress])).toEqual([
       ['pending_5', 50], ['pending_4', 0],
     ]);
+  });
+
+  it('clears recovery transfers when the pending upload list is empty', async () => {
+    store.transfers.set([{ id: 'stale', fileName: 'stale', type: 'upload', status: 'paused', progress: 20, isRecovery: true, timestamp: new Date() }]);
+    crypto.decryptName.and.resolveTo('');
+    drive.getPendingUploads.and.returnValue(of({ pending_uploads: [
+      { id: 6, encrypted_name: 'unknown', total_chunks: 1, uploaded_chunks_count: 0 },
+    ] }));
+
+    await store.loadPendingUploads();
+    expect(store.transfers()[0].fileName).toBe('Arquivo Desconhecido');
+
+    drive.getPendingUploads.and.returnValue(of({} as any));
+    await store.loadPendingUploads();
+
+    expect(store.transfers()).toEqual([]);
+  });
+
+  it('serializes pending upload synchronization and preserves the rejection', async () => {
+    const loadPendingUploads = spyOn(store, 'loadPendingUploads').and.resolveTo();
+
+    await (store as any).syncPendingUploads();
+    expect(loadPendingUploads).toHaveBeenCalledTimes(1);
+
+    loadPendingUploads.and.rejectWith(new Error('offline'));
+    await expectAsync((store as any).syncPendingUploads()).toBeRejectedWithError('offline');
+    await (store as any).syncPendingUploads().catch(() => undefined);
+    expect(loadPendingUploads).toHaveBeenCalledTimes(3);
+  });
+
+  it('reconciles pending uploads after batch and single-upload failures', async () => {
+    const coordinator = TestBed.inject(UploadBatchCoordinatorService);
+    const loadPendingUploads = spyOn(store, 'loadPendingUploads').and.resolveTo();
+    spyOn(coordinator, 'upload').and.callFake((candidates, callbacks) => {
+      callbacks.onResult({
+        transferId: candidates[0].transferId,
+        status: 'error',
+        error: new Error('batch failed'),
+      });
+      return Promise.resolve({ total: 1, succeeded: 0, paused: 0, failed: 1 });
+    });
+
+    await (store as any).uploadBatchFiles([{ file: new File(['x'], 'x.txt'), folderId: null }], false);
+    await Promise.resolve();
+
+    const uploadEngine = TestBed.inject(UploadEngineService);
+    spyOn(uploadEngine, 'prepareUpload').and.rejectWith(new Error('single failed'));
+    await expectAsync((store as any)._uploadSingleFile(new File(['x'], 'x.txt'), null, false, 'single', false))
+      .toBeRejectedWithError('single failed');
+    expect(loadPendingUploads).toHaveBeenCalledTimes(2);
+  });
+
+  it('appends a completed upload once without changing the current selection', async () => {
+    const loadTree = spyOn(store, 'loadTree').and.resolveTo();
+    store.selectedFileIds.set(new Set([99]));
+    const file = new File(['data'], 'photo.png', { type: 'image/png' });
+    (store as any).activeUploads.set('upload_batch', {
+      transferId: 'upload', file, fileId: 77, folderId: 12, provider: 'local', isHiddenProxy: false,
+      prepared: { encryptedName: 'cipher-name', encryptedFdk: 'cipher-fdk', encryptedSize: 128 },
+    });
+
+    (store as any).appendCompletedUploadToTree('upload_batch');
+    (store as any).appendCompletedUploadToTree('upload_batch');
+    await (store as any).flushTreeReconciliation();
+
+    expect(store.files().filter(file => file.id === 77)).toHaveSize(1);
+    expect(store.files().find(file => file.id === 77)).toEqual(jasmine.objectContaining({
+      folderId: 12, decryptedName: 'photo.png', type: 'image', encryptedName: 'cipher-name',
+    }));
+    expect(store.selectedFileIds()).toEqual(new Set([99]));
+    expect(loadTree).toHaveBeenCalledTimes(1);
   });
 
   it('rejects encryption operations while locked and clears sensitive derived state', async () => {
@@ -316,6 +390,48 @@ describe('DriveStore public behavior', () => {
     expect(drive.downloadFileRange).toHaveBeenCalledTimes(1);
     await store.loadThumbnail({ id: 2, encryptedFdk: null } as any);
     expect(store.thumbnails()[2]).toBeUndefined();
+  });
+
+  it('coalesces thumbnail loads and clamps the requested range to the known size', async () => {
+    const response = new Subject<Blob>();
+    const kasumi = TestBed.inject(KasumiCryptoService) as jasmine.SpyObj<KasumiCryptoService>;
+    kasumi.extractMetadata.and.resolveTo({ metadata: JSON.stringify({ thumb: 'data:image/png;base64,thumb' }) } as any);
+    crypto.decryptName.and.resolveTo(btoa('fdk'));
+    drive.downloadFileRange.and.returnValue(response.asObservable());
+    const file = { id: 22, encryptedFdk: 'encrypted', storageProvider: 'local', sizeBytes: 3 } as DriveFile;
+
+    const first = store.loadThumbnail(file);
+    const second = store.loadThumbnail(file);
+    await Promise.resolve();
+    expect(drive.downloadFileRange).toHaveBeenCalledTimes(1);
+    expect(drive.downloadFileRange).toHaveBeenCalledWith(22, 0, 2);
+    response.next(new Blob(['abc']));
+    response.complete();
+    await Promise.all([first, second]);
+    expect(store.thumbnails()[22]).toContain('data:image');
+  });
+
+  it('retries a 400 response only when it reports an incomplete upload', async () => {
+    jasmine.clock().install();
+    try {
+      const kasumi = TestBed.inject(KasumiCryptoService) as jasmine.SpyObj<KasumiCryptoService>;
+      kasumi.extractMetadata.and.resolveTo({ metadata: JSON.stringify({ thumb: 'data:image/png;base64,thumb' }) } as any);
+      crypto.decryptName.and.resolveTo(btoa('fdk'));
+      drive.downloadFileRange.and.returnValues(
+        throwError(() => new HttpErrorResponse({ status: 400, error: 'upload incomplete' })),
+        of(new Blob(['abc']))
+      );
+      const file = { id: 23, encryptedFdk: 'encrypted', storageProvider: 'local', sizeBytes: 3 } as DriveFile;
+
+      await store.loadThumbnail(file);
+      expect(drive.downloadFileRange).toHaveBeenCalledTimes(1);
+      jasmine.clock().tick(300);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(drive.downloadFileRange).toHaveBeenCalledTimes(2);
+    } finally {
+      jasmine.clock().uninstall();
+    }
   });
 
   it('covers transfer speed units and pause/cancel cleanup', async () => {

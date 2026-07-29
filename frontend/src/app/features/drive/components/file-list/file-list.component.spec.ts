@@ -286,7 +286,7 @@ describe('FileListComponent', () => {
     const folder = fixture.nativeElement.querySelector('.folder-card') as HTMLElement;
     const video = fixture.nativeElement.querySelector('.video-card') as HTMLElement;
     const image = fixture.nativeElement.querySelector('.image-card') as HTMLElement;
-    expect(folder.querySelector('.default-folder-visual')).not.toBeNull();
+    expect(folder.querySelector('.default-preview-viewport.folder-preview-viewport')).not.toBeNull();
     expect(video.querySelector('.file-card-thumbnail')?.getAttribute('style')).toContain('data:image/png');
     expect(image.querySelector('.thumbnail-icon')).not.toBeNull();
     expect(fixture.nativeElement.textContent).toContain('Projetos');
@@ -314,6 +314,91 @@ describe('FileListComponent', () => {
     expect(cards[0].querySelector('.default-folder-preview-image')?.getAttribute('src')).toContain('data:image/png');
     expect(cards[1].querySelector('.default-folder-preview')).toBeNull();
     expect(mockDriveStore.loadThumbnail).toHaveBeenCalledWith(child);
+  });
+
+  it('uses one locked preview for every Default grid item and restores type renderers when unlocked', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    mockDriveStore.displayMode.set('grid');
+    const files = [
+      { id: 11, type: 'folder', encryptedName: 'encrypted-folder-name', decryptedName: 'Segredo', isFolder: true, sizeBytes: 0 },
+      { id: 12, type: 'image', encryptedName: 'encrypted-image', decryptedName: 'foto.png', isFolder: false, sizeBytes: 1 },
+      { id: 13, type: 'video', encryptedName: 'encrypted-video', decryptedName: 'video.mp4', isFolder: false, sizeBytes: 1 },
+      { id: 14, type: 'doc', encryptedName: 'encrypted-doc', decryptedName: 'arquivo.txt', isFolder: false, sizeBytes: 1 },
+    ] as DriveFile[];
+    mockDriveStore.files.set(files);
+    mockDriveStore.thumbnails.set({ 12: 'data:image/png;base64,AA==' });
+    fixture.componentRef.setInput('files', files);
+    fixture.componentRef.setInput('viewMode', 'drive');
+
+    mockAppState.isLocked.set(true);
+    fixture.detectChanges();
+    const lockedCards = [...fixture.nativeElement.querySelectorAll('.grid-card')] as HTMLElement[];
+    expect(lockedCards.length).toBe(4);
+    lockedCards.forEach(card => {
+      expect(card.querySelector('app-default-locked-preview')).not.toBeNull();
+      expect(card.querySelectorAll('.default-preview-viewport').length).toBe(1);
+      expect(card.querySelector('.folder-art-stage')).toBeNull();
+      expect(card.querySelector('.folder-thumbnail')).toBeNull();
+      expect(card.querySelector('.file-card-thumbnail .thumbnail-icon')).toBeNull();
+      expect(card.querySelector('app-file-icon')).toBeNull();
+    });
+
+    const lockedStructure = lockedCards.map(card => card.querySelector('.default-preview-viewport')?.outerHTML);
+    mockDriveStore.selectedFileIds.set(new Set([files[0].id]));
+    fixture.detectChanges();
+    expect(lockedCards[0].classList.contains('selected')).toBeTrue();
+    expect(lockedCards.map(card => card.querySelector('.default-preview-viewport')?.outerHTML)).toEqual(lockedStructure);
+
+    mockAppState.isLocked.set(false);
+    fixture.detectChanges();
+    const unlockedFolder = fixture.nativeElement.querySelector('.folder-card') as HTMLElement;
+    expect(unlockedFolder.querySelector('.default-preview-viewport')).not.toBeNull();
+    expect(unlockedFolder.querySelector('.folder-art-stage')).toBeNull();
+    expect(unlockedFolder.querySelectorAll('.folder-art-layer')).toHaveSize(1);
+    expect(unlockedFolder.querySelector('app-default-locked-preview')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.image-card app-default-locked-preview')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.video-card .file-card-thumbnail')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.file-card:not(.mixed-folder-card) .thumbnail-icon')).not.toBeNull();
+  });
+
+  it('keeps the folder thumbnail in the viewport instead of the scaled art layer', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    mockDriveStore.displayMode.set('grid');
+    const folder = { id: 31, type: 'folder', encryptedName: 'folder', decryptedName: 'Folder', isFolder: true, sizeBytes: 0 } as DriveFile;
+    mockDriveStore.files.set([folder]);
+    mockDriveStore.thumbnails.set({ 31: 'data:image/png;base64,AA==' });
+    fixture.componentRef.setInput('files', [folder]);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    mockAppState.isLocked.set(false);
+    fixture.detectChanges();
+
+    const viewport = fixture.nativeElement.querySelector('.folder-preview-viewport') as HTMLElement;
+    const thumbnail = viewport.querySelector('.folder-thumbnail') as HTMLElement;
+    expect(thumbnail).not.toBeNull();
+    expect(thumbnail.parentElement).toBe(viewport);
+    expect(thumbnail.closest('.folder-art-stage')).toBeNull();
+    expect(viewport.querySelector('.folder-back')?.classList.contains('folder-art-layer')).toBeTrue();
+    expect(viewport.querySelector('.folder-front')?.classList.contains('folder-art-layer')).toBeTrue();
+    expect(viewport.querySelectorAll('.folder-thumbnail')).toHaveSize(1);
+  });
+
+  it('preserves the GDrive locked grid renderer', () => {
+    document.documentElement.dataset['theme'] = 'gdrive';
+    mockDriveStore.displayMode.set('grid');
+    const files = [
+      { id: 21, type: 'folder', encryptedName: 'folder', isFolder: true, sizeBytes: 0 },
+      { id: 22, type: 'image', encryptedName: 'image', isFolder: false, sizeBytes: 1 },
+    ] as DriveFile[];
+    mockDriveStore.files.set(files);
+    fixture.componentRef.setInput('files', files);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    mockAppState.isLocked.set(true);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.grid-layout[data-renderer="gdrive"]')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('app-default-locked-preview')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.folder-card app-file-icon')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.file-card-thumbnail app-file-icon')).not.toBeNull();
   });
 
   it('uses the dark context-menu variant only for the Default theme', () => {

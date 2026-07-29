@@ -3,7 +3,7 @@ import { DriveService } from '../services/drive.service';
 import { CryptoService } from '../../../core/crypto/crypto.service';
 import { firstValueFrom, Subscription } from 'rxjs';
 import { KasumiCryptoService } from '../../../core/crypto/kasumi-crypto.service';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { DialogService } from '../../../core/dialog/dialog.service';
 import { VideoTranscoderService } from '../services/video-transcoder.service';
 import { environment } from '../../../../environments/environment';
@@ -19,6 +19,7 @@ export interface TransferItem {
   fileName: string;
   type: 'upload' | 'download';
   status: 'pending' | 'processing' | 'paused' | 'success' | 'error';
+  phase?: 'queued' | 'encrypting' | 'initializing' | 'uploading' | 'finalizing' | 'recovering';
   statusMessage?: string;
   progress: number;
   errorMsg?: string;
@@ -214,6 +215,15 @@ export class DriveStore {
 
   private pausedTransfers = new Set<string>();
   private cancelledTransfers = new Set<string>();
+  private pendingUploadsSync = Promise.resolve();
+  private treeReconciliationTimer: ReturnType<typeof setTimeout> | null = null;
+  private treeReconciliationInFlight = false;
+  private treeReconciliationPromise: Promise<void> | null = null;
+  private treeReconciliationRequested = false;
+  private treeReconciliationSuccesses = 0;
+  private thumbnailLoadsInFlight = new Map<number, Promise<void>>();
+  private thumbnailRetryCounts = new Map<number, number>();
+  private thumbnailPermanentFailures = new Set<number>();
 
   readonly currentTrashFolderFiles = computed(() => {
     const currentId = this.currentFolderId();
@@ -478,6 +488,10 @@ export class DriveStore {
       }
 
       this.files.set(parsedFiles);
+      const currentIds = new Set(parsedFiles.map(file => file.id));
+      for (const id of this.thumbnailLoadsInFlight.keys()) if (!currentIds.has(id)) this.thumbnailLoadsInFlight.delete(id);
+      for (const id of this.thumbnailRetryCounts.keys()) if (!currentIds.has(id)) this.thumbnailRetryCounts.delete(id);
+      for (const id of this.thumbnailPermanentFailures) if (!currentIds.has(id)) this.thumbnailPermanentFailures.delete(id);
       await this.loadPendingUploads();
     } catch (e) {
       console.error('Failed to load tree', e);
@@ -489,29 +503,112 @@ export class DriveStore {
   async loadPendingUploads(): Promise<void> {
     try {
       const res = await firstValueFrom(this.driveService.getPendingUploads());
-      if (res.pending_uploads && res.pending_uploads.length > 0) {
-        // Remove existing recovery items to avoid duplicates
-        this.transfers.update(list => list.filter(t => !t.isRecovery));
-        
-        for (const pending of res.pending_uploads) {
-          const id = `pending_${pending.id}`;
-          const decryptedName = await this.cryptoService.decryptName(pending.encrypted_name);
-          const percent = pending.total_chunks > 0 ? Math.round((pending.uploaded_chunks_count / pending.total_chunks) * 100) : 0;
-          
-          this.addTransfer({
-            id,
-            fileName: decryptedName || 'Arquivo Desconhecido',
-            type: 'upload',
-            status: 'paused',
-            statusMessage: 'Aguardando arquivo original...',
-            progress: percent,
-            isRecovery: true,
-            pendingData: pending
-          });
-        }
+      this.transfers.update(list => list.filter(t => !t.isRecovery));
+
+      for (const pending of res.pending_uploads ?? []) {
+        const id = `pending_${pending.id}`;
+        const decryptedName = await this.cryptoService.decryptName(pending.encrypted_name);
+        const percent = pending.total_chunks > 0 ? Math.round((pending.uploaded_chunks_count / pending.total_chunks) * 100) : 0;
+
+        this.addTransfer({
+          id,
+          fileName: decryptedName || 'Arquivo Desconhecido',
+          type: 'upload',
+          status: 'paused',
+          statusMessage: 'Aguardando arquivo original...',
+          progress: percent,
+          isRecovery: true,
+          pendingData: pending
+        });
       }
     } catch (e) {
       console.error('Failed to load pending uploads', e);
+    }
+  }
+
+  private syncPendingUploads(): Promise<void> {
+    const next = this.pendingUploadsSync.then(() => this.loadPendingUploads());
+    this.pendingUploadsSync = next.then(() => undefined, () => undefined);
+    return next;
+  }
+
+  private fileTypeFromName(name: string): string {
+    const lower = name.toLowerCase();
+    if (lower.endsWith('.pdf')) return 'pdf';
+    if (/\.(jpg|jpeg|png|gif|webp)$/i.test(lower)) return 'image';
+    if (/\.(doc|docx)$/i.test(lower)) return 'doc';
+    if (/\.(xls|xlsx)$/i.test(lower)) return 'spreadsheet';
+    if (/\.(mp4|webm|mkv|avi|mov)$/i.test(lower)) return 'video';
+    if (/\.(mp3|wav|ogg|aac|flac)$/i.test(lower)) return 'audio';
+    return 'unknown';
+  }
+
+  private appendCompletedUploadToTree(uploadId: string): void {
+    const upload = this.activeUploads.get(uploadId);
+    if (!upload || upload.isHiddenProxy) return;
+    const { file, prepared } = upload;
+    this.files.update(files => {
+      if (files.some(existing => existing.id === upload.fileId)) return files;
+      return [...files, {
+        id: upload.fileId,
+        isFolder: false,
+        encryptedName: prepared.encryptedName,
+        decryptedName: this.cryptoService.isVaultUnlocked() ? file.name : null,
+        type: this.fileTypeFromName(file.name),
+        sizeBytes: prepared.encryptedSize,
+        sizeFormatted: this.formatSize(prepared.encryptedSize),
+        modifiedAt: '—',
+        owner: 'eu',
+        encryptedFdk: prepared.encryptedFdk,
+        storageProvider: upload.provider,
+        folderId: upload.folderId,
+        isHidden: false
+      }];
+    });
+    if (prepared.thumbnail) {
+      this.thumbnails.update(thumbnails => ({ ...thumbnails, [upload.fileId]: prepared.thumbnail! }));
+    }
+    this.thumbnailRetryCounts.delete(upload.fileId);
+    this.thumbnailPermanentFailures.delete(upload.fileId);
+    this.scheduleTreeReconciliation();
+  }
+
+  private scheduleTreeReconciliation(): void {
+    this.treeReconciliationRequested = true;
+    this.treeReconciliationSuccesses++;
+    if (this.treeReconciliationSuccesses >= 25) {
+      void this.flushTreeReconciliation();
+      return;
+    }
+    if (this.treeReconciliationTimer === null) {
+      this.treeReconciliationTimer = setTimeout(() => {
+        this.treeReconciliationTimer = null;
+        void this.flushTreeReconciliation();
+      }, 2500);
+    }
+  }
+
+  private async flushTreeReconciliation(): Promise<void> {
+    if (this.treeReconciliationTimer !== null) {
+      clearTimeout(this.treeReconciliationTimer);
+      this.treeReconciliationTimer = null;
+    }
+    if (this.treeReconciliationInFlight) {
+      await this.treeReconciliationPromise;
+      return;
+    }
+    if (!this.treeReconciliationRequested) return;
+
+    this.treeReconciliationRequested = false;
+    this.treeReconciliationSuccesses = 0;
+    this.treeReconciliationInFlight = true;
+    this.treeReconciliationPromise = this.loadTree();
+    try {
+      await this.treeReconciliationPromise;
+    } finally {
+      this.treeReconciliationInFlight = false;
+      this.treeReconciliationPromise = null;
+      if (this.treeReconciliationRequested) this.scheduleTreeReconciliation();
     }
   }
 
@@ -860,7 +957,7 @@ export class DriveStore {
       await Promise.all(individualVideoFiles.map(item => this.uploadFile(item.file, item.folderId, false, groupId, transferIdByFile.get(item.file))));
       if (batchFiles.length > 0) await this.uploadBatchFiles(batchFiles.map(item => ({ ...item, groupId, transferId: transferIdByFile.get(item.file) })), false);
     } finally {
-      await this.loadTree();
+      await this.flushTreeReconciliation();
       await this.loadQuota();
     }
   }
@@ -877,8 +974,9 @@ export class DriveStore {
         id: transferId,
         fileName: file.name,
         type: 'upload',
-        status: 'processing',
-        statusMessage: 'Preparando...',
+        status: 'pending',
+        phase: 'queued',
+        statusMessage: 'Aguardando na fila...',
         progress: 0,
         groupId: item.groupId,
       });
@@ -896,6 +994,11 @@ export class DriveStore {
 
     const summary = await this.uploadBatchCoordinator.upload(candidates, {
       onInitialized: (candidate, prepared, response) => {
+        this.updateTransfer(candidate.transferId, {
+          status: 'processing',
+          phase: 'uploading',
+          statusMessage: 'Enviando...'
+        });
         this.activeUploads.set(candidate.transferId + '_batch', {
           transferId: candidate.transferId,
           file: candidate.file,
@@ -911,20 +1014,22 @@ export class DriveStore {
         this.updateTransferProgress(candidate.transferId, progress, transferredBytes, totalBytes),
       onResult: result => {
         if (result.status === 'success') {
+          this.appendCompletedUploadToTree(result.transferId + '_batch');
           this.activeUploads.delete(result.transferId + '_batch');
-          this.updateTransfer(result.transferId, { status: 'success', progress: 100, statusMessage: 'Concluído!' });
+          this.updateTransfer(result.transferId, { status: 'success', phase: undefined, progress: 100, statusMessage: 'Concluído!' });
         } else if (result.status === 'paused') {
-          this.updateTransfer(result.transferId, { status: 'paused' });
+          this.updateTransfer(result.transferId, { status: 'paused', phase: undefined });
         } else {
           const error = result.error as { message?: string } | undefined;
-          this.updateTransfer(result.transferId, { status: 'error', errorMsg: error?.message || 'Falha no upload' });
+          this.updateTransfer(result.transferId, { status: 'error', phase: undefined, errorMsg: error?.message || 'Falha no upload' });
+          void this.syncPendingUploads();
         }
       }
     });
 
-    if (refresh && summary.succeeded > 0) {
-      await this.loadTree();
-      await this.loadQuota();
+    if (summary.succeeded > 0) {
+      await this.flushTreeReconciliation();
+      if (refresh) await this.loadQuota();
     }
     return summary;
   }
@@ -944,6 +1049,7 @@ export class DriveStore {
       this.updateTransfer(activeTransferId, {
         fileName: originalFile.name,
         status: 'processing',
+        phase: 'initializing',
         statusMessage: 'Preparando...',
         progress: 0,
         groupId,
@@ -954,6 +1060,7 @@ export class DriveStore {
         fileName: originalFile.name,
         type: 'upload',
         status: 'processing',
+        phase: 'initializing',
         statusMessage: 'Preparando...',
         progress: 0,
         groupId,
@@ -992,6 +1099,7 @@ export class DriveStore {
     
     this.updateTransfer(transferId, {
       status: 'processing',
+      phase: 'encrypting',
       statusMessage: isHiddenProxy ? 'Enviando versão otimizada...' : 'Enviando original...',
       progress: 0
     });
@@ -1029,8 +1137,9 @@ export class DriveStore {
       await this.runUploadLoop(uploadId, transferId, fileId, prepared, activeProvider, initRes, isHiddenProxy, refresh);
     } catch (e: any) {
       if (e?.message !== 'PAUSED') {
-        this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no upload' });
+        this.updateTransfer(transferId, { status: 'error', phase: undefined, errorMsg: e?.message || 'Falha no upload' });
         this.activeUploads.delete(uploadId);
+        await this.syncPendingUploads();
       }
       throw e;
     }
@@ -1062,21 +1171,22 @@ export class DriveStore {
     );
 
     if (result.paused) {
-      this.updateTransfer(transferId, { status: 'paused' });
+      this.updateTransfer(transferId, { status: 'paused', phase: undefined });
       return;
     }
     
     // Deleta do activeUploads e apenas marca concluído na UI se não for um proxy escondido ou se for o único arquivo
+    this.appendCompletedUploadToTree(uploadId);
     this.activeUploads.delete(uploadId);
     
     // Se isHiddenProxy é true, apenas removemos e não atualizamos a UI (o arquivo principal vai atualizar a UI quando acabar)
     // Contudo, se só havia o proxy (ex: erro no principal), a UI ficaria travada. Mas o fluxo atual não permite isso.
     if (!isHiddenProxy) {
-      this.updateTransfer(transferId, { status: 'success', progress: 100, statusMessage: 'Concluído!' });
+      this.updateTransfer(transferId, { status: 'success', phase: undefined, progress: 100, statusMessage: 'Concluído!' });
     }
     
     if (refresh) {
-      await this.loadTree();
+      await this.flushTreeReconciliation();
       await this.loadQuota();
     }
   }
@@ -1540,8 +1650,34 @@ export class DriveStore {
     }
   }
 
+  private async thumbnailErrorMessage(error: unknown): Promise<string> {
+    if (error instanceof HttpErrorResponse) {
+      if (error.error instanceof Blob) return await error.error.text();
+      if (typeof error.error === 'string') return error.error;
+      if (error.error && typeof error.error === 'object') return JSON.stringify(error.error);
+      return error.message;
+    }
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    return '';
+  }
+
   async loadThumbnail(file: DriveFile): Promise<void> {
-    if (untracked(() => this.thumbnails())[file.id] || !file.encryptedFdk) return;
+    if (untracked(() => this.thumbnails())[file.id] || !file.encryptedFdk || this.thumbnailPermanentFailures.has(file.id)) return;
+    const inFlight = this.thumbnailLoadsInFlight.get(file.id);
+    if (inFlight) return inFlight;
+
+    const request = this.loadThumbnailOnce(file);
+    this.thumbnailLoadsInFlight.set(file.id, request);
+    try {
+      await request;
+    } finally {
+      if (this.thumbnailLoadsInFlight.get(file.id) === request) this.thumbnailLoadsInFlight.delete(file.id);
+    }
+  }
+
+  private async loadThumbnailOnce(file: DriveFile): Promise<void> {
+    if (!file.encryptedFdk) return;
     try {
       const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
       const fdkString = atob(fdkBase64);
@@ -1557,15 +1693,16 @@ export class DriveStore {
       }
 
       const initialFetchSize = 1024 * 128;
+      const requestedSize = Math.max(1, Math.min(initialFetchSize, file.sizeBytes > 0 ? file.sizeBytes : initialFetchSize));
       let blob: Blob;
 
       if (gdriveUrl && gdriveToken) {
         blob = await firstValueFrom(this.http.get(gdriveUrl, {
-          headers: { 'Range': `bytes=0-${initialFetchSize - 1}`, 'Authorization': `Bearer ${gdriveToken}` },
+          headers: { 'Range': `bytes=0-${requestedSize - 1}`, 'Authorization': `Bearer ${gdriveToken}` },
           responseType: 'blob'
         }));
       } else {
-        blob = await firstValueFrom(this.driveService.downloadFileRange(file.id, 0, initialFetchSize - 1));
+        blob = await firstValueFrom(this.driveService.downloadFileRange(file.id, 0, requestedSize - 1));
       }
 
       const { metadata } = await this.kasumi.extractMetadata(blob, fdk);
@@ -1573,9 +1710,27 @@ export class DriveStore {
         const parsed = JSON.parse(metadata);
         if (parsed.thumb) {
           this.thumbnails.update(t => ({ ...t, [file.id]: parsed.thumb }));
+          this.thumbnailRetryCounts.delete(file.id);
         }
       }
     } catch (e) {
+      const message = (await this.thumbnailErrorMessage(e)).toLowerCase();
+      const status = e instanceof HttpErrorResponse ? e.status : 0;
+      const incomplete = status === 400 && /(incomplete|pending|upload|chunk)/i.test(message);
+      const networkFailure = e instanceof HttpErrorResponse && status === 0;
+      const transient = incomplete || networkFailure;
+      const permanent = status === 404 || status === 416 || !transient;
+      if (permanent) {
+        this.thumbnailPermanentFailures.add(file.id);
+      } else {
+        const retries = this.thumbnailRetryCounts.get(file.id) ?? 0;
+        if (retries < 2) {
+          this.thumbnailRetryCounts.set(file.id, retries + 1);
+          setTimeout(() => void this.loadThumbnail(file), 300 * (retries + 1));
+        } else {
+          this.thumbnailPermanentFailures.add(file.id);
+        }
+      }
       console.warn('Could not load thumbnail for file ' + file.id);
     }
   }

@@ -13,10 +13,10 @@ import { UploadEngineService } from './upload-engine.service';
 import { UploadQueue } from './upload-queue';
 
 export const BATCH_API_LIMIT = 100;
-export const BATCH_WINDOW_SIZE = 5;
-export const PREPARATION_CONCURRENCY = 1;
-export const LOCAL_UPLOAD_CONCURRENCY = 2;
-export const GOOGLE_UPLOAD_CONCURRENCY = 1;
+export const BATCH_WINDOW_SIZE = 10;
+export const PREPARATION_CONCURRENCY = 2;
+export const LOCAL_UPLOAD_CONCURRENCY = 3;
+export const GOOGLE_UPLOAD_CONCURRENCY = 2;
 
 export interface UploadBatchCallbacks {
   onInitialized(candidate: UploadBatchCandidate, prepared: PreparedUpload, response: BatchUploadResponseItem): void;

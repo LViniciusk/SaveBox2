@@ -113,7 +113,7 @@ interface BreadcrumbSegment {
     .address-segment.current { color: var(--default-text); cursor: default; }
     .address-separator { color: var(--default-muted); }
     .address-bar input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; }
-    .explorer-body { flex: 1; min-height: 0; display: flex; }
+    .explorer-body { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; }
     .explorer-sidebar { width: 220px; flex-shrink: 0; padding: 12px 8px; background: var(--default-sidebar-bg); border-right: 1px solid var(--default-border); overflow-y: auto; }
     .sidebar-heading { padding: 8px 12px 5px; color: var(--default-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
     .explorer-nav { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 4px; padding: 8px 12px; background: transparent; color: var(--default-text); text-align: left; font-size: 13px; }
@@ -126,7 +126,8 @@ interface BreadcrumbSegment {
     .storage-track.gdrive { background: #33463a; }
     .storage-track.gdrive span { background: #4caf70; }
     .storage-provider-label { margin-top: 12px; }
-    .explorer-content { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; background: var(--default-content-bg); }
+    .explorer-content { min-width: 0; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; position: relative; overflow: hidden; background: var(--default-content-bg); }
+    .explorer-content app-drive-workspace { flex: 1 1 auto; min-width: 0; min-height: 0; }
     @media (max-width: 680px) { .explorer-sidebar { display: none; } .toolbar-action { padding: 0 4px; font-size: 0; } }
   `],
 })

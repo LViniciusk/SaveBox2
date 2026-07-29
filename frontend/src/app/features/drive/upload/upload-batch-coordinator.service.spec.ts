@@ -43,10 +43,10 @@ describe('UploadBatchCoordinatorService', () => {
     const summary = await coordinator.upload(candidates, callbacks(results));
 
     expect(summary).toEqual({ total: 6, succeeded: 6, paused: 0, failed: 0 });
-    expect(drive.batchInitUploads).toHaveBeenCalledTimes(2);
+    expect(drive.batchInitUploads).toHaveBeenCalledTimes(1);
     for (const call of drive.batchInitUploads.calls.allArgs()) {
       expect(call[0].length).toBeLessThanOrEqual(100);
-      expect(call[0].length).toBeLessThanOrEqual(5);
+      expect(call[0].length).toBeLessThanOrEqual(10);
       expect(call[0].every(item => !('name' in item) && !('path' in item))).toBeTrue();
     }
     expect(results).toEqual(candidates.map(item => `${item.transferId}:success`));
@@ -186,7 +186,7 @@ describe('UploadBatchCoordinatorService', () => {
     const summary = await coordinator.upload(candidates, callbacks([]));
 
     expect(summary.succeeded).toBe(101);
-    expect(drive.batchInitUploads.calls.count()).toBe(21);
+    expect(drive.batchInitUploads.calls.count()).toBe(11);
     expect(drive.batchInitUploads.calls.allArgs().every(([items]) => items.length <= 100)).toBeTrue();
   });
 

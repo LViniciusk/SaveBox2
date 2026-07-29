@@ -793,7 +793,7 @@ export class ImagePlayerComponent implements OnDestroy {
         const extReq$ = this.driveService.downloadExternalFileRange(gdriveUrl, meta.access_token, 0, file.sizeBytes - 1);
         encryptedBlob = await firstValueFrom(extReq$);
       } else {
-        encryptedBlob = await firstValueFrom(this.driveService.downloadFile(file.id));
+        encryptedBlob = await this.driveService.downloadFileInRanges(file.id, file.sizeBytes);
       }
     }
 

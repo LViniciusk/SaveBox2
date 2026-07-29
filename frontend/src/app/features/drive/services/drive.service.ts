@@ -1,6 +1,6 @@
 import { Injectable, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Observable, map } from 'rxjs';
+import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { Observable, firstValueFrom, map } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 import { BatchUploadRequestItem, BatchUploadResponseItem, FolderBatchResponseItem } from '../upload/upload.models';
 
@@ -185,12 +185,30 @@ export class DriveService {
 
   downloadFileRange(fileId: number, start: number, end: number): Observable<Blob> {
     return this.http.get(`${environment.apiUrl}/files/${fileId}/download`, {
-      headers: {
-        'Range': `bytes=${start}-${end}`
-      },
+      headers: new HttpHeaders().set('Range', `bytes=${start}-${end}`),
+      observe: 'response',
       responseType: 'blob',
       withCredentials: true,
-    });
+    }).pipe(
+      map(response => {
+        if ((response.status !== 200 && response.status !== 206) || !response.body) {
+          throw new Error('Resposta Range inválida');
+        }
+        return response.body;
+      })
+    );
+  }
+
+  async downloadFileInRanges(fileId: number, totalSize: number): Promise<Blob> {
+    if (totalSize <= 0) throw new Error('Tamanho criptografado desconhecido');
+
+    const chunks: Blob[] = [];
+    const rangeSize = 4 * 1024 * 1024;
+    for (let start = 0; start < totalSize; start += rangeSize) {
+      const end = Math.min(start + rangeSize - 1, totalSize - 1);
+      chunks.push(await firstValueFrom(this.downloadFileRange(fileId, start, end)));
+    }
+    return new Blob(chunks, { type: 'application/octet-stream' });
   }
 
   downloadExternalMetadata(fileId: number): Observable<{ storage_provider: string, external_file_id: string, access_token: string }> {

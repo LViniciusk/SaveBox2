@@ -18,11 +18,11 @@ describe('ImagePlayerComponent', () => {
   let crypto: jasmine.SpyObj<CryptoService>;
   let kasumi: jasmine.SpyObj<KasumiCryptoService>;
   let store: any;
-  const image = { id: 1, isFolder: false, decryptedName: 'photo.png', type: 'image', encryptedFdk: 'fdk', folderId: null } as DriveFile;
+  const image = { id: 1, isFolder: false, decryptedName: 'photo.png', type: 'image', encryptedFdk: 'fdk', sizeBytes: 100, folderId: null } as DriveFile;
   const next = { ...image, id: 2, decryptedName: 'next.png' };
 
   beforeEach(async () => {
-    drive = jasmine.createSpyObj('DriveService', ['downloadFile', 'downloadExternalMetadata', 'downloadExternalFileRange']);
+    drive = jasmine.createSpyObj('DriveService', ['downloadFile', 'downloadFileInRanges', 'downloadExternalMetadata', 'downloadExternalFileRange']);
     share = jasmine.createSpyObj('ShareService', ['downloadSharedFile', 'downloadSharedFileInRanges']);
     crypto = jasmine.createSpyObj('CryptoService', ['decryptName']);
     kasumi = jasmine.createSpyObj('KasumiCryptoService', ['decryptFile']);
@@ -36,6 +36,7 @@ describe('ImagePlayerComponent', () => {
     crypto.decryptName.and.resolveTo(btoa('01234567890123456789012345678901'));
     kasumi.decryptFile.and.resolveTo(new Blob(['pixels'], { type: 'image/png' }));
     drive.downloadFile.and.returnValue(of(new Blob(['encrypted'])));
+    drive.downloadFileInRanges.and.resolveTo(new Blob(['encrypted']));
     share.downloadSharedFile.and.returnValue(of(new Blob(['shared'])));
     share.downloadSharedFileInRanges.and.resolveTo(new Blob(['shared']));
 
@@ -58,7 +59,7 @@ describe('ImagePlayerComponent', () => {
 
   it('downloads, decrypts and caches an image in memory', async () => {
     await (component as any).loadImage(image);
-    expect(drive.downloadFile).toHaveBeenCalledWith(1);
+    expect(drive.downloadFileInRanges).toHaveBeenCalledWith(1, 100);
     expect(kasumi.decryptFile).toHaveBeenCalled();
     expect(component.isLoading()).toBeFalse();
     expect(component.imageUrl()).toBeTruthy();
@@ -78,7 +79,7 @@ describe('ImagePlayerComponent', () => {
   });
 
   it('handles failed downloads without exposing an error after abort', async () => {
-    drive.downloadFile.and.returnValue(throwError(() => new Error('network')));
+    drive.downloadFileInRanges.and.returnValue(Promise.reject(new Error('network')));
     await (component as any).loadImage({ ...image, id: 9 });
     expect(component.error()).toBe('network');
     (component as any).onClose();

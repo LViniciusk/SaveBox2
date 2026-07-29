@@ -87,8 +87,18 @@ import { ThemeService } from '../../../../core/theme/theme.service';
     </div>
   `,
   styles: [`
-    :host { display: flex; flex: 1; flex-direction: column; min-height: 0; width: 100%; }
-    .workspace-drop-zone { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; }
+    :host { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; width: 100%; }
+    .workspace-drop-zone { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; width: 100%; }
+    .workspace-drop-zone > app-transfer-panel {
+      display: flex;
+      flex: 1 1 auto;
+      width: 100%;
+      max-width: none;
+      min-width: 0;
+      min-height: 0;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
     .workspace-drop-zone.drop-zone-active::after { content: 'Solte para enviar'; position: absolute; inset: 8px; z-index: 40; display: grid; place-items: center; border: 2px dashed var(--accent-color, #1a73e8); border-radius: 12px; background: color-mix(in srgb, var(--accent-color, #1a73e8) 10%, transparent); color: var(--accent-color, #1a73e8); font-size: 18px; font-weight: 500; pointer-events: none; }
     .breadcrumb { display: flex; align-items: center; gap: 10px; padding: 20px 24px 12px; font-size: 18px; font-weight: 400; color: #202124; }
     .breadcrumb-icon { font-size: 22px; color: #5f6368; font-variation-settings: 'FILL' 1; }

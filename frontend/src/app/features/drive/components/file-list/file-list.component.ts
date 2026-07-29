@@ -5,11 +5,12 @@ import { AppStateService } from '../../../../core/state/app-state.service';
 import { CommonModule } from '@angular/common';
 import { DialogService } from '../../../../core/dialog/dialog.service';
 import { PinnedFoldersStore } from '../../state/pinned-folders.store';
+import { DefaultLockedPreviewComponent } from '../../../../shared/ui/default-locked-preview/default-locked-preview.component';
 
 @Component({
   selector: 'app-file-list',
   standalone: true,
-  imports: [FileIconComponent, CommonModule],
+  imports: [FileIconComponent, DefaultLockedPreviewComponent, CommonModule],
   host: {
     style: 'display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%;'
   },
@@ -93,7 +94,7 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
       </ng-template>
 
       <ng-template #folderCardTpl let-file="file">
-        <div class="grid-card folder-card selectable-item" [class.file-card]="isLocked()" [class.locked-folder]="isLocked()" [attr.data-id]="file.id"
+        <div class="grid-card folder-card selectable-item" [class.file-card]="isLocked() && !isDefaultTheme()" [class.locked-folder]="isLocked()" [attr.data-id]="file.id"
              [class.selected]="driveStore.selectedFileIds().has(file.id)"
              [class.dragging]="isDragged(file)"
              [class.drag-over]="dragOverFolderId() === file.id"
@@ -106,34 +107,31 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
              (click)="onFileClick(file, $event)"
              (dblclick)="onFileDblClick(file, $event)"
              (contextmenu)="onContextMenu(file, $event)">
-          @if (isLocked()) {
-            <div class="file-card-thumbnail">
-              <app-file-icon class="thumbnail-icon" [fileType]="file.type" [locked]="true" />
-            </div>
-            <div class="file-card-header">
+            @if (isDefaultTheme()) {
+              <div class="default-preview-viewport folder-preview-viewport" aria-hidden="true">
+                @if (isLocked()) {
+                  <app-default-locked-preview />
+                } @else {
+                  <img class="folder-art-layer folder-back" src="icons-test/folder-back.ico" alt="" />
+                  @if (getFolderThumbnail(file); as thumbnail) {
+                    <span class="folder-thumbnail default-folder-preview">
+                      <img class="folder-thumbnail-image default-folder-preview-image" [src]="thumbnail" alt="" />
+                    </span>
+                    <img class="folder-art-layer folder-front" src="icons-test/folder-front.ico" alt="" />
+                  } @else {
+                    <img class="folder-art-layer folder-default" src="icons-test/folder-default.ico" alt="" />
+                  }
+                }
+              </div>
+            }
+            <div class="folder-card-content">
+              @if (!isLocked() || !isDefaultTheme()) { <app-file-icon [fileType]="file.type" [locked]="isLocked()" /> }
               <span class="file-name" [title]="getDisplayName(file)">{{ getDisplayName(file) }}</span>
             </div>
-          } @else {
-            <div class="default-folder-visual" [class.has-folder-thumbnail]="!!getFolderThumbnail(file)" aria-hidden="true">
-              @if (getFolderThumbnail(file); as thumbnail) {
-                <img class="default-folder-preview-back" src="icons-test/folder-back.ico" alt="" />
-                <span class="default-folder-preview">
-                  <img class="default-folder-preview-image" [src]="thumbnail" alt="" />
-                </span>
-                <img class="default-folder-preview-front" src="icons-test/folder-front.ico" alt="" />
-              } @else {
-                <img class="default-folder-default" src="icons-test/folder-default.ico" alt="" />
-              }
-            </div>
-          <div class="folder-card-content">
-            <app-file-icon [fileType]="file.type" [locked]="isLocked()" />
-            <span class="file-name" [title]="getDisplayName(file)">{{ getDisplayName(file) }}</span>
-          </div>
           @if (!isLocked()) {
             <button class="grid-action-btn" (click)="toggleMenu(file, $event); $event.stopPropagation()">
               <span class="material-symbols-outlined">more_vert</span>
             </button>
-          }
           }
         </div>
       </ng-template>
@@ -155,22 +153,26 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
              (click)="onFileClick(file, $event)"
              (dblclick)="onFileDblClick(file, $event)"
              (contextmenu)="onContextMenu(file, $event)">
-          @if (file.isFolder && !isLocked()) {
-            <div class="default-folder-visual" [class.has-folder-thumbnail]="!!getFolderThumbnail(file)" aria-hidden="true">
-              @if (getFolderThumbnail(file); as thumbnail) {
-                <img class="default-folder-preview-back" src="icons-test/folder-back.ico" alt="" />
-                <span class="default-folder-preview">
-                  <img class="default-folder-preview-image" [src]="thumbnail" alt="" />
-                </span>
-                <img class="default-folder-preview-front" src="icons-test/folder-front.ico" alt="" />
+          @if (file.isFolder && isDefaultTheme()) {
+            <div class="default-preview-viewport folder-preview-viewport" aria-hidden="true">
+              @if (isLocked()) {
+                <app-default-locked-preview />
               } @else {
-                <img class="default-folder-default" src="icons-test/folder-default.ico" alt="" />
+                <img class="folder-art-layer folder-back" src="icons-test/folder-back.ico" alt="" />
+                @if (getFolderThumbnail(file); as thumbnail) {
+                  <span class="folder-thumbnail default-folder-preview">
+                    <img class="folder-thumbnail-image default-folder-preview-image" [src]="thumbnail" alt="" />
+                  </span>
+                  <img class="folder-art-layer folder-front" src="icons-test/folder-front.ico" alt="" />
+                } @else {
+                  <img class="folder-art-layer folder-default" src="icons-test/folder-default.ico" alt="" />
+                }
               }
             </div>
           }
           <div class="file-card-header">
             <div class="folder-card-content">
-              <app-file-icon [fileType]="file.type" [locked]="isLocked()" />
+              @if (!file.isFolder && (!isLocked() || !isDefaultTheme())) { <app-file-icon [fileType]="file.type" [locked]="isLocked()" /> }
               <span class="file-name" [title]="getDisplayName(file)">{{ getDisplayName(file) }}</span>
             </div>
             @if (!isLocked()) {
@@ -179,12 +181,17 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
               </button>
             }
           </div>
-          <div class="file-card-thumbnail"
-               [style.background-image]="driveStore.thumbnails()[file.id] ? 'url(' + driveStore.thumbnails()[file.id] + ')' : ''">
-            @if (!driveStore.thumbnails()[file.id]) {
-              <app-file-icon [fileType]="file.type" [locked]="isLocked()" class="thumbnail-icon" />
-            }
-          </div>
+          @if (!file.isFolder) {
+            <div class="default-preview-viewport file-card-thumbnail"
+                 [class.locked-preview-viewport]="isLocked() && isDefaultTheme()"
+                 [style.background-image]="!isLocked() && driveStore.thumbnails()[file.id] ? 'url(' + driveStore.thumbnails()[file.id] + ')' : ''">
+              @if (isLocked() && isDefaultTheme()) {
+                <app-default-locked-preview />
+              } @else if (!driveStore.thumbnails()[file.id]) {
+                <app-file-icon [fileType]="file.type" [locked]="isLocked()" class="thumbnail-icon" />
+              }
+            </div>
+          }
         </div>
       </ng-template>
 
@@ -264,7 +271,8 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
       }
 
       @if (driveStore.displayMode() === 'grid' && viewMode() !== 'storage') {
-        <div class="grid-layout">
+        <ng-template #gridRendererTpl>
+        <div class="grid-layout" [attr.data-renderer]="isDefaultTheme() ? 'default' : 'gdrive'">
           <!-- Sort Header for Grid Mode -->
           <div class="grid-sort-header">
             <button class="sort-dropdown-btn" (click)="toggleSortMenu($event)">
@@ -304,6 +312,12 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
             </div>
           }
         </div>
+        </ng-template>
+        @if (isDefaultTheme()) {
+          <div class="grid-renderer default-grid-renderer"><ng-container *ngTemplateOutlet="gridRendererTpl"></ng-container></div>
+        } @else {
+          <div class="grid-renderer gdrive-grid-renderer"><ng-container *ngTemplateOutlet="gridRendererTpl"></ng-container></div>
+        }
       } @else {
         <div class="file-list-header" [class.storage-view]="viewMode() === 'storage'" [class.unlocked]="!isLocked()">
           <button class="col col-name sortable-header" (click)="setSort('name')">
@@ -909,9 +923,6 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
       }
 
       /* === GRID VIEW === */
-      .default-folder-visual {
-        display: none;
-      }
       .grid-layout {
         padding: 16px 24px;
         display: flex;
@@ -1103,15 +1114,19 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
       :host-context(:root[data-theme='default']) .folders-grid,
       :host-context(:root[data-theme='default']) .files-grid,
       :host-context(:root[data-theme='default']) .mixed-grid {
-        grid-template-columns: repeat(auto-fill, minmax(124px, 156px));
+        grid-template-columns: repeat(auto-fill, minmax(var(--default-grid-tile-width), var(--default-grid-tile-width)));
+      }
+      .grid-renderer {
+        display: contents;
       }
       :host-context(:root[data-theme='default']) .grid-card {
-        height: 126px;
+        width: var(--default-grid-tile-width);
+        height: var(--default-grid-tile-height);
         border: 1px solid transparent;
         border-radius: 0;
         background: transparent;
         transition: none;
-        overflow: visible;
+        overflow: hidden;
       }
       :host-context(:root[data-theme='default']) .grid-card:hover {
         border-color: var(--default-workspace-border);
@@ -1125,83 +1140,77 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
       :host-context(:root[data-theme='default']) .mixed-folder-card {
         flex-direction: column;
         justify-content: flex-start;
-        padding: 8px 6px 4px;
+        padding: 0;
       }
       :host-context(:root[data-theme='default']) .folder-card.locked-folder {
         align-items: stretch;
       }
-      :host-context(:root[data-theme='default']) .default-folder-visual {
+      :host-context(:root[data-theme='default']) .default-preview-viewport {
         position: relative;
-        display: block;
-        width: 84px;
-        height: 62px;
-        margin: 8px auto 7px;
-        border: 0;
-        background: transparent;
-        box-shadow: none;
-      }
-      :host-context(:root[data-theme='default']) .default-folder-visual::before {
-        display: none;
-      }
-      :host-context(:root[data-theme='default']) .default-folder-visual.has-folder-thumbnail {
-        border: 0;
-        border-radius: 0;
-        background: transparent;
-        box-shadow: none;
-      }
-      :host-context(:root[data-theme='default']) .default-folder-visual.has-folder-thumbnail::before {
-        display: none;
-      }
-      :host-context(:root[data-theme='default']) .default-folder-preview {
-        position: absolute;
-        inset: 8px 1px 4px;
-        border: 1px solid #b17e14;
-        background: var(--default-workspace-surface);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--default-grid-preview-width);
+        height: var(--default-grid-preview-height);
+        margin: 0 auto 6px;
+        box-sizing: border-box;
         overflow: hidden;
+        flex: 0 0 var(--default-grid-preview-height);
       }
-      :host-context(:root[data-theme='default']) .default-folder-default {
+      :host-context(:root[data-theme='default']) .file-card-thumbnail {
+        order: 1;
+        border: 1px solid var(--default-media-border);
+        background-color: var(--default-thumbnail-bg);
+        background-repeat: no-repeat;
+        background-size: contain;
+      }
+      :host-context(:root[data-theme='default']) .file-card-thumbnail.locked-preview-viewport {
+        border: 0;
+        background: transparent;
+      }
+      :host-context(:root[data-theme='default']) .folder-art-layer {
         position: absolute;
-        inset: 0;
+        left: 50%;
+        top: 50%;
         display: block;
-        width: 100%;
-        height: 100%;
+        width: var(--default-folder-stage-width);
+        height: var(--default-folder-stage-height);
+        margin-left: calc(var(--default-folder-stage-width) / -2);
+        margin-top: calc(var(--default-folder-stage-height) / -2);
         object-fit: contain;
-        transform: scale(1.6);
+        transform: scale(var(--default-folder-art-scale));
+        transform-origin: center;
         pointer-events: none;
       }
-      :host-context(:root[data-theme='default']) .default-folder-preview-image {
+      :host-context(:root[data-theme='default']) .folder-back { z-index: 0; }
+      :host-context(:root[data-theme='default']) .folder-front { z-index: 2; }
+      :host-context(:root[data-theme='default']) .folder-thumbnail {
+        position: absolute;
+        left: calc((100% - var(--default-folder-thumbnail-width)) / 2);
+        top: calc((100% - var(--default-folder-thumbnail-height)) / 2);
+        width: var(--default-folder-thumbnail-width);
+        height: var(--default-folder-thumbnail-height);
+        z-index: 1;
+        display: block;
+        overflow: hidden;
+        box-sizing: border-box;
+        background: var(--default-workspace-surface);
+        border: 1px solid #b17e14;
+      }
+      :host-context(:root[data-theme='default']) .folder-thumbnail-image {
         display: block;
         width: 100%;
         height: 100%;
         object-fit: cover;
       }
-      :host-context(:root[data-theme='default']) .default-folder-preview-front {
-        position: absolute;
-        inset: 0;
-        z-index: 1;
-        display: block;
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-        transform: scale(1.60);
-        pointer-events: none;
-      }
-      :host-context(:root[data-theme='default']) .default-folder-preview-back {
-        position: absolute;
-        inset: 0;
-        z-index: 0;
-        display: block;
-        width: 100%;
-        height: 100%;
-        object-fit: contain;
-        transform: scale(1.6);
-        pointer-events: none;
-      }
       :host-context(:root[data-theme='default']) .folder-card > .folder-card-content,
       :host-context(:root[data-theme='default']) .mixed-folder-card .file-card-header {
-        width: 100%;
-        height: auto;
-        padding: 0;
+        width: var(--default-grid-label-width);
+        max-width: 100%;
+        height: var(--default-grid-label-height);
+        min-height: var(--default-grid-label-height);
+        padding: 0 5px;
+        box-sizing: border-box;
         justify-content: center;
       }
       :host-context(:root[data-theme='default']) .folder-card > .folder-card-content > app-file-icon,
@@ -1211,7 +1220,7 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
       }
       :host-context(:root[data-theme='default']) .folder-card.locked-folder > .folder-card-content > app-file-icon,
       :host-context(:root[data-theme='default']) .mixed-folder-card.locked-folder .file-card-header app-file-icon {
-        display: block;
+        display: none;
       }
       :host-context(:root[data-theme='default']) .folder-card-content {
         justify-content: center;
@@ -1239,25 +1248,15 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
         opacity: 1;
       }
       :host-context(:root[data-theme='default']) .file-card:not(.mixed-folder-card) {
-        height: 126px;
+        height: var(--default-grid-tile-height);
       }
       :host-context(:root[data-theme='default']) .file-card:not(.mixed-folder-card) .file-card-header {
         order: 2;
-        height: 34px;
+        height: var(--default-grid-label-height);
         padding: 3px 5px 2px;
       }
       :host-context(:root[data-theme='default']) .file-card:not(.mixed-folder-card) .file-card-header app-file-icon {
         display: none;
-      }
-      :host-context(:root[data-theme='default']) .file-card-thumbnail {
-        order: 1;
-        flex: none;
-        height: 86px;
-        margin: 4px;
-        border: 1px solid var(--default-media-border);
-        background-color: var(--default-thumbnail-bg);
-        background-repeat: no-repeat;
-        background-size: contain;
       }
       :host-context(:root[data-theme='default']) .video-card .file-card-thumbnail {
         border-color: #707070;
@@ -1370,6 +1369,10 @@ export class FileListComponent implements OnInit, OnDestroy {
   private dragSelectionInitialSet = new Set<number>();
   private readonly elRef = inject(ElementRef);
   readonly pinnedFoldersStore = inject(PinnedFoldersStore);
+
+  isDefaultTheme(): boolean {
+    return document.documentElement.dataset['theme'] === 'default';
+  }
 
   closeMenu() {
     this.activeMenuFileId.set(null);

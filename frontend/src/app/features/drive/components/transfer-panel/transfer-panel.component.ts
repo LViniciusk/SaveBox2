@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, inject, input, signal } from '@angular/core';
+import { Component, computed, inject, input, signal } from '@angular/core';
 import { DriveStore, TransferItem } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
 
@@ -7,9 +7,13 @@ import { DriveView } from '../../state/drive.types';
   selector: 'app-transfer-panel',
   standalone: true,
   imports: [CommonModule],
+  host: {
+    '[class.transfer-panel--page]': "currentView() === 'transfers'",
+    '[class.transfer-panel--popup]': "currentView() !== 'transfers'",
+  },
   template: `
     @if (currentView() === 'transfers') {
-      <div class="transfers-container">
+      <div class="transfers-container transfer-panel--page">
         <div class="transfers-header">
           <h2>Fila de Transferências</h2>
           @if (driveStore.transfers().length > 0) {
@@ -20,17 +24,18 @@ import { DriveView } from '../../state/drive.types';
           }
         </div>
 
+        <div class="transfers-scroll-region">
         @if (driveStore.transferGroupViews().length > 0) {
           <div class="transfer-groups">
             @for (group of driveStore.transferGroupViews(); track group.id) {
               <div class="transfer-group" [class.terminal-group]="group.canClear">
-                <button class="transfer-group-header" (click)="toggleGroup(group.id)" [attr.aria-expanded]="isGroupExpanded(group.id)">
+                <button class="transfer-group-header" (click)="toggleGroup(group.id)" [attr.aria-expanded]="isGroupExpanded(group.id)" [attr.aria-controls]="'transfer-group-items-' + group.id">
                   <span class="material-symbols-outlined">{{ isGroupExpanded(group.id) ? 'expand_more' : 'chevron_right' }}</span>
                   <span class="transfer-group-label">{{ groupSourceLabel(group.source) }}</span>
                   <span class="transfer-group-count">{{ group.completedFiles }}/{{ group.totalFiles }}</span>
                 </button>
                 <div class="transfer-group-summary">
-                  <div class="transfer-group-meta">{{ groupStatusLabel(group.status) }} · {{ group.progress * 100 | number:'1.0-0' }}%</div>
+                  <div class="transfer-group-meta">{{ groupStatusLabel(group.status) }} · {{ completedLabel(group) }} · {{ group.progress * 100 | number:'1.0-0' }}%</div>
                   @if (group.status !== 'success' && group.status !== 'error' && group.status !== 'cancelled') {
                     <div class="transfer-progress-bar-container"><div class="transfer-progress-bar-fill" [style.width.%]="group.progress * 100"></div></div>
                   }
@@ -43,8 +48,8 @@ import { DriveView } from '../../state/drive.types';
                   </div>
                 </div>
                 @if (isGroupExpanded(group.id)) {
-                  <div class="transfer-group-items">
-                    @for (transfer of groupTransfers(group); track transfer.id) {
+                  <div class="transfer-group-items" [id]="'transfer-group-items-' + group.id" role="region">
+                    @for (transfer of visibleGroupTransfers(group); track transfer.id) {
                       <div class="transfer-group-item" [class.success]="transfer.status === 'success'" [class.error]="transfer.status === 'error'" [class.paused]="transfer.status === 'paused'">
                         <div class="transfer-group-item-name" [title]="transfer.fileName">{{ transfer.fileName }}</div>
                         <div class="transfer-group-item-status">
@@ -61,6 +66,17 @@ import { DriveView } from '../../state/drive.types';
                             <span>Falhou</span>
                           }
                         </div>
+                      </div>
+                    }
+                    @if (completedCount(group) > 0) {
+                      <div class="completed-controls">
+                        @if (completedHidden(group.id)) {
+                          <button class="completed-control-btn" (click)="showCompleted(group.id)">Mostrar concluídos ({{ completedCount(group) }})</button>
+                        } @else {
+                          @if (hasMoreCompleted(group)) { <button class="completed-control-btn" (click)="showMoreCompleted(group.id)">Mostrar mais 50</button> }
+                          @if (canShowAllCompleted(group)) { <button class="completed-control-btn" (click)="showAllCompleted(group.id)">Mostrar todos</button> }
+                          <button class="completed-control-btn" (click)="hideCompleted(group.id)">Ocultar concluídos</button>
+                        }
                       </div>
                     }
                   </div>
@@ -91,23 +107,23 @@ import { DriveView } from '../../state/drive.types';
                 <div class="transfer-details">
                   <div class="transfer-filename" [title]="t.fileName">{{ t.fileName }}</div>
                   @if (t.statusMessage) {
-                    <div class="transfer-status-message" style="font-size: 11px; color: #666; margin-top: 2px;">{{ t.statusMessage }}</div>
+                    <div class="transfer-status-message">{{ t.statusMessage }}</div>
                   }
                   <div class="transfer-meta">
                     <span class="transfer-type-badge">{{ t.type === 'upload' ? 'Upload' : 'Download' }}</span>
                     <span class="transfer-time">{{ t.timestamp | date:'shortTime' }}</span>
                     @if (t.status === 'processing') {
-                      <span class="transfer-speed" style="margin-left: 8px; color: #1a73e8; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;">
-                        <span class="material-symbols-outlined" style="font-size: 14px;">speed</span>
+                      <span class="transfer-speed transfer-speed-active">
+                        <span class="material-symbols-outlined transfer-meta-icon">speed</span>
                         {{ t.speed || 'Calculando...' }}
                       </span>
-                      <span class="transfer-eta" style="margin-left: 8px; color: #5f6368; display: inline-flex; align-items: center; gap: 4px;">
-                        <span class="material-symbols-outlined" style="font-size: 14px;">schedule</span>
+                      <span class="transfer-eta">
+                        <span class="material-symbols-outlined transfer-meta-icon">schedule</span>
                         {{ t.eta }}
                       </span>
                     } @else if (t.status === 'paused') {
-                      <span class="transfer-speed" style="margin-left: 8px; color: #d97706; font-weight: 500; display: inline-flex; align-items: center; gap: 4px;">
-                        <span class="material-symbols-outlined" style="font-size: 14px;">pause</span>
+                      <span class="transfer-speed transfer-speed-paused">
+                        <span class="material-symbols-outlined transfer-meta-icon">pause</span>
                         Pausado
                       </span>
                     }
@@ -122,7 +138,7 @@ import { DriveView } from '../../state/drive.types';
                   }
                 </div>
 
-                <div class="transfer-status-area" style="display: flex; align-items: center; gap: 8px;">
+                <div class="transfer-status-area">
                   @if (t.status === 'processing') {
                     <div class="status-indicator processing">
                       <div class="spinner"></div>
@@ -132,14 +148,14 @@ import { DriveView } from '../../state/drive.types';
                       <span class="material-symbols-outlined">pause</span>
                     </button>
                   } @else if (t.status === 'paused') {
-                    <div class="status-indicator paused" style="color: #d97706; font-weight: 500; font-size: 13px;">
+                    <div class="status-indicator paused">
                       <span>{{ t.progress }}%</span>
                     </div>
                     @if (t.isRecovery) {
                       <button class="transfer-control-btn resume" (click)="recoveryInput.click()" title="Selecionar arquivo para retomar">
                         <span class="material-symbols-outlined">folder_open</span>
                       </button>
-                      <input type="file" #recoveryInput style="display: none" (change)="onRecoverFileSelected($event, t)" />
+                      <input type="file" #recoveryInput class="recovery-file-input" (change)="onRecoverFileSelected($event, t)" />
                     } @else {
                       <button class="transfer-control-btn resume" (click)="t.type === 'upload' ? driveStore.resumeUpload(t.id) : driveStore.resumeDownload(t.id)" title="Retomar">
                         <span class="material-symbols-outlined">play_arrow</span>
@@ -165,11 +181,12 @@ import { DriveView } from '../../state/drive.types';
             }
           </div>
         }
+        </div>
       </div>
     }
 
     @if (driveStore.transfers().length > 0 && !isTransfersPopupClosed()) {
-      <div class="transfers-popup-wrapper">
+      <div class="transfers-popup-wrapper transfer-panel--popup">
         <div class="transfers-popup-header" (click)="togglePopup()">
           <span class="popup-title">Transferências ({{ driveStore.transfers().length }})</span>
           <div class="popup-actions">
@@ -184,16 +201,18 @@ import { DriveView } from '../../state/drive.types';
         @if (!isTransfersPopupMinimized()) {
           <div class="transfers-popup-body">
             @for (group of driveStore.transferGroupViews(); track group.id) {
-              <div class="mini-transfer-group" [class.terminal-group]="group.canClear">
-                <button class="mini-group-header" (click)="$event.stopPropagation(); toggleGroup(group.id)" [attr.aria-expanded]="isGroupExpanded(group.id)">
+              <div class="mini-transfer-group" [class.terminal-group]="group.canClear" [id]="'transfer-popup-group-' + group.id">
+                <button class="mini-group-header" (click)="$event.stopPropagation(); toggleGroup(group.id)" [attr.aria-expanded]="isGroupExpanded(group.id)" [attr.aria-controls]="'transfer-popup-group-' + group.id">
                   <span class="material-symbols-outlined">{{ isGroupExpanded(group.id) ? 'expand_more' : 'chevron_right' }}</span>
                   <span>{{ groupSourceLabel(group.source) }}</span>
                   <span>{{ group.completedFiles }}/{{ group.totalFiles }}</span>
                 </button>
-                <div class="mini-progress-track"><div class="mini-progress-fill" [style.width.%]="group.progress * 100"></div></div>
+                @if (group.status !== 'success' && group.status !== 'error' && group.status !== 'cancelled') {
+                  <div class="mini-progress-track"><div class="mini-progress-fill" [style.width.%]="group.progress * 100"></div></div>
+                }
               </div>
             }
-            @for (t of driveStore.transfers().slice().reverse(); track t.id) {
+            @for (t of visibleMiniTransfers(); track t.id) {
               @if (!t.groupId || isGroupExpanded(t.groupId)) {
               <div class="mini-transfer-item" [class.success]="t.status === 'success'" [class.error]="t.status === 'error'" [class.paused]="t.status === 'paused'">
                 <div class="mini-transfer-icon-wrapper">
@@ -236,6 +255,9 @@ import { DriveView } from '../../state/drive.types';
     }
   `,
   styles: [`
+    :host { display: block; min-width: 0; min-height: 0; box-sizing: border-box; }
+    :host(.transfer-panel--page) { display: flex; flex: 1 1 auto; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; box-sizing: border-box; }
+    :host(.transfer-panel--popup) { position: static; }
     .transfers-popup-wrapper { position: absolute; bottom: 24px; right: 24px; width: 360px; background: white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.15), 0 1px 4px rgba(0,0,0,0.1); z-index: 50; display: flex; flex-direction: column; border: 1px solid #dadce0; overflow: hidden; }
     .transfers-popup-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #323232; color: white; cursor: pointer; user-select: none; }
     .transfers-popup-header:hover { background: #404040; }
@@ -263,6 +285,9 @@ import { DriveView } from '../../state/drive.types';
     .transfer-group-item.success .transfer-group-item-status { color: #166534; }
     .transfer-group-item.error .transfer-group-item-status { color: #991b1b; }
     .transfer-group-item.paused .transfer-group-item-status { color: #b45309; }
+    .completed-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 10px 8px 34px; border-top: 1px solid #e5eefb; }
+    .completed-control-btn { border: 0; background: transparent; color: #1a73e8; cursor: pointer; font-size: 11px; padding: 2px 0; }
+    .completed-control-btn:hover { text-decoration: underline; }
     .mini-transfer-group { padding: 8px 12px 6px; border-bottom: 1px solid #e8eaed; background: #f8fbff; }
     .mini-group-header { justify-content: flex-start; font-size: 12px; font-weight: 500; }
     .mini-group-header span:nth-child(2) { flex: 1; }
@@ -283,7 +308,8 @@ import { DriveView } from '../../state/drive.types';
     .mini-progress-track { width: 100%; height: 4px; background: #e2e8f0; border-radius: 2px; overflow: hidden; margin-top: 2px; }
     .mini-progress-fill { height: 100%; background: #1a73e8; transition: width 0.2s ease-out; }
     .mini-status-msg { font-size: 11px; color: #5f6368; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .transfers-container { padding: 0 24px 24px; font-family: 'Roboto', sans-serif; }
+    .transfers-container { width: 100%; max-width: none; flex: 1 1 auto; height: 100%; min-width: 0; min-height: 0; padding: 0 24px 24px; box-sizing: border-box; font-family: 'Roboto', sans-serif; display: flex; flex-direction: column; overflow: hidden; }
+    .transfers-scroll-region { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding-right: 4px; }
     .transfers-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; }
     .transfers-header h2 { margin: 0; font-size: 20px; font-weight: 500; color: #0f172a; }
     .clear-completed-btn { display: flex; align-items: center; gap: 6px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 20px; padding: 6px 16px; font-size: 13px; font-weight: 500; color: #334155; cursor: pointer; transition: background 150ms, border-color 150ms; }
@@ -306,6 +332,12 @@ import { DriveView } from '../../state/drive.types';
     .transfer-details { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
     .transfer-filename { font-size: 14px; font-weight: 500; color: #1e293b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .transfer-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #64748b; }
+    .transfer-status-message { font-size: 11px; color: #64748b; }
+    .transfer-speed, .transfer-eta { display: inline-flex; align-items: center; gap: 3px; color: #64748b; }
+    .transfer-speed-paused { color: #b45309; }
+    .transfer-meta-icon { font-size: 14px; }
+    .recovery-file-input { display: none; }
+    .transfer-status-area { display: flex; align-items: center; flex-shrink: 0; }
     .transfer-type-badge { background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-weight: 500; }
     .transfer-card.success .transfer-type-badge { background: #dcfce7; color: #166534; }
     .transfer-card.error .transfer-type-badge { background: #fee2e2; color: #991b1b; }
@@ -320,7 +352,6 @@ import { DriveView } from '../../state/drive.types';
     .transfer-control-btn:hover { background: rgba(60, 64, 67, 0.08); color: #202124; }
     .transfer-control-btn.pause:hover, .transfer-control-btn.cancel:hover { background: #fee2e2; color: #dc2626; }
     .transfer-control-btn.resume:hover { background: #dcfce7; color: #166534; }
-    .transfer-status-area { display: flex; align-items: center; flex-shrink: 0; }
     .status-indicator { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; }
     .status-indicator.processing { color: #0b57d0; }
     .status-indicator.success { color: #166534; }
@@ -380,6 +411,8 @@ import { DriveView } from '../../state/drive.types';
     :host-context(:root[data-theme='default']) .transfer-eta { color: var(--default-workspace-muted) !important; }
     :host-context(:root[data-theme='default']) .transfer-progress-bar-fill[style],
     :host-context(:root[data-theme='default']) .mini-progress-fill[style] { background: var(--default-accent) !important; }
+    :host-context(:root[data-theme='default']) .completed-controls { border-color: var(--default-context-border); }
+    :host-context(:root[data-theme='default']) .completed-control-btn { color: var(--default-accent); }
   `],
 })
 export class TransferPanelComponent {
@@ -388,6 +421,13 @@ export class TransferPanelComponent {
   readonly isTransfersPopupMinimized = signal(false);
   readonly isTransfersPopupClosed = signal(false);
   readonly expandedGroups = signal(new Set<string>());
+  readonly completedLimits = signal(new Map<string, number>());
+  readonly hiddenCompletedGroups = signal(new Set<string>());
+  readonly transferById = computed(() => new Map(this.driveStore.transfers().map(transfer => [transfer.id, transfer])));
+
+  private readonly completedPageSize = 25;
+  private readonly showMoreSize = 50;
+  private readonly showAllLimit = 200;
 
   togglePopup(): void {
     this.isTransfersPopupMinimized.update(value => !value);
@@ -411,8 +451,74 @@ export class TransferPanelComponent {
   }
 
   groupTransfers(group: { transferIds: readonly string[] }): TransferItem[] {
-    const byId = new Map(this.driveStore.transfers().map(transfer => [transfer.id, transfer]));
-    return group.transferIds.map(id => byId.get(id)).filter((transfer): transfer is TransferItem => !!transfer);
+    const rank: Record<TransferItem['status'], number> = { error: 0, paused: 1, processing: 2, pending: 3, success: 4 };
+    return group.transferIds
+      .map(id => this.transferById().get(id))
+      .filter((transfer): transfer is TransferItem => !!transfer)
+      .sort((a, b) => rank[a.status] - rank[b.status] || b.timestamp.getTime() - a.timestamp.getTime());
+  }
+
+  completedCount(group: { transferIds: readonly string[] }): number {
+    return this.groupTransfers(group).filter(transfer => transfer.status === 'success').length;
+  }
+
+  completedLabel(group: { transferIds: readonly string[] }): string {
+    return `${this.completedCount(group)} de ${group.transferIds.length} arquivos concluídos`;
+  }
+
+  completedHidden(id: string): boolean {
+    return this.hiddenCompletedGroups().has(id);
+  }
+
+  visibleGroupTransfers(group: { id: string; transferIds: readonly string[] }): TransferItem[] {
+    const transfers = this.groupTransfers(group);
+    if (this.completedHidden(group.id)) return transfers.filter(transfer => transfer.status !== 'success');
+    const limit = this.completedLimits().get(group.id) ?? this.completedPageSize;
+    let completed = 0;
+    return transfers.filter(transfer => transfer.status !== 'success' || completed++ < limit);
+  }
+
+  visibleMiniTransfers(): TransferItem[] {
+    const visible = new Set(this.driveStore.transferGroupViews().flatMap(group => this.visibleGroupTransfers(group).map(transfer => transfer.id)));
+    return this.driveStore.transfers().slice().reverse().filter(transfer => !transfer.groupId || visible.has(transfer.id));
+  }
+
+  hasMoreCompleted(group: { id: string; transferIds: readonly string[] }): boolean {
+    const limit = this.completedLimits().get(group.id) ?? this.completedPageSize;
+    return !this.completedHidden(group.id) && this.completedCount(group) > limit;
+  }
+
+  canShowAllCompleted(group: { id: string; transferIds: readonly string[] }): boolean {
+    const limit = this.completedLimits().get(group.id) ?? this.completedPageSize;
+    return !this.completedHidden(group.id) && this.completedCount(group) > limit && this.completedCount(group) <= this.showAllLimit;
+  }
+
+  showMoreCompleted(id: string): void {
+    this.completedLimits.update(limits => {
+      const next = new Map(limits);
+      next.set(id, (next.get(id) ?? this.completedPageSize) + this.showMoreSize);
+      return next;
+    });
+  }
+
+  showAllCompleted(id: string): void {
+    this.completedLimits.update(limits => {
+      const next = new Map(limits);
+      next.set(id, Number.MAX_SAFE_INTEGER);
+      return next;
+    });
+  }
+
+  hideCompleted(id: string): void {
+    this.hiddenCompletedGroups.update(groups => new Set(groups).add(id));
+  }
+
+  showCompleted(id: string): void {
+    this.hiddenCompletedGroups.update(groups => {
+      const next = new Set(groups);
+      next.delete(id);
+      return next;
+    });
   }
 
   formatBytes(bytes: number): string {

@@ -160,6 +160,95 @@ describe('TransferPanelComponent', () => {
     expect(fixture.nativeElement.querySelector('.transfer-group-item')).not.toBeNull();
   });
 
+  it('keeps grouped completed items bounded and orders active items first', () => {
+    const items = Array.from({ length: 60 }, (_, index) => transfer({
+      id: `done-${index}`,
+      fileName: `done-${index}`,
+      status: 'success',
+      progress: 100,
+      groupId: 'large-group',
+      timestamp: new Date(2026, 0, 1, 12, 0, index),
+    }));
+    items.push(transfer({ id: 'active', fileName: 'active', groupId: 'large-group', status: 'processing' }));
+    store.transfers.set(items);
+    store.transferGroupViews.set([{
+      id: 'large-group', source: 'multiple-files', transferIds: items.map(item => item.id), totalFiles: items.length,
+      completedFiles: 60, failedFiles: 0, cancelledFiles: 0, pausedFiles: 0, activeFiles: 1,
+      totalBytes: 60, transferredBytes: 60, progress: 0.99, speedBytesPerSecond: 1,
+      etaSeconds: 1, status: 'active', canPause: true, canResume: false, canCancel: true, canClear: false,
+    }]);
+    fixture.detectChanges();
+
+    fixture.nativeElement.querySelector('.transfer-group-header').click();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.transfer-group-item')).toHaveSize(26);
+    expect(fixture.nativeElement.querySelector('.transfer-group-item-name').textContent).toContain('active');
+    expect(fixture.nativeElement.textContent).toContain('Mostrar mais 50');
+
+    fixture.nativeElement.querySelector('.completed-control-btn').click();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.transfer-group-item')).toHaveSize(61);
+  });
+
+  it('uses a single scroll region for the full transfer view', () => {
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.transfers-scroll-region')).not.toBeNull();
+    expect(getComputedStyle(fixture.nativeElement.querySelector('.transfers-container')).overflow).toBe('hidden');
+    expect(fixture.nativeElement.classList.contains('transfer-panel--page')).toBeTrue();
+    expect(fixture.nativeElement.querySelector('.transfers-header')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.transfers-header').compareDocumentPosition(fixture.nativeElement.querySelector('.transfers-scroll-region')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps the page scrollable and progressive with 813 transfers across two groups', () => {
+    const makeGroup = (id: string, completed: number, active: number) => {
+      const items = Array.from({ length: completed }, (_, index) => transfer({
+        id: `${id}-done-${index}`, fileName: `${id}-done-${index}`, groupId: id, status: 'success', progress: 100,
+      }));
+      items.push(...Array.from({ length: active }, (_, index) => transfer({
+        id: `${id}-active-${index}`, fileName: `${id}-active-${index}`, groupId: id,
+        status: index === 1 ? 'paused' : index === 2 ? 'error' : 'processing',
+      })));
+      return items;
+    };
+    const first = makeGroup('group-a', 330, 3);
+    const second = makeGroup('group-b', 476, 3);
+    const standalone = transfer({ id: 'standalone', groupId: undefined, fileName: 'avulso.txt' });
+    const items = [...first, ...second, standalone];
+    store.transfers.set(items);
+    store.transferGroupViews.set([
+      { id: 'group-a', source: 'multiple-files', transferIds: first.map(item => item.id), totalFiles: first.length, completedFiles: 330, failedFiles: 1, cancelledFiles: 0, pausedFiles: 1, activeFiles: 1, totalBytes: 333, transferredBytes: 330, progress: .9, speedBytesPerSecond: 1, etaSeconds: 1, status: 'active', canPause: true, canResume: false, canCancel: true, canClear: false },
+      { id: 'group-b', source: 'folder-upload', transferIds: second.map(item => item.id), totalFiles: second.length, completedFiles: 476, failedFiles: 1, cancelledFiles: 0, pausedFiles: 1, activeFiles: 1, totalBytes: 479, transferredBytes: 476, progress: .9, speedBytesPerSecond: 1, etaSeconds: 1, status: 'active', canPause: true, canResume: false, canCancel: true, canClear: false },
+    ]);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelectorAll('.transfer-group')).toHaveSize(2);
+    expect(fixture.nativeElement.querySelectorAll('.transfer-group-item')).toHaveSize(0);
+    expect(fixture.nativeElement.querySelector('.transfers-list').textContent).toContain('avulso.txt');
+
+    const headers = fixture.nativeElement.querySelectorAll('.transfer-group-header') as NodeListOf<HTMLButtonElement>;
+    headers[0].click();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.transfer-group-item')).toHaveSize(28);
+    expect(fixture.nativeElement.textContent).toContain('Mostrar mais 50');
+    expect(headers[0].getAttribute('aria-controls')).toBe('transfer-group-items-group-a');
+    expect(fixture.nativeElement.querySelector('#transfer-group-items-group-a')?.getAttribute('role')).toBe('region');
+
+    fixture.nativeElement.querySelector('.completed-control-btn').click();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelectorAll('.transfer-group-item')).toHaveSize(78);
+  });
+
+  it('marks the popup and page variants explicitly', () => {
+    store.transfers.set([transfer({ status: 'success' })]);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.classList.contains('transfer-panel--page')).toBeTrue();
+
+    fixture.componentRef.setInput('currentView', 'drive');
+    fixture.detectChanges();
+    expect(fixture.nativeElement.classList.contains('transfer-panel--popup')).toBeTrue();
+    expect(fixture.nativeElement.querySelector('.transfers-popup-wrapper.transfer-panel--popup')).not.toBeNull();
+  });
+
   it('does not show group progress or an overlaid clear button after completion', () => {
     store.transfers.set([transfer({ id: 'finished', groupId: 'group-2', status: 'success', progress: 100 })]);
     store.transferGroupViews.set([{
