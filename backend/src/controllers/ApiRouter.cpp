@@ -9,10 +9,26 @@
 
 #include <optional>
 #include <unordered_set>
+#include <unordered_map>
 #include <fstream>
 #include <sstream>
 #include <thread>
 #include <cpr/cpr.h>
+#include <algorithm>
+
+namespace {
+crow::response storage_move_error(const std::exception& error) {
+    const std::string code = error.what();
+    int status = 400;
+    if (code == "STORAGE_MOVE_NOT_FOUND" || code == "NOT_FOUND") status = 404;
+    else if (code == "ACTIVE_PUBLIC_SHARE" || code == "STORAGE_MOVE_ALREADY_ACTIVE" || code == "SAME_STORAGE_TARGET" || code == "STORAGE_MOVE_INVALID_STATE") status = 409;
+    else if (code == "STORAGE_TARGET_UNAVAILABLE" || code == "GOOGLE_SESSION_FAILED") status = 502;
+    crow::json::wvalue body;
+    body["error_code"] = code;
+    body["error"] = "Operacao de armazenamento nao concluida";
+    return crow::response(status, body);
+}
+}
 
 ApiRouter::ApiRouter(DatabasePool& pool, AuthService& auth, FolderManager& folder_mgr,
                      FileManager* file_mgr, FileChunker* chunker,
@@ -2021,6 +2037,365 @@ crow::response ApiRouter::handle_get_google_accounts(const crow::request& req) {
     }
 }
 
+crow::response ApiRouter::handle_get_storage_targets(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+
+    try {
+        auto conn = pool_->acquire_connection();
+        pqxx::work txn(*conn);
+        auto local = txn.exec(
+            "SELECT used_storage_bytes, max_storage_bytes FROM users WHERE id = $1",
+            pqxx::params{*user_id_opt});
+        if (local.empty()) return crow::response(404, R"({"error":"Usuario nao encontrado"})");
+        const uint64_t local_used = local[0][0].as<uint64_t>();
+        const uint64_t local_max = local[0][1].as<uint64_t>();
+        txn.commit();
+
+        std::vector<crow::json::wvalue> targets;
+        crow::json::wvalue local_target;
+        local_target["key"] = "local";
+        local_target["provider"] = "local";
+        local_target["label"] = "Local";
+        local_target["external_storage_id"] = nullptr;
+        local_target["used_bytes"] = local_used;
+        local_target["max_bytes"] = local_max;
+        local_target["available_bytes"] = local_max > local_used ? local_max - local_used : 0;
+        local_target["nanika_used_bytes"] = local_used;
+        local_target["status"] = "ready";
+        targets.push_back(std::move(local_target));
+
+        if (gdrive_) {
+            for (const auto& storage : gdrive_->get_storage_targets(*user_id_opt)) {
+                crow::json::wvalue target;
+                target["key"] = "google:" + std::to_string(storage.id);
+                target["provider"] = "google_drive";
+                target["label"] = storage.account_email.empty() ? "Google Drive" : storage.account_email;
+                target["external_storage_id"] = storage.id;
+                target["account_email"] = storage.account_email;
+                if (!storage.account_picture.empty()) target["account_picture"] = storage.account_picture;
+                target["used_bytes"] = storage.used_bytes;
+                target["max_bytes"] = storage.max_bytes.has_value()
+                    ? crow::json::wvalue(*storage.max_bytes) : crow::json::wvalue(nullptr);
+                target["available_bytes"] = storage.available_bytes.has_value()
+                    ? crow::json::wvalue(*storage.available_bytes) : crow::json::wvalue(nullptr);
+                target["nanika_used_bytes"] = storage.nanika_used_bytes;
+                target["status"] = storage.status;
+                targets.push_back(std::move(target));
+            }
+        }
+
+        crow::json::wvalue response;
+        response["targets"] = std::move(targets);
+        return crow::response(200, response);
+    } catch (const std::exception&) {
+        return crow::response(500, R"({"error":"Erro ao listar armazenamentos"})");
+    }
+}
+
+crow::response ApiRouter::handle_get_storage_tree(const crow::request& req) {
+    auto user_id_opt = authenticate_request(req);
+    if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    const char* provider_param = req.url_params.get("provider");
+    if (!provider_param) return crow::response(400, R"({"error":"provider obrigatorio"})");
+
+    try {
+        std::optional<uint64_t> storage_id;
+        std::optional<uint64_t> folder_id;
+        if (const char* value = req.url_params.get("external_storage_id")) {
+            const long long parsed = std::stoll(value);
+            if (parsed <= 0) throw std::invalid_argument("INVALID_STORAGE_ID");
+            storage_id = static_cast<uint64_t>(parsed);
+        }
+        if (const char* value = req.url_params.get("folder_id")) {
+            const long long parsed = std::stoll(value);
+            if (parsed <= 0) throw std::invalid_argument("INVALID_FOLDER_ID");
+            folder_id = static_cast<uint64_t>(parsed);
+        }
+        int limit = req.url_params.get("file_limit") ? std::stoi(req.url_params.get("file_limit")) : 50;
+        int offset = req.url_params.get("file_offset") ? std::stoi(req.url_params.get("file_offset")) : 0;
+        auto response = file_mgr_->get_storage_tree(*user_id_opt, provider_param, storage_id, folder_id, limit, offset);
+        return crow::response(200, response);
+    } catch (const std::invalid_argument&) {
+        return crow::response(400, R"({"error":"Parametros invalidos"})");
+    } catch (const std::exception& error) {
+        const std::string message = error.what();
+        if (message == "STORAGE_NOT_FOUND" || message == "FOLDER_NOT_FOUND") {
+            return crow::response(404, R"({"error":"Recurso nao encontrado"})");
+        }
+        return crow::response(500, R"({"error":"Erro ao listar armazenamento"})");
+    }
+}
+
+crow::response ApiRouter::handle_start_storage_move(const crow::request& req, int file_id) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    if (file_id <= 0) return crow::response(400, R"({"error_code":"STORAGE_MOVE_NOT_FOUND"})");
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("target_provider") || body["target_provider"].t() != crow::json::type::String) {
+        return crow::response(400, R"({"error":"JSON invalido"})");
+    }
+    try {
+        const std::string provider = body["target_provider"].s();
+        std::optional<uint64_t> storage_id;
+        std::optional<uint64_t> available;
+        if (body.has("target_external_storage_id")) {
+            const int64_t value = body["target_external_storage_id"].i();
+            if (value <= 0) throw std::invalid_argument("STORAGE_TARGET_NOT_FOUND");
+            storage_id = static_cast<uint64_t>(value);
+        }
+        if (provider == "google_drive") {
+            if (!gdrive_ || !storage_id.has_value()) throw std::runtime_error("STORAGE_TARGET_NOT_FOUND");
+            const auto targets = gdrive_->get_storage_targets(*user);
+            auto target = std::find_if(targets.begin(), targets.end(), [&](const auto& item) { return item.id == *storage_id; });
+            if (target == targets.end()) throw std::runtime_error("STORAGE_TARGET_NOT_FOUND");
+            if (target->status != "ready") throw std::runtime_error("STORAGE_TARGET_UNAVAILABLE");
+            available = target->available_bytes;
+        }
+        auto result = file_mgr_->start_storage_move(*user, static_cast<uint64_t>(file_id), provider, storage_id, available);
+        return crow::response(201, result);
+    } catch (const std::exception& error) {
+        if (std::string(error.what()).find("idx_storage_move_one_active_file") != std::string::npos) {
+            return storage_move_error(std::runtime_error("STORAGE_MOVE_ALREADY_ACTIVE"));
+        }
+        return storage_move_error(error);
+    }
+}
+
+crow::response ApiRouter::handle_get_active_storage_moves(const crow::request& req) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    try { return crow::response(200, file_mgr_->get_active_storage_moves(*user)); }
+    catch (const std::exception& error) { return storage_move_error(error); }
+}
+
+crow::response ApiRouter::handle_get_storage_move(const crow::request& req, int move_id) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    if (move_id <= 0) return crow::response(400);
+    try { return crow::response(200, file_mgr_->get_storage_move(*user, static_cast<uint64_t>(move_id))); }
+    catch (const std::exception& error) { return storage_move_error(error); }
+}
+
+crow::response ApiRouter::handle_pause_storage_move(const crow::request& req, int move_id) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    try {
+        file_mgr_->set_storage_move_status(*user, move_id, "paused");
+        return crow::response(200, file_mgr_->get_storage_move(*user, move_id));
+    } catch (const std::exception& error) { return storage_move_error(error); }
+}
+
+crow::response ApiRouter::handle_resume_storage_move(const crow::request& req, int move_id) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    try {
+        file_mgr_->set_storage_move_status(*user, move_id, "transferring");
+        return crow::response(200, file_mgr_->get_storage_move(*user, move_id));
+    } catch (const std::exception& error) { return storage_move_error(error); }
+}
+
+crow::response ApiRouter::handle_cancel_storage_move(const crow::request& req, int move_id) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    try {
+        auto result = file_mgr_->cancel_storage_move(*user, move_id);
+        auto conn = pool_->acquire_connection();
+        pqxx::read_transaction txn(*conn);
+        auto items = txn.exec(
+            "SELECT i.id FROM storage_move_items i JOIN storage_move_jobs j ON j.id=i.move_job_id "
+            "WHERE j.id=$1 AND j.user_id=$2",
+            pqxx::params{move_id,*user});
+        for (const auto& item : items) {
+            if (chunker_) chunker_->delete_move_file(item[0].as<uint64_t>());
+        }
+        trigger_async_gc_cleanup();
+        return crow::response(200, result);
+    } catch (const std::exception& error) { return storage_move_error(error); }
+}
+
+crow::response ApiRouter::handle_storage_move_progress(const crow::request& req, int move_id) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    auto body = crow::json::load(req.body);
+    if (!body || !body.has("item_id") || !body.has("transferred_bytes")) return crow::response(400, R"({"error":"JSON invalido"})");
+    try {
+        const int64_t item_id = body["item_id"].i();
+        const int64_t bytes = body["transferred_bytes"].i();
+        if (item_id <= 0 || bytes < 0) throw std::invalid_argument("STORAGE_MOVE_INVALID_STATE");
+        file_mgr_->update_storage_move_progress(*user, move_id, item_id, bytes);
+        return crow::response(200, file_mgr_->get_storage_move(*user, move_id));
+    } catch (const std::exception& error) { return storage_move_error(error); }
+}
+
+crow::response ApiRouter::handle_upload_storage_move_chunk(const crow::request& req, int move_id, int item_id, int chunk_index) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    if (!chunker_ || move_id <= 0 || item_id <= 0 || chunk_index < 0 || !chunker_->validate_chunk_size(req.body.size())) return crow::response(400);
+    try {
+        {
+            auto conn = pool_->acquire_connection();
+            pqxx::work txn(*conn);
+            auto valid = txn.exec(
+                "SELECT i.total_bytes,j.status FROM storage_move_items i JOIN storage_move_jobs j ON j.id=i.move_job_id "
+                "WHERE i.id=$1 AND j.id=$2 AND j.user_id=$3 AND j.target_provider='local'",
+                pqxx::params{item_id,move_id,*user});
+            if (valid.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
+            const uint64_t offset = static_cast<uint64_t>(chunk_index) * FileChunker::MAX_CHUNK_SIZE;
+            const uint64_t total = valid[0][0].as<uint64_t>();
+            if (valid[0][1].as<std::string>() == "paused" || offset > total || req.body.size() > total-offset) throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+            txn.commit();
+        }
+        if (!chunker_->write_move_chunk(item_id,chunk_index,req.body)) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+        const uint64_t transferred = file_mgr_->record_storage_move_chunk(*user,move_id,item_id,chunk_index,req.body.size());
+        crow::json::wvalue response;
+        response["transferred_bytes"] = transferred;
+        return crow::response(200,response);
+    } catch (const std::exception& error) { return storage_move_error(error); }
+}
+
+crow::response ApiRouter::handle_get_storage_move_chunks(const crow::request& req, int move_id, int item_id) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    try {
+        auto conn = pool_->acquire_connection();
+        pqxx::work txn(*conn);
+        auto owned = txn.exec("SELECT 1 FROM storage_move_items i JOIN storage_move_jobs j ON j.id=i.move_job_id WHERE i.id=$1 AND j.id=$2 AND j.user_id=$3",pqxx::params{item_id,move_id,*user});
+        if (owned.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
+        auto rows = txn.exec("SELECT chunk_index FROM storage_move_chunks WHERE move_item_id=$1 ORDER BY chunk_index",pqxx::params{item_id});
+        std::vector<int> chunks;
+        for (const auto& row : rows) chunks.push_back(row[0].as<int>());
+        crow::json::wvalue response;
+        response["uploaded_chunks"] = std::move(chunks);
+        txn.commit();
+        return crow::response(200,response);
+    } catch (const std::exception& error) { return storage_move_error(error); }
+}
+
+crow::response ApiRouter::handle_get_storage_move_source(const crow::request& req, int move_id, int item_id) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    try {
+        auto conn = pool_->acquire_connection();
+        pqxx::work txn(*conn);
+        auto rows = txn.exec(
+            "SELECT j.source_provider,j.source_external_storage_id,i.source_external_file_id,i.file_id,i.role,i.total_bytes "
+            "FROM storage_move_items i JOIN storage_move_jobs j ON j.id=i.move_job_id WHERE j.id=$1 AND i.id=$2 AND j.user_id=$3",
+            pqxx::params{move_id,item_id,*user});
+        if (rows.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
+        const auto& item = rows[0];
+        const std::string provider = item[0].as<std::string>();
+        if (provider == "google_drive") {
+            if (!gdrive_ || item[1].is_null() || item[2].is_null()) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+            crow::json::wvalue response;
+            response["provider"] = "google_drive";
+            response["external_file_id"] = item[2].as<std::string>();
+            response["external_storage_id"] = item[1].as<int64_t>();
+            response["access_token"] = gdrive_->get_access_token_for_storage(item[1].as<uint64_t>());
+            response["size_bytes"] = item[5].as<int64_t>();
+            txn.commit();
+            return crow::response(200,response);
+        }
+        txn.commit();
+        if (!chunker_) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+        const uint64_t total = item[5].as<uint64_t>();
+        const std::string range = req.get_header_value("Range");
+        if (range.rfind("bytes=",0) != 0) return crow::response(400,R"({"error":"Range obrigatorio"})");
+        const auto dash = range.find('-',6);
+        if (dash == std::string::npos) return crow::response(416);
+        const uint64_t start = std::stoull(range.substr(6,dash-6));
+        uint64_t end = range.size() > dash+1 ? std::stoull(range.substr(dash+1)) : total-1;
+        if (start >= total) return crow::response(416);
+        end = std::min(end,total-1);
+        const uint64_t length = end-start+1;
+        const uint64_t file_id = item[3].as<uint64_t>();
+        const std::string data = item[4].as<std::string>() == "proxy"
+            ? chunker_->read_proxy_file_portion(file_id,start,length)
+            : chunker_->read_file_portion(file_id,start,length);
+        crow::response response(206,data);
+        response.set_header("Content-Type","application/octet-stream");
+        response.set_header("Accept-Ranges","bytes");
+        response.set_header("Content-Length",std::to_string(data.size()));
+        response.set_header("Content-Range","bytes "+std::to_string(start)+"-"+std::to_string(start+data.size()-1)+"/"+std::to_string(total));
+        response.set_header("Access-Control-Expose-Headers","Content-Range, Content-Length, Accept-Ranges");
+        return response;
+    } catch (const std::exception& error) { return storage_move_error(error); }
+}
+
+crow::response ApiRouter::handle_create_storage_move_google_session(const crow::request& req, int move_id, int item_id) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    try {
+        if (!gdrive_) throw std::runtime_error("GOOGLE_SESSION_FAILED");
+        auto conn = pool_->acquire_connection();
+        pqxx::work txn(*conn);
+        auto rows = txn.exec(
+            "SELECT j.target_external_storage_id,i.total_bytes,j.status FROM storage_move_items i JOIN storage_move_jobs j ON j.id=i.move_job_id "
+            "WHERE j.id=$1 AND i.id=$2 AND j.user_id=$3 AND j.target_provider='google_drive'",
+            pqxx::params{move_id,item_id,*user});
+        if (rows.empty() || rows[0][0].is_null()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
+        const std::string status = rows[0][2].as<std::string>();
+        if (status == "paused" || status == "cancelled" || status == "completed") throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+        const uint64_t storage_id = rows[0][0].as<uint64_t>();
+        const uint64_t size = rows[0][1].as<uint64_t>();
+        txn.commit();
+        auto session = gdrive_->create_resumable_session(*user,storage_id,size,"nanika-move-"+std::to_string(move_id)+"-"+std::to_string(item_id)+".bin");
+        crow::json::wvalue response;
+        response["session_uri"] = session.session_uri;
+        response["access_token"] = session.access_token;
+        return crow::response(200,response);
+    } catch (const std::exception& error) { return storage_move_error(error); }
+}
+
+crow::response ApiRouter::handle_complete_storage_move(const crow::request& req, int move_id) {
+    auto user = authenticate_request(req);
+    if (!user) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
+    try {
+        if (!chunker_) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+        auto conn = pool_->acquire_connection();
+        pqxx::work txn(*conn);
+        auto jobs = txn.exec("SELECT status,target_provider,target_external_storage_id FROM storage_move_jobs WHERE id=$1 AND user_id=$2",pqxx::params{move_id,*user});
+        if (jobs.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
+        const std::string status = jobs[0][0].as<std::string>();
+        if (status == "completed" || status == "cleanup_pending") {
+            txn.commit();
+            return crow::response(200,file_mgr_->complete_storage_move(*user,move_id,*chunker_));
+        }
+        const std::string provider = jobs[0][1].as<std::string>();
+        auto items = txn.exec("SELECT id,total_bytes FROM storage_move_items WHERE move_job_id=$1 ORDER BY id",pqxx::params{move_id});
+        std::unordered_map<uint64_t,std::string> external_ids;
+        auto body = crow::json::load(req.body.empty() ? "{}" : req.body);
+        if (body && body.has("items") && body["items"].t() == crow::json::type::List) {
+            for (const auto& value : body["items"]) {
+                if (value.has("item_id") && value.has("target_external_file_id")) {
+                    external_ids[static_cast<uint64_t>(value["item_id"].i())] = value["target_external_file_id"].s();
+                }
+            }
+        }
+        const uint64_t target_storage = !jobs[0][2].is_null() ? jobs[0][2].as<uint64_t>() : 0;
+        txn.commit();
+        for (const auto& item : items) {
+            const uint64_t item_id = item[0].as<uint64_t>();
+            const uint64_t total = item[1].as<uint64_t>();
+            if (provider == "google_drive") {
+                auto external = external_ids.find(item_id);
+                if (external == external_ids.end() || !gdrive_ || gdrive_->get_external_file_size(*user,target_storage,external->second) != total) {
+                    throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+                }
+                file_mgr_->update_storage_move_progress(*user,move_id,item_id,total);
+                file_mgr_->mark_storage_move_item_uploaded(*user,move_id,item_id,external->second);
+            } else {
+                if (chunker_->get_move_file_size(item_id) != total) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+                file_mgr_->update_storage_move_progress(*user,move_id,item_id,total);
+                file_mgr_->mark_storage_move_item_uploaded(*user,move_id,item_id,std::nullopt);
+            }
+        }
+        auto result = file_mgr_->complete_storage_move(*user,move_id,*chunker_);
+        trigger_async_gc_cleanup();
+        return crow::response(200,result);
+    } catch (const std::exception& error) { return storage_move_error(error); }
+}
+
 crow::response ApiRouter::handle_unlink_google_account(const crow::request& req, int account_id) {
     auto user_id_opt = authenticate_request(req);
     if (!user_id_opt) return crow::response(401, R"({"error":"Token ausente ou invalido"})");
@@ -2041,6 +2416,7 @@ crow::response ApiRouter::handle_unlink_google_account(const crow::request& req,
     } catch (const std::exception& e) {
         std::string msg = e.what();
         if (msg == "GOOGLE_DRIVE_NOT_LINKED") return crow::response(404, R"({"error":"Conta nao encontrada ou nao pertence ao usuario"})");
+        if (msg == "ACCOUNT_HAS_ACTIVE_STORAGE_MOVES") return crow::response(409, R"({"error_code":"ACCOUNT_HAS_ACTIVE_STORAGE_MOVES","error":"A conta possui transferencias de armazenamento ativas"})");
         return crow::response(500, R"({"error":"Erro interno"})");
     }
 }
@@ -2510,6 +2886,56 @@ void ApiRouter::setup_routes(crow::App<CustomCorsMiddleware, RateLimitMiddleware
         res.set_header("Content-Type", "application/json");
         return res;
     });
+
+    CROW_ROUTE(app, "/api/storage/targets").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) {
+        auto res = handle_get_storage_targets(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/api/storage/tree").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) {
+        auto res = handle_get_storage_tree(req);
+        res.set_header("Content-Type", "application/json");
+        return res;
+    });
+
+    CROW_ROUTE(app, "/files/<int>/storage-moves").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req, int file_id) { return handle_start_storage_move(req,file_id); });
+
+    CROW_ROUTE(app, "/storage-moves/active").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req) { return handle_get_active_storage_moves(req); });
+
+    CROW_ROUTE(app, "/storage-moves/<int>").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, int move_id) { return handle_get_storage_move(req,move_id); });
+
+    CROW_ROUTE(app, "/storage-moves/<int>/pause").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req, int move_id) { return handle_pause_storage_move(req,move_id); });
+
+    CROW_ROUTE(app, "/storage-moves/<int>/resume").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req, int move_id) { return handle_resume_storage_move(req,move_id); });
+
+    CROW_ROUTE(app, "/storage-moves/<int>").methods(crow::HTTPMethod::Delete)
+    ([this](const crow::request& req, int move_id) { return handle_cancel_storage_move(req,move_id); });
+
+    CROW_ROUTE(app, "/storage-moves/<int>/progress").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req, int move_id) { return handle_storage_move_progress(req,move_id); });
+
+    CROW_ROUTE(app, "/storage-moves/<int>/items/<int>/chunks/<int>").methods(crow::HTTPMethod::Put)
+    ([this](const crow::request& req, int move_id, int item_id, int chunk_index) { return handle_upload_storage_move_chunk(req,move_id,item_id,chunk_index); });
+
+    CROW_ROUTE(app, "/storage-moves/<int>/items/<int>/uploaded-chunks").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, int move_id, int item_id) { return handle_get_storage_move_chunks(req,move_id,item_id); });
+
+    CROW_ROUTE(app, "/storage-moves/<int>/items/<int>/source").methods(crow::HTTPMethod::Get)
+    ([this](const crow::request& req, int move_id, int item_id) { return handle_get_storage_move_source(req,move_id,item_id); });
+
+    CROW_ROUTE(app, "/storage-moves/<int>/items/<int>/google-session").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req, int move_id, int item_id) { return handle_create_storage_move_google_session(req,move_id,item_id); });
+
+    CROW_ROUTE(app, "/storage-moves/<int>/complete").methods(crow::HTTPMethod::Post)
+    ([this](const crow::request& req, int move_id) { return handle_complete_storage_move(req,move_id); });
 
     CROW_ROUTE(app, "/api/storage/google/accounts/<int>").methods(crow::HTTPMethod::Delete)
     ([this](const crow::request& req, int account_id) {

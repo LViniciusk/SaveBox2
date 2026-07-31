@@ -4,6 +4,8 @@ import { Observable, firstValueFrom, map } from 'rxjs';
 import { environment } from '../../../../environments/environment';
 import { BatchUploadRequestItem, BatchUploadResponseItem, FolderBatchResponseItem } from '../upload/upload.models';
 import { firstValueFromAbortable } from '../upload/abortable-observable';
+import { StorageProvider, StorageTarget } from '../state/drive.types';
+import { StorageMoveJob } from '../storage-move/storage-move.models';
 
 export interface QuotaResponse {
   used_bytes: number;
@@ -25,13 +27,28 @@ export interface DriveFileDto {
   size_bytes: number;
   encrypted_fdk: string;
   is_hidden: boolean;
-  storage_provider: 'local' | 'google_drive';
+  storage_provider: StorageProvider;
+  external_storage_id: number | null;
   mime_type?: string;
 }
 
 export interface TreeResponse {
   folders: DriveFolderDto[];
   files: DriveFileDto[];
+}
+
+export interface StorageTreeResponse {
+  target: {
+    provider: StorageProvider;
+    external_storage_id: number | null;
+  };
+  current_folder_id: number | null;
+  folders: DriveFolderDto[];
+  files: DriveFileDto[];
+  total_files: number;
+  has_more: boolean;
+  file_limit: number;
+  file_offset: number;
 }
 
 export interface PinnedFolderReference {
@@ -241,10 +258,139 @@ export class DriveService {
     });
   }
 
-  getLinkedGoogleAccounts(): Observable<any[]> {
-    return this.http.get<any[]>(`${environment.apiUrl}/api/storage/google/accounts`, {
+  getLinkedGoogleAccounts(): Observable<{ accounts: Array<{
+    id: number;
+    account_email: string;
+    account_picture?: string;
+    root_folder_id?: string;
+  }> }> {
+    return this.http.get<{ accounts: Array<{
+      id: number;
+      account_email: string;
+      account_picture?: string;
+      root_folder_id?: string;
+    }> }>(`${environment.apiUrl}/api/storage/google/accounts`, {
       withCredentials: true,
     });
+  }
+
+  getStorageTargets(): Observable<StorageTarget[]> {
+    return this.http.get<{ targets: Array<{
+      key: string;
+      provider: StorageProvider;
+      label: string;
+      external_storage_id: number | null;
+      account_email?: string;
+      account_picture?: string;
+      used_bytes: number;
+      max_bytes: number | null;
+      available_bytes: number | null;
+      nanika_used_bytes: number;
+      status: StorageTarget['status'];
+    }> }>(`${environment.apiUrl}/api/storage/targets`, { withCredentials: true }).pipe(
+      map(response => response.targets.map(target => ({
+        key: target.key,
+        provider: target.provider,
+        label: target.label,
+        externalStorageId: target.external_storage_id,
+        accountEmail: target.account_email,
+        accountPicture: target.account_picture,
+        usedBytes: target.used_bytes,
+        maxBytes: target.max_bytes,
+        availableBytes: target.available_bytes,
+        nanikaUsedBytes: target.nanika_used_bytes,
+        status: target.status,
+      })))
+    );
+  }
+
+  getStorageTree(
+    provider: StorageProvider,
+    externalStorageId: number | null,
+    folderId: number | null,
+    fileLimit = 50,
+    fileOffset = 0,
+  ): Observable<StorageTreeResponse> {
+    const params = new URLSearchParams({
+      provider,
+      file_limit: String(fileLimit),
+      file_offset: String(fileOffset),
+    });
+    if (externalStorageId !== null) params.set('external_storage_id', String(externalStorageId));
+    if (folderId !== null) params.set('folder_id', String(folderId));
+    return this.http.get<StorageTreeResponse>(`${environment.apiUrl}/api/storage/tree?${params}`, {
+      withCredentials: true,
+    });
+  }
+
+  startStorageMove(fileId: number, target: StorageTarget): Observable<StorageMoveJob> {
+    return this.http.post<StorageMoveJob>(`${environment.apiUrl}/files/${fileId}/storage-moves`, {
+      target_provider: target.provider,
+      ...(target.externalStorageId === null ? {} : { target_external_storage_id: target.externalStorageId }),
+    }, { withCredentials: true });
+  }
+
+  getActiveStorageMoves(): Observable<{ moves: StorageMoveJob[] }> {
+    return this.http.get<{ moves: StorageMoveJob[] }>(`${environment.apiUrl}/storage-moves/active`, { withCredentials: true });
+  }
+
+  getStorageMove(moveId: number): Observable<StorageMoveJob> {
+    return this.http.get<StorageMoveJob>(`${environment.apiUrl}/storage-moves/${moveId}`, { withCredentials: true });
+  }
+
+  pauseStorageMove(moveId: number): Observable<StorageMoveJob> {
+    return this.http.post<StorageMoveJob>(`${environment.apiUrl}/storage-moves/${moveId}/pause`, {}, { withCredentials: true });
+  }
+
+  resumeStorageMove(moveId: number): Observable<StorageMoveJob> {
+    return this.http.post<StorageMoveJob>(`${environment.apiUrl}/storage-moves/${moveId}/resume`, {}, { withCredentials: true });
+  }
+
+  cancelStorageMove(moveId: number): Observable<StorageMoveJob> {
+    return this.http.delete<StorageMoveJob>(`${environment.apiUrl}/storage-moves/${moveId}`, { withCredentials: true });
+  }
+
+  reportStorageMoveProgress(moveId: number, itemId: number, transferredBytes: number): Observable<StorageMoveJob> {
+    return this.http.post<StorageMoveJob>(`${environment.apiUrl}/storage-moves/${moveId}/progress`, {
+      item_id: itemId,
+      transferred_bytes: transferredBytes,
+    }, { withCredentials: true });
+  }
+
+  getStorageMoveSource(moveId: number, itemId: number): Observable<{
+    provider: 'google_drive';
+    external_file_id: string;
+    external_storage_id: number;
+    access_token: string;
+    size_bytes: number;
+  }> {
+    return this.http.get<{
+      provider: 'google_drive'; external_file_id: string; external_storage_id: number; access_token: string; size_bytes: number;
+    }>(`${environment.apiUrl}/storage-moves/${moveId}/items/${itemId}/source`, { withCredentials: true });
+  }
+
+  downloadStorageMoveSourceRange(moveId: number, itemId: number, start: number, end: number): Observable<Blob> {
+    return this.http.get(`${environment.apiUrl}/storage-moves/${moveId}/items/${itemId}/source`, {
+      headers: new HttpHeaders({ Range: `bytes=${start}-${end}` }),
+      responseType: 'blob',
+      withCredentials: true,
+    });
+  }
+
+  getStorageMoveUploadedChunks(moveId: number, itemId: number): Observable<{ uploaded_chunks: number[] }> {
+    return this.http.get<{ uploaded_chunks: number[] }>(`${environment.apiUrl}/storage-moves/${moveId}/items/${itemId}/uploaded-chunks`, { withCredentials: true });
+  }
+
+  uploadStorageMoveChunk(moveId: number, itemId: number, chunkIndex: number, chunk: Blob): Observable<{ transferred_bytes: number }> {
+    return this.http.put<{ transferred_bytes: number }>(`${environment.uploadApiUrl}/storage-moves/${moveId}/items/${itemId}/chunks/${chunkIndex}`, chunk, { withCredentials: true });
+  }
+
+  createStorageMoveGoogleSession(moveId: number, itemId: number): Observable<{ session_uri: string; access_token: string }> {
+    return this.http.post<{ session_uri: string; access_token: string }>(`${environment.apiUrl}/storage-moves/${moveId}/items/${itemId}/google-session`, {}, { withCredentials: true });
+  }
+
+  completeStorageMove(moveId: number, items: readonly { item_id: number; target_external_file_id: string }[]): Observable<StorageMoveJob> {
+    return this.http.post<StorageMoveJob>(`${environment.apiUrl}/storage-moves/${moveId}/complete`, { items }, { withCredentials: true });
   }
 
   unlinkGoogleAccount(accountId: number): Observable<any> {

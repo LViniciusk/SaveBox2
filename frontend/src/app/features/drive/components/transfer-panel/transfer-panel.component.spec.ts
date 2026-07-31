@@ -2,10 +2,19 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { TransferPanelComponent } from './transfer-panel.component';
 import { DriveStore, TransferItem } from '../../state/drive.store';
+import { StorageMoveEngineService } from '../../storage-move/storage-move-engine.service';
+import { StorageMoveView } from '../../storage-move/storage-move.models';
 
 describe('TransferPanelComponent', () => {
   let fixture: ComponentFixture<TransferPanelComponent>;
   let store: any;
+  const moveEngine = {
+    jobs: signal<StorageMoveView[]>([]),
+    pause: jasmine.createSpy('pause').and.resolveTo(),
+    resume: jasmine.createSpy('resume').and.resolveTo(),
+    cancel: jasmine.createSpy('cancel').and.resolveTo(),
+    clear: jasmine.createSpy('clear'),
+  };
 
   const transfer = (overrides: Partial<TransferItem> = {}): TransferItem => ({
     id: 'transfer-1',
@@ -18,6 +27,7 @@ describe('TransferPanelComponent', () => {
   });
 
   beforeEach(async () => {
+    moveEngine.jobs.set([]);
     store = jasmine.createSpyObj('DriveStore', [
       'clearCompletedTransfers', 'pauseTransfer', 'resumeUpload', 'resumeDownload',
       'cancelTransfer', 'recoverUpload'
@@ -27,7 +37,11 @@ describe('TransferPanelComponent', () => {
 
     await TestBed.configureTestingModule({
       imports: [TransferPanelComponent],
-      providers: [provideZonelessChangeDetection(), { provide: DriveStore, useValue: store }]
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: DriveStore, useValue: store },
+        { provide: StorageMoveEngineService, useValue: moveEngine },
+      ]
     }).compileComponents();
 
     fixture = TestBed.createComponent(TransferPanelComponent);
@@ -158,6 +172,20 @@ describe('TransferPanelComponent', () => {
     fixture.nativeElement.querySelector('.transfer-group-header').click();
     fixture.detectChanges();
     expect(fixture.nativeElement.querySelector('.transfer-group-item')).not.toBeNull();
+  });
+
+  it('renders a persistent storage move with pause controls', () => {
+    moveEngine.jobs.set([{
+      id: 30, file_id: 9, status: 'transferring', source_provider: 'local', source_external_storage_id: null,
+      target_provider: 'google_drive', target_external_storage_id: 7, total_bytes: 100, transferred_bytes: 25,
+      items: [], fileName: 'cipher.bin', sourceLabel: 'Local', targetLabel: 'Conta Google',
+      speedBytesPerSecond: 10, etaSeconds: 8,
+    }]);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.storage-move-card')?.textContent).toContain('Local → Conta Google');
+    (fixture.nativeElement.querySelector('.storage-move-card .transfer-control-btn') as HTMLButtonElement).click();
+    expect(moveEngine.pause).toHaveBeenCalledOnceWith(30);
   });
 
   it('keeps grouped completed items bounded and orders active items first', () => {

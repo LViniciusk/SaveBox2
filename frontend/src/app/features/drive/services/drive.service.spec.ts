@@ -394,4 +394,69 @@ describe('DriveService', () => {
     expect(req.request.method).toBe('DELETE');
     req.flush({});
   });
+
+  it('maps storage targets without leaking backend field names', () => {
+    let result: any;
+    service.getStorageTargets().subscribe(value => result = value);
+    const req = httpMock.expectOne(`${environment.apiUrl}/api/storage/targets`);
+    expect(req.request.withCredentials).toBeTrue();
+    req.flush({ targets: [{
+      key: 'google:7', provider: 'google_drive', label: 'Conta', external_storage_id: 7,
+      account_email: 'user@example.com', used_bytes: 10, max_bytes: 100,
+      available_bytes: 90, nanika_used_bytes: 5, status: 'ready',
+    }] });
+
+    expect(result[0]).toEqual(jasmine.objectContaining({
+      externalStorageId: 7,
+      accountEmail: 'user@example.com',
+      availableBytes: 90,
+    }));
+    expect(result[0].external_storage_id).toBeUndefined();
+  });
+
+  it('requests one paginated storage projection', () => {
+    service.getStorageTree('google_drive', 7, 12, 25, 50).subscribe();
+    const req = httpMock.expectOne(
+      `${environment.apiUrl}/api/storage/tree?provider=google_drive&file_limit=25&file_offset=50&external_storage_id=7&folder_id=12`);
+    expect(req.request.method).toBe('GET');
+    expect(req.request.withCredentials).toBeTrue();
+    req.flush({ folders: [], files: [], has_more: false });
+  });
+
+  it('starts and controls a storage move using opaque identifiers', () => {
+    const target = {
+      key: 'google:7', provider: 'google_drive' as const, label: 'Conta', externalStorageId: 7,
+      usedBytes: 0, maxBytes: 100, availableBytes: 100, nanikaUsedBytes: 0, status: 'ready' as const,
+    };
+    service.startStorageMove(9, target).subscribe();
+    let req = httpMock.expectOne(`${environment.apiUrl}/files/9/storage-moves`);
+    expect(req.request.body).toEqual({ target_provider: 'google_drive', target_external_storage_id: 7 });
+    expect(JSON.stringify(req.request.body)).not.toContain('fileName');
+    req.flush({});
+
+    service.pauseStorageMove(3).subscribe();
+    req = httpMock.expectOne(`${environment.apiUrl}/storage-moves/3/pause`);
+    expect(req.request.method).toBe('POST');
+    req.flush({});
+
+    service.cancelStorageMove(3).subscribe();
+    req = httpMock.expectOne(`${environment.apiUrl}/storage-moves/3`);
+    expect(req.request.method).toBe('DELETE');
+    req.flush({});
+  });
+
+  it('uses Range for local move sources and raw chunks for local targets', () => {
+    service.downloadStorageMoveSourceRange(2, 4, 0, 1023).subscribe();
+    let req = httpMock.expectOne(`${environment.apiUrl}/storage-moves/2/items/4/source`);
+    expect(req.request.headers.get('Range')).toBe('bytes=0-1023');
+    expect(req.request.responseType).toBe('blob');
+    req.flush(new Blob());
+
+    const chunk = new Blob(['ciphertext']);
+    service.uploadStorageMoveChunk(2, 4, 0, chunk).subscribe();
+    req = httpMock.expectOne(`${environment.uploadApiUrl}/storage-moves/2/items/4/chunks/0`);
+    expect(req.request.method).toBe('PUT');
+    expect(req.request.body).toBe(chunk);
+    req.flush({ transferred_bytes: chunk.size });
+  });
 });

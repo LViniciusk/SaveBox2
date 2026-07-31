@@ -8,6 +8,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <optional>
+#include <chrono>
 
 class DatabasePool;
 
@@ -28,8 +29,20 @@ public:
         std::string account_picture;
         std::string root_folder_id;
     };
+
+    struct StorageTarget {
+        uint64_t id;
+        std::string account_email;
+        std::string account_picture;
+        std::string status;
+        uint64_t used_bytes = 0;
+        std::optional<uint64_t> max_bytes;
+        std::optional<uint64_t> available_bytes;
+        uint64_t nanika_used_bytes = 0;
+    };
     
     std::vector<LinkedAccount> get_linked_accounts(uint64_t user_id);
+    std::vector<StorageTarget> get_storage_targets(uint64_t user_id);
     
     std::string get_access_token_for_storage(uint64_t storage_id);
 
@@ -44,6 +57,14 @@ public:
     int64_t get_available_space(const std::string& access_token);
     
     uint64_t select_best_storage(uint64_t user_id, int64_t file_size_bytes, std::string& out_access_token, std::string& out_root_folder_id);
+
+    struct ResumableSession {
+        std::string session_uri;
+        std::string access_token;
+    };
+    ResumableSession create_resumable_session(uint64_t user_id, uint64_t storage_id,
+                                               uint64_t size_bytes, const std::string& opaque_name);
+    uint64_t get_external_file_size(uint64_t user_id, uint64_t storage_id, const std::string& external_file_id);
 
 protected:
     std::string client_id_;
@@ -69,11 +90,20 @@ private:
     std::shared_mutex cache_mutex_;
     std::unordered_map<uint64_t, TokenCacheEntry> token_cache_;
 
+    struct QuotaCacheEntry {
+        uint64_t used_bytes;
+        std::optional<uint64_t> max_bytes;
+        std::chrono::steady_clock::time_point expires_at;
+    };
+    std::mutex quota_cache_mutex_;
+    std::unordered_map<uint64_t, QuotaCacheEntry> quota_cache_;
+
     bool validate_and_consume_state(uint64_t user_id, const std::string& state);
 
     TokenResponse exchange_code(const std::string& auth_code);
     std::string create_nanika_folder(const std::string& access_token);
     std::string refresh_access_token(const std::string& refresh_token);
+    QuotaCacheEntry get_quota_for_storage(uint64_t storage_id);
 
 protected:
     virtual cpr::Response make_post_request(const std::string& url, const cpr::Payload& payload) const;

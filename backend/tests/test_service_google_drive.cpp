@@ -109,4 +109,45 @@ TEST_CASE("Service Google Drive - Vinculação e Lógica de Token", "[service][g
         REQUIRE(accounts.empty());
         REQUIRE_THROWS_AS(gdrive.unlink_account(9999), std::runtime_error);
     }
+
+    SECTION("Cria sessão resumível somente na raiz da conta vinculada") {
+        gdrive.link_account(9999, "valid_auth_code_123", gdrive.generate_test_state(9999));
+        gdrive.expect_refresh = true;
+        const auto account = gdrive.get_linked_accounts(9999).at(0);
+
+        const auto session = gdrive.create_resumable_session(9999, account.id, 10, "opaque.bin");
+
+        REQUIRE(session.session_uri == "https://upload.example/session-redacted");
+        REQUIRE(session.access_token == "mock_access_token_xyz");
+    }
+
+    SECTION("Valida tamanho e pertencimento do arquivo externo ao destino") {
+        gdrive.link_account(9999, "valid_auth_code_123", gdrive.generate_test_state(9999));
+        gdrive.expect_refresh = true;
+        const auto account = gdrive.get_linked_accounts(9999).at(0);
+
+        REQUIRE(gdrive.get_external_file_size(9999, account.id, "target-file") == 10);
+        gdrive.final_file_in_root = false;
+        try {
+            gdrive.get_external_file_size(9999, account.id, "target-file");
+            FAIL("Deveria rejeitar arquivo fora da raiz de destino");
+        } catch (const std::runtime_error& error) {
+            REQUIRE(std::string(error.what()) == "STORAGE_MOVE_TARGET_INCOMPLETE");
+        }
+    }
+
+    SECTION("Cacheia quota da conta por uma janela curta") {
+        gdrive.link_account(9999, "valid_auth_code_123", gdrive.generate_test_state(9999));
+        gdrive.expect_refresh = true;
+
+        const auto first = gdrive.get_storage_targets(9999).at(0);
+        const auto second = gdrive.get_storage_targets(9999).at(0);
+
+        REQUIRE(first.status == "ready");
+        REQUIRE(first.used_bytes == 500000000000);
+        REQUIRE(first.max_bytes == 1000000000000);
+        REQUIRE(first.available_bytes == 500000000000);
+        REQUIRE(second.available_bytes == first.available_bytes);
+        REQUIRE(gdrive.quota_requests == 1);
+    }
 }

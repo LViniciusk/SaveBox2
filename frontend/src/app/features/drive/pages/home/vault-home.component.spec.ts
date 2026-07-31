@@ -8,7 +8,9 @@ import { DialogService } from '../../../../core/dialog/dialog.service';
 import { ThemeService } from '../../../../core/theme/theme.service';
 import { THEME_STORAGE_KEY } from '../../../../core/theme/theme.types';
 import { DriveStore } from '../../state/drive.store';
+import { ComputerStore } from '../../state/computer.store';
 import { PinnedFoldersStore } from '../../state/pinned-folders.store';
+import { StorageMoveEngineService } from '../../storage-move/storage-move-engine.service';
 import { VaultHomeComponent } from './vault-home.component';
 
 @Component({
@@ -119,6 +121,24 @@ describe('VaultHomeComponent theme switching', () => {
     lockVault: jasmine.createSpy('lockVault'),
   };
   const dialogService = { activeDialog: signal(null), dialogValue: signal('') };
+  const computerStore = {
+    targets: signal([]),
+    currentFolderId: signal<number | null>(null),
+    currentPath: signal<any[]>([]),
+    canGoBack: signal(false),
+    canGoForward: signal(false),
+    canGoUp: signal(false),
+    loadTargets: jasmine.createSpy('loadTargets').and.resolveTo(),
+    refresh: jasmine.createSpy('refresh').and.resolveTo(),
+    goBack: jasmine.createSpy('computerGoBack').and.resolveTo(),
+    goForward: jasmine.createSpy('computerGoForward').and.resolveTo(),
+    goUp: jasmine.createSpy('computerGoUp').and.resolveTo(),
+    navigateAddress: jasmine.createSpy('computerNavigateAddress').and.resolveTo(),
+  };
+  const storageMoveEngine = {
+    jobs: signal([]),
+    loadActive: jasmine.createSpy('loadActive').and.resolveTo(),
+  };
 
   beforeEach(async () => {
     localStorage.removeItem(THEME_STORAGE_KEY);
@@ -144,6 +164,8 @@ describe('VaultHomeComponent theme switching', () => {
         { provide: CryptoService, useValue: cryptoService },
         { provide: DialogService, useValue: dialogService },
         { provide: DriveStore, useValue: driveStore },
+        { provide: ComputerStore, useValue: computerStore },
+        { provide: StorageMoveEngineService, useValue: storageMoveEngine },
         { provide: PinnedFoldersStore, useValue: { load: jasmine.createSpy('load').and.resolveTo(), pinnedFolders: signal([]) } },
       ],
     }).overrideComponent(VaultHomeComponent, {
@@ -173,7 +195,7 @@ describe('VaultHomeComponent theme switching', () => {
     delete document.documentElement.dataset['theme'];
   });
 
-  it('switches shells without recreating the parent or changing drive state', () => {
+  it('switches shells without recreating the parent or changing drive state', async () => {
     const component = fixture.componentInstance;
     const currentView = component.currentView;
     const store = TestBed.inject(DriveStore);
@@ -183,6 +205,7 @@ describe('VaultHomeComponent theme switching', () => {
 
     themeService.setTheme('default');
     fixture.detectChanges();
+    await fixture.whenStable();
 
     expect(fixture.nativeElement.querySelector('.default-shell-stub')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.gdrive-shell-stub')).toBeNull();
@@ -193,7 +216,6 @@ describe('VaultHomeComponent theme switching', () => {
     expect(appState.isLocked()).toBeTrue();
     expect(driveStore.loadQuota).toHaveBeenCalledOnceWith();
     expect(driveStore.loadTree).toHaveBeenCalledOnceWith();
-    expect(TestBed.inject(PinnedFoldersStore).load).toHaveBeenCalledOnceWith();
   });
 
   it('opens sharing only for local files regardless of theme', () => {
@@ -276,7 +298,7 @@ describe('VaultHomeComponent theme switching', () => {
     expect(driveStore.uploadFiles).not.toHaveBeenCalled();
   });
 
-  it('resolves an address path against decrypted folders', () => {
+  it('delegates Este Computador addresses to its independent navigator', () => {
     appState.isLocked.set(false);
     driveStore.files.set([
       { id: 7, isFolder: true, parentId: null, decryptedName: 'Projetos' },
@@ -285,7 +307,8 @@ describe('VaultHomeComponent theme switching', () => {
 
     fixture.componentInstance.onAddressNavigate('Este Computador > Nanika > Projetos > 2026');
 
-    expect(driveStore.navigateTo).toHaveBeenCalledWith(8);
-    expect(fixture.componentInstance.currentView()).toBe('drive');
+    expect(computerStore.navigateAddress).toHaveBeenCalledWith('Este Computador > Nanika > Projetos > 2026');
+    expect(driveStore.navigateTo).not.toHaveBeenCalledWith(8);
+    expect(fixture.componentInstance.currentView()).toBe('computer');
   });
 });

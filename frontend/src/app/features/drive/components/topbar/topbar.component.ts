@@ -107,16 +107,16 @@ import { firstValueFrom } from 'rxjs';
 
                     @for (acc of driveStore.linkedAccounts(); track acc.id) {
                       <div class="profile-card-subrow" (click)="$event.stopPropagation()">
-                        @if (acc.account_picture) {
-                          <img class="user-bubble-img" [src]="acc.account_picture" [alt]="acc.account_email">
+                        @if (acc.accountPicture) {
+                          <img class="user-bubble-img" [src]="acc.accountPicture" [alt]="acc.accountEmail">
                         } @else {
-                          <span class="user-bubble {{ getBubbleColorClass(acc.account_email) }}">
-                            {{ acc.account_email.charAt(0).toUpperCase() }}
+                          <span class="user-bubble {{ getBubbleColorClass(acc.accountEmail) }}">
+                            {{ acc.accountEmail.charAt(0).toUpperCase() }}
                           </span>
                         }
                         <div class="subrow-details">
-                          <span class="subrow-name">{{ getAccountName(acc.account_email) }}</span>
-                          <span class="subrow-email">{{ acc.account_email }}</span>
+                          <span class="subrow-name">{{ getAccountName(acc.accountEmail) }}</span>
+                          <span class="subrow-email">{{ acc.accountEmail }}</span>
                         </div>
                       </div>
                     }
@@ -133,11 +133,11 @@ import { firstValueFrom } from 'rxjs';
                     <span class="card-row-text">Mostrar contas vinculadas</span>
                     <div class="card-row-bubbles">
                       @for (acc of driveStore.linkedAccounts().slice(0, 3); track acc.id) {
-                        @if (acc.account_picture) {
-                          <img class="user-bubble-img bubble-small" [src]="acc.account_picture" [alt]="acc.account_email">
+                        @if (acc.accountPicture) {
+                          <img class="user-bubble-img bubble-small" [src]="acc.accountPicture" [alt]="acc.accountEmail">
                         } @else {
-                          <span class="user-bubble {{ getBubbleColorClass(acc.account_email) }}">
-                            {{ acc.account_email.charAt(0).toUpperCase() }}
+                          <span class="user-bubble {{ getBubbleColorClass(acc.accountEmail) }}">
+                            {{ acc.accountEmail.charAt(0).toUpperCase() }}
                           </span>
                         }
                       }
@@ -239,12 +239,12 @@ import { firstValueFrom } from 'rxjs';
                         @for (acc of driveStore.linkedAccounts(); track acc.id) {
                           <div class="account-item">
                             <div class="account-info">
-                              @if (acc.account_picture) {
-                                <img class="user-bubble-img account-avatar-icon" [src]="acc.account_picture" [alt]="acc.account_email" style="margin-right: 12px; width: 24px; height: 24px;">
+                              @if (acc.accountPicture) {
+                                <img class="user-bubble-img account-avatar-icon" [src]="acc.accountPicture" [alt]="acc.accountEmail" style="margin-right: 12px; width: 24px; height: 24px;">
                               } @else {
                                 <span class="material-symbols-outlined account-avatar-icon">account_circle</span>
                               }
-                              <span class="account-email">{{ acc.account_email }}</span>
+                              <span class="account-email">{{ acc.accountEmail }}</span>
                             </div>
                             <button class="unlink-btn-item" (click)="unlinkAccount(acc.id)" title="Desvincular conta">
                               <span class="material-symbols-outlined text-danger">delete</span>

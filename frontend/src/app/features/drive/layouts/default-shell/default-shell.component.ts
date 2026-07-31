@@ -8,7 +8,7 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
 import { FilePreviewRequest } from '../../services/file-preview-resolver';
 
 interface BreadcrumbSegment {
-  id: number | null;
+  id: number | string | null;
   name: string;
 }
 
@@ -36,13 +36,15 @@ interface BreadcrumbSegment {
             <button class="address-segment address-root" (click)="navigateAddressSegment(null); $event.stopPropagation()">Nanika</button>
             @for (segment of currentPath().slice(1); track segment.id) {
               <span class="address-separator" aria-hidden="true">&gt;</span>
-              <button class="address-segment" [class.current]="$last" [disabled]="$last" (click)="navigateAddressSegment(segment.id); $event.stopPropagation()">{{ segment.name }}</button>
+              <button class="address-segment" [class.current]="$last" [disabled]="$last" (click)="navigateAddressSegment($index + 1); $event.stopPropagation()">{{ segment.name }}</button>
             }
           }
         </div>
-        <button class="toolbar-action" (click)="uploadFileRequested.emit()" aria-label="Novo upload"><span class="material-symbols-outlined">upload</span> Upload</button>
-        <button class="toolbar-action" [disabled]="locked()" (click)="uploadFolderRequested.emit()" aria-label="Upload de pasta"><span class="material-symbols-outlined">drive_folder_upload</span> Pasta</button>
-        <button class="toolbar-action" (click)="createFolderRequested.emit()" aria-label="Nova pasta"><span class="material-symbols-outlined">create_new_folder</span> Nova pasta</button>
+        @if (currentView() !== 'computer') {
+          <button class="toolbar-action" (click)="uploadFileRequested.emit()" aria-label="Novo upload"><span class="material-symbols-outlined">upload</span> Upload</button>
+          <button class="toolbar-action" [disabled]="locked()" (click)="uploadFolderRequested.emit()" aria-label="Upload de pasta"><span class="material-symbols-outlined">drive_folder_upload</span> Pasta</button>
+          <button class="toolbar-action" (click)="createFolderRequested.emit()" aria-label="Nova pasta"><span class="material-symbols-outlined">create_new_folder</span> Nova pasta</button>
+        }
         @if (locked()) {
           <button class="toolbar-action" (click)="unlockRequested.emit()" aria-label="Desbloquear"><span class="material-symbols-outlined">lock_open</span> Desbloquear</button>
         } @else {
@@ -54,7 +56,7 @@ interface BreadcrumbSegment {
       <div class="explorer-body">
         <aside class="explorer-sidebar" aria-label="Navegação do Explorer">
           <button class="explorer-nav" [class.active]="currentView() === 'drive'" (click)="changeView('drive')"><span class="material-symbols-outlined">home</span> Meu Drive</button>
-          <button class="explorer-nav" [class.active]="currentView() === 'storage'" (click)="changeView('storage')"><span class="material-symbols-outlined">computer</span> Este Computador</button>
+          <button class="explorer-nav" [class.active]="currentView() === 'computer'" (click)="changeView('computer')"><span class="material-symbols-outlined">computer</span> Este Computador</button>
           <app-pinned-folders-section
             [currentFolderId]="currentFolderId()"
             [locked]="locked()"
@@ -190,13 +192,12 @@ export class DefaultShellComponent {
     this.addressEditing.set(true);
   }
 
-  navigateAddressSegment(folderId: number | null): void {
+  navigateAddressSegment(segmentIndex: number | null): void {
     this.addressEditing.set(false);
-    if (folderId === null) {
+    if (segmentIndex === null) {
       this.addressNavigate.emit('Nanika');
       return;
     }
-    const segmentIndex = this.currentPath().findIndex(segment => segment.id === folderId);
     const path = this.currentPath().slice(1, segmentIndex + 1).map(segment => segment.name).join('/');
     this.addressNavigate.emit(path ? `Nanika/${path}` : 'Nanika');
   }

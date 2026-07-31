@@ -12,6 +12,7 @@ O SaveBox 2.0 foi construído com a filosofia de Zero-Knowledge, atuando como um
 * **Segurança Anti-IDOR:** Todas as rotas validadas com JWT verificam a propriedade do arquivo no Banco de Dados antes de qualquer manipulação de disco.
 * **Exclusão em Cascata:** Exclusão recursiva de árvores de diretórios com limpeza automática de arquivos no disco rígido.
 * **Integração Google Drive:** Permite vincular contas e operar arquivos privados diretamente entre o navegador e o Google Drive. Compartilhamento público não é suportado para esse provedor.
+* **Este Computador:** O tema Default apresenta o armazenamento local e cada conta Google como unidades independentes, com árvore lógica projetada e movimentação física retomável entre provedores. Consulte [a arquitetura de movimentação](docs/storage-moves.md).
 
 ## Tecnologias Utilizadas
 

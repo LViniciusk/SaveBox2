@@ -5,6 +5,8 @@
 #include <iostream>
 #include <unordered_set>
 #include <vector>
+#include <optional>
+#include <algorithm>
 #include "Services/GoogleDriveService.hpp"
 #include <cpr/cpr.h>
 
@@ -119,42 +121,75 @@ void GarbageCollector::run_cleanup() {
         try {
             auto conn = pool_.acquire_connection();
             pqxx::work W(*conn);
-            
-            auto pending = W.exec("SELECT id, external_file_id, external_storage_id FROM pending_external_deletions LIMIT 50");
-            
+            auto pending = W.exec(
+                "SELECT id,external_file_id,external_storage_id,move_job_id,attempts FROM pending_external_deletions "
+                "WHERE next_retry_at <= CURRENT_TIMESTAMP ORDER BY id LIMIT 50");
             for (const auto& row : pending) {
-                int id = row[0].as<int>();
-                std::string external_file_id = row[1].as<std::string>();
-                uint64_t external_storage_id = row[2].as<uint64_t>();
-                
+                const int id = row[0].as<int>();
+                const std::string external_file_id = row[1].as<std::string>();
+                const uint64_t storage_id = row[2].as<uint64_t>();
+                const std::optional<uint64_t> move_id = row[3].is_null() ? std::nullopt : std::optional<uint64_t>(row[3].as<uint64_t>());
                 try {
-                    std::string access_token = gdrive_->get_access_token_for_storage(external_storage_id);
-                    cpr::Response r = cpr::Delete(
+                    const std::string token = gdrive_->get_access_token_for_storage(storage_id);
+                    cpr::Response response = cpr::Delete(
                         cpr::Url{"https://www.googleapis.com/drive/v3/files/" + external_file_id},
-                        cpr::Header{{"Authorization", "Bearer " + access_token}}
-                    );
-                    
-                    if (r.status_code == 204 || r.status_code == 404) {
-                        W.exec("DELETE FROM pending_external_deletions WHERE id = $1", pqxx::params{id});
+                        cpr::Header{{"Authorization", "Bearer " + token}}, cpr::Timeout{5000});
+                    if (response.status_code == 204 || response.status_code == 404) {
+                        W.exec("DELETE FROM pending_external_deletions WHERE id=$1",pqxx::params{id});
+                        if (move_id.has_value()) W.exec(
+                            "UPDATE storage_move_jobs SET status='completed',completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1 "
+                            "AND NOT EXISTS (SELECT 1 FROM pending_external_deletions WHERE move_job_id=$1)",
+                            pqxx::params{*move_id});
                     } else {
-                        std::cerr << "GC: Falha ao deletar arquivo no GDrive. Status: " << r.status_code << "\n";
+                        const int delay = std::min(3600, 30 * (1 << std::min(row[4].as<int>(),6)));
+                        W.exec(
+                            "UPDATE pending_external_deletions SET attempts=attempts+1,next_retry_at=CURRENT_TIMESTAMP+($1 * INTERVAL '1 second'),last_error=$2 WHERE id=$3",
+                            pqxx::params{delay,"HTTP_"+std::to_string(response.status_code),id});
                     }
-                } catch (const std::exception& e) {
-                    std::cerr << "GC: Erro ao processar delecao externa " << id << ": " << e.what() << "\n";
-                    W.exec("DELETE FROM pending_external_deletions WHERE id = $1", pqxx::params{id});
+                } catch (const std::exception& error) {
+                    const int delay = std::min(3600, 30 * (1 << std::min(row[4].as<int>(),6)));
+                    W.exec(
+                        "UPDATE pending_external_deletions SET attempts=attempts+1,next_retry_at=CURRENT_TIMESTAMP+($1 * INTERVAL '1 second'),last_error=$2 WHERE id=$3",
+                        pqxx::params{delay,std::string(error.what()).substr(0,255),id});
                 }
             }
-            
             W.exec(
-                "DELETE FROM user_external_storages "
-                "WHERE is_unlinking = TRUE AND id NOT IN ("
-                "  SELECT DISTINCT external_storage_id FROM pending_external_deletions"
-                ")"
-            );
-
+                "DELETE FROM user_external_storages s WHERE s.is_unlinking=TRUE "
+                "AND NOT EXISTS (SELECT 1 FROM pending_external_deletions p WHERE p.external_storage_id=s.id) "
+                "AND NOT EXISTS (SELECT 1 FROM storage_move_jobs m WHERE (m.source_external_storage_id=s.id OR m.target_external_storage_id=s.id) "
+                "AND m.status IN ('prepared','transferring','paused','target_uploaded','committing','cleanup_pending'))");
             W.commit();
         } catch (const std::exception& e) {
             std::cerr << "GC: Erro na Fase 3 (Delecao Externa): " << e.what() << "\n";
+        }
+    }
+
+    if (chunker_) {
+        try {
+            auto conn = pool_.acquire_connection();
+            pqxx::work W(*conn);
+            auto pending = W.exec("SELECT id,move_job_id,attempts FROM pending_local_deletions WHERE next_retry_at<=CURRENT_TIMESTAMP LIMIT 50");
+            for (const auto& row : pending) {
+                try {
+                    const uint64_t move_id = row[1].as<uint64_t>();
+                    chunker_->delete_quarantined_file(move_id);
+                    W.exec("DELETE FROM pending_local_deletions WHERE id=$1",pqxx::params{row[0].as<uint64_t>()});
+                    W.exec("UPDATE storage_move_jobs SET status='completed',completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1",pqxx::params{move_id});
+                } catch (const std::exception& error) {
+                    W.exec(
+                        "UPDATE pending_local_deletions SET attempts=attempts+1,next_retry_at=CURRENT_TIMESTAMP+INTERVAL '1 minute',last_error=$1 WHERE id=$2",
+                        pqxx::params{std::string(error.what()).substr(0,255),row[0].as<uint64_t>()});
+                }
+            }
+            std::unordered_set<uint64_t> item_ids;
+            for (const auto& row : W.exec("SELECT id FROM storage_move_items WHERE status IN ('prepared','transferring','target_uploaded')")) item_ids.insert(row[0].as<uint64_t>());
+            std::unordered_set<uint64_t> cleanup_ids;
+            for (const auto& row : W.exec("SELECT move_job_id FROM pending_local_deletions")) cleanup_ids.insert(row[0].as<uint64_t>());
+            chunker_->delete_orphaned_move_files(item_ids,cleanup_ids);
+            W.exec("DELETE FROM storage_move_jobs WHERE status IN ('completed','cancelled','failed') AND completed_at < CURRENT_TIMESTAMP-INTERVAL '7 days'");
+            W.commit();
+        } catch (const std::exception& error) {
+            std::cerr << "GC: Erro na limpeza de storage moves: " << error.what() << "\n";
         }
     }
 

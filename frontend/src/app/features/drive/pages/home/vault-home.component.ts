@@ -17,6 +17,8 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
 import { FilePreviewRequest } from '../../services/file-preview-resolver';
 import { getPublicShareAvailability } from '../../policies/public-share-policy';
+import { ComputerStore } from '../../state/computer.store';
+import { StorageMoveEngineService } from '../../storage-move/storage-move-engine.service';
 
 /**
  * Main vault page — Google Drive clone layout.
@@ -44,11 +46,11 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
     @if (themeService.theme() === 'default') {
       <app-default-shell
         [currentView]="currentView()"
-        [currentFolderId]="driveStore.currentFolderId()"
-        [currentPath]="driveStore.currentPath()"
-        [canGoBack]="driveStore.canGoBack()"
-        [canGoForward]="driveStore.canGoForward()"
-        [canGoUp]="driveStore.canGoUp()"
+        [currentFolderId]="currentView() === 'computer' ? computerStore.currentFolderId() : driveStore.currentFolderId()"
+        [currentPath]="currentView() === 'computer' ? computerStore.currentPath() : driveStore.currentPath()"
+        [canGoBack]="currentView() === 'computer' ? computerStore.canGoBack() : driveStore.canGoBack()"
+        [canGoForward]="currentView() === 'computer' ? computerStore.canGoForward() : driveStore.canGoForward()"
+        [canGoUp]="currentView() === 'computer' ? computerStore.canGoUp() : driveStore.canGoUp()"
         [locked]="appState.isLocked()"
         [quota]="driveStore.quota()"
         (viewChange)="onViewChange($event)"
@@ -57,9 +59,9 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
         (uploadFolderRequested)="openFolderPicker()"
         (unlockRequested)="isUnlockModalOpen.set(true)"
         (lockRequested)="lockDrive()"
-        (backRequested)="driveStore.goBack()"
-        (forwardRequested)="driveStore.goForward()"
-        (upRequested)="driveStore.navigateUp()"
+        (backRequested)="navigateBack()"
+        (forwardRequested)="navigateForward()"
+        (upRequested)="navigateUp()"
         (addressNavigate)="onAddressNavigate($event)"
         (dropStarted)="onDropStarted()"
         (externalDrop)="onDropped($event)"
@@ -307,12 +309,15 @@ export class VaultHomeComponent implements OnInit {
   protected readonly driveStore = inject(DriveStore);
   protected readonly themeService = inject(ThemeService);
   protected readonly pinnedFoldersStore = inject(PinnedFoldersStore);
+  protected readonly computerStore = inject(ComputerStore);
+  protected readonly storageMoveEngine = inject(StorageMoveEngineService);
   readonly dialogService = inject(DialogService);
   readonly AppStatus = AppStatus;
 
   readonly isUnlockModalOpen = signal(false);
   readonly currentView = signal<DriveView>('drive');
   readonly isVideoReady = signal(false);
+  private readonly reconciledMoveIds = new Set<number>();
 
   constructor() {
     effect(() => {
@@ -320,11 +325,27 @@ export class VaultHomeComponent implements OnInit {
         this.driveStore.reDecryptAll();
       }
     });
+    effect(() => {
+      const theme = this.themeService.theme();
+      const view = this.currentView();
+      if (theme === 'default' && view === 'storage') this.currentView.set('computer');
+      if (theme === 'gdrive' && view === 'computer') this.currentView.set('storage');
+    });
+    effect(() => {
+      for (const move of this.storageMoveEngine.jobs()) {
+        if ((move.status === 'cleanup_pending' || move.status === 'completed') && !this.reconciledMoveIds.has(move.id)) {
+          this.reconciledMoveIds.add(move.id);
+          void this.driveStore.loadTree();
+          void this.computerStore.refresh();
+          void this.computerStore.loadTargets();
+        }
+      }
+    });
   }
 
-  ngOnInit() {
-    this.driveStore.loadQuota();
-    this.driveStore.loadTree();
+  async ngOnInit() {
+    await Promise.all([this.driveStore.loadQuota(), this.driveStore.loadTree(), this.computerStore.loadTargets()]);
+    await this.storageMoveEngine.loadActive(this.computerStore.targets(), this.driveStore.files());
     void this.pinnedFoldersStore.load();
   }
 
@@ -338,8 +359,22 @@ export class VaultHomeComponent implements OnInit {
 
   onViewChange(view: DriveView): void {
     this.currentView.set(view);
-    if (view === 'drive') this.driveStore.navigateTo(null);
     if (view === 'trash') this.driveStore.loadTrash();
+  }
+
+  navigateBack(): void {
+    if (this.currentView() === 'computer') void this.computerStore.goBack();
+    else this.driveStore.goBack();
+  }
+
+  navigateForward(): void {
+    if (this.currentView() === 'computer') void this.computerStore.goForward();
+    else this.driveStore.goForward();
+  }
+
+  navigateUp(): void {
+    if (this.currentView() === 'computer') void this.computerStore.goUp();
+    else this.driveStore.navigateUp();
   }
 
   onPinnedFolderNavigate(folderId: number): void {
@@ -350,6 +385,12 @@ export class VaultHomeComponent implements OnInit {
 
   onAddressNavigate(value: string): void {
     if (this.appState.isLocked()) return;
+
+    if (this.currentView() === 'computer' || /este computador/i.test(value)) {
+      this.currentView.set('computer');
+      void this.computerStore.navigateAddress(value);
+      return;
+    }
 
     const parts = value
       .split(/[>/\\]/)

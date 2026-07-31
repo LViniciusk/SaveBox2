@@ -62,7 +62,7 @@ describe('DecryptedMediaLoaderService', () => {
     return {
       id: 1, isFolder: false, encryptedName: 'cipher', decryptedName: 'file.bin', type: 'unknown',
       sizeBytes: 10, sizeFormatted: '10 B', modifiedAt: '', owner: '', encryptedFdk: 'fdk',
-      storageProvider: 'local', ...values,
+      storageProvider: 'local', externalStorageId: null, ...values,
     };
   }
 });

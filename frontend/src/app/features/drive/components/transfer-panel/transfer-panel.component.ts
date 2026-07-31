@@ -2,6 +2,8 @@ import { CommonModule } from '@angular/common';
 import { Component, computed, inject, input, signal } from '@angular/core';
 import { DriveStore, TransferItem } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
+import { StorageMoveEngineService } from '../../storage-move/storage-move-engine.service';
+import { StorageMoveView } from '../../storage-move/storage-move.models';
 
 @Component({
   selector: 'app-transfer-panel',
@@ -25,6 +27,24 @@ import { DriveView } from '../../state/drive.types';
         </div>
 
         <div class="transfers-scroll-region">
+        @for (move of moveEngine.jobs(); track move.id) {
+          <div class="storage-move-card" [class.error]="move.status === 'failed'" [class.success]="move.status === 'completed'" [class.paused]="move.status === 'paused'">
+            <span class="material-symbols-outlined">drive_file_move</span>
+            <div class="storage-move-details">
+              <strong>Transferindo “{{ move.fileName }}”</strong>
+              <span>{{ move.sourceLabel }} → {{ move.targetLabel }}</span>
+              <span>{{ moveStatusLabel(move) }} · {{ movePercent(move) }}% · {{ formatBytes(move.transferred_bytes) }} / {{ formatBytes(move.total_bytes) }}</span>
+              @if (!isMoveTerminal(move)) { <div class="transfer-progress-bar-container"><div class="transfer-progress-bar-fill" [style.width.%]="movePercent(move)"></div></div> }
+              @if (move.error_detail) { <span class="transfer-error-msg">{{ move.error_detail }}</span> }
+            </div>
+            <div class="transfer-group-actions">
+              @if (move.status === 'transferring' || move.status === 'prepared') { <button class="transfer-control-btn" (click)="moveEngine.pause(move.id)" title="Pausar"><span class="material-symbols-outlined">pause</span></button> }
+              @if (move.status === 'paused' || move.status === 'failed') { <button class="transfer-control-btn" (click)="moveEngine.resume(move.id)" title="Continuar"><span class="material-symbols-outlined">play_arrow</span></button> }
+              @if (!isMoveTerminal(move) && move.status !== 'cleanup_pending') { <button class="transfer-control-btn cancel" (click)="moveEngine.cancel(move.id)" title="Cancelar"><span class="material-symbols-outlined">close</span></button> }
+              @if (isMoveTerminal(move)) { <button class="transfer-control-btn" (click)="moveEngine.clear(move.id)" title="Limpar"><span class="material-symbols-outlined">delete</span></button> }
+            </div>
+          </div>
+        }
         @if (driveStore.transferGroupViews().length > 0) {
           <div class="transfer-groups">
             @for (group of driveStore.transferGroupViews(); track group.id) {
@@ -90,7 +110,7 @@ import { DriveView } from '../../state/drive.types';
           </div>
         }
 
-        @if (driveStore.transfers().length === 0) {
+        @if (driveStore.transfers().length === 0 && moveEngine.jobs().length === 0) {
           <div class="transfers-empty">
             <span class="material-symbols-outlined empty-icon">check_circle</span>
             <p>Nenhuma transferência pendente ou concluída no momento.</p>
@@ -193,10 +213,10 @@ import { DriveView } from '../../state/drive.types';
       </div>
     }
 
-    @if (driveStore.transfers().length > 0 && !isTransfersPopupClosed()) {
+    @if ((driveStore.transfers().length > 0 || moveEngine.jobs().length > 0) && !isTransfersPopupClosed()) {
       <div class="transfers-popup-wrapper transfer-panel--popup">
         <div class="transfers-popup-header" (click)="togglePopup()">
-          <span class="popup-title">Transferências ({{ driveStore.transfers().length }})</span>
+          <span class="popup-title">Transferências ({{ driveStore.transfers().length + moveEngine.jobs().length }})</span>
           <div class="popup-actions">
             <button class="icon-btn" (click)="$event.stopPropagation(); togglePopup()">
               <span class="material-symbols-outlined">{{ isTransfersPopupMinimized() ? 'expand_less' : 'expand_more' }}</span>
@@ -208,6 +228,14 @@ import { DriveView } from '../../state/drive.types';
         </div>
         @if (!isTransfersPopupMinimized()) {
           <div class="transfers-popup-body">
+            @for (move of moveEngine.jobs(); track move.id) {
+              <div class="mini-transfer-item storage-move-card">
+                <span class="material-symbols-outlined">drive_file_move</span>
+                <div class="mini-transfer-details"><strong>{{ move.fileName }}</strong><span>{{ move.sourceLabel }} → {{ move.targetLabel }}</span><span>{{ moveStatusLabel(move) }} · {{ movePercent(move) }}%</span></div>
+                @if (move.status === 'paused') { <button class="transfer-control-btn" (click)="moveEngine.resume(move.id)"><span class="material-symbols-outlined">play_arrow</span></button> }
+                @else if (!isMoveTerminal(move) && move.status !== 'cleanup_pending') { <button class="transfer-control-btn" (click)="moveEngine.pause(move.id)"><span class="material-symbols-outlined">pause</span></button> }
+              </div>
+            }
             @for (group of driveStore.transferGroupViews(); track group.id) {
               <div class="mini-transfer-group" [class.terminal-group]="group.canClear" [id]="'transfer-popup-group-' + group.id">
                 <button class="mini-group-header" (click)="$event.stopPropagation(); toggleGroup(group.id)" [attr.aria-expanded]="isGroupExpanded(group.id)" [attr.aria-controls]="'transfer-popup-group-' + group.id">
@@ -306,6 +334,9 @@ import { DriveView } from '../../state/drive.types';
     .transfers-popup-body { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; }
     .mini-transfer-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #f1f3f4; }
     .mini-transfer-item:last-child { border-bottom: none; }
+    .storage-move-card { display: flex; align-items: center; gap: 12px; margin: 8px 0; padding: 12px 16px; border: 1px solid #e0e0e0; border-radius: 8px; background: #fff; }
+    .storage-move-details { flex: 1; min-width: 0; display: grid; gap: 4px; color: #5f6368; font-size: 12px; }
+    .storage-move-details strong { color: #202124; font-size: 14px; overflow: hidden; text-overflow: ellipsis; }
     .mini-transfer-icon-wrapper { color: #5f6368; display: flex; align-items: center; justify-content: center; background: #f1f3f4; border-radius: 50%; width: 32px; height: 32px; flex-shrink: 0; }
     .mini-transfer-icon-wrapper .mini-icon { font-size: 18px; }
     .mini-transfer-item.success .mini-transfer-icon-wrapper { background: #e6f4ea; color: #137333; }
@@ -416,6 +447,9 @@ import { DriveView } from '../../state/drive.types';
     :host-context(:root[data-theme='default']) .transfers-popup-header:hover { background: var(--default-context-hover); }
     :host-context(:root[data-theme='default']) .mini-transfer-group,
     :host-context(:root[data-theme='default']) .mini-transfer-item { background: var(--default-context-bg); border-color: var(--default-context-border); }
+    :host-context(:root[data-theme='default']) .storage-move-card { background: var(--default-context-bg); border-color: var(--default-context-border); color: var(--default-context-text); }
+    :host-context(:root[data-theme='default']) .storage-move-details,
+    :host-context(:root[data-theme='default']) .storage-move-details strong { color: var(--default-context-text); }
     :host-context(:root[data-theme='default']) .status-indicator.processing { color: var(--default-accent); }
     :host-context(:root[data-theme='default']) .spinner { border-color: var(--default-context-border); border-top-color: var(--default-accent); }
     :host-context(:root[data-theme='default']) .transfer-status-message,
@@ -430,6 +464,7 @@ import { DriveView } from '../../state/drive.types';
 export class TransferPanelComponent {
   readonly currentView = input.required<DriveView>();
   readonly driveStore = inject(DriveStore);
+  readonly moveEngine = inject(StorageMoveEngineService);
   readonly isTransfersPopupMinimized = signal(false);
   readonly isTransfersPopupClosed = signal(false);
   readonly expandedGroups = signal(new Set<string>());
@@ -440,6 +475,21 @@ export class TransferPanelComponent {
   private readonly completedPageSize = 25;
   private readonly showMoreSize = 50;
   private readonly showAllLimit = 200;
+
+  movePercent(move: StorageMoveView): number {
+    return move.total_bytes ? Math.min(100, Math.round((move.transferred_bytes / move.total_bytes) * 100)) : 0;
+  }
+
+  isMoveTerminal(move: StorageMoveView): boolean {
+    return move.status === 'completed' || move.status === 'cancelled' || move.status === 'failed';
+  }
+
+  moveStatusLabel(move: StorageMoveView): string {
+    return ({
+      prepared: 'Preparando', transferring: 'Transferindo', paused: 'Pausado', target_uploaded: 'Validando destino',
+      committing: 'Concluindo', cleanup_pending: 'Limpando origem', completed: 'Concluído', cancelled: 'Cancelado', failed: 'Erro',
+    } as Record<StorageMoveView['status'], string>)[move.status];
+  }
 
   togglePopup(): void {
     this.isTransfersPopupMinimized.update(value => !value);

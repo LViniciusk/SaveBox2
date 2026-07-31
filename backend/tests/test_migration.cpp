@@ -51,6 +51,17 @@ TEST_CASE("Migração do Banco de Dados - Integração", "[database][migration][
         REQUIRE(check_table_exists("folders"));
         REQUIRE(check_table_exists("pinned_folders"));
         REQUIRE(check_table_exists("files"));
+        REQUIRE(check_table_exists("storage_move_jobs"));
+        REQUIRE(check_table_exists("storage_move_items"));
+        REQUIRE(check_table_exists("storage_move_chunks"));
+        REQUIRE(check_table_exists("pending_local_deletions"));
         REQUIRE(check_column_exists("shared_links", "encrypted_name_fdk"));
+        REQUIRE(check_column_exists("files", "external_storage_id"));
+        REQUIRE(check_column_exists("pending_external_deletions", "move_job_id"));
+
+        auto indexes = ntx.exec(
+            "SELECT indexname FROM pg_indexes WHERE schemaname='public' AND indexname IN "
+            "('idx_files_storage_projection','idx_storage_move_one_active_file','idx_storage_move_active_user')");
+        REQUIRE(indexes.size() == 3);
     }
 }

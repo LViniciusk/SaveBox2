@@ -7,11 +7,12 @@ import { DriveDropZoneDirective } from '../../directives/drive-drop-zone.directi
 import { DroppedItems } from '../../services/data-transfer-reader.service';
 import { ThemeService } from '../../../../core/theme/theme.service';
 import { FilePreviewRequest } from '../../services/file-preview-resolver';
+import { ComputerViewComponent } from '../computer-view/computer-view.component';
 
 @Component({
   selector: 'app-drive-workspace',
   standalone: true,
-  imports: [FileListComponent, TransferPanelComponent, DriveDropZoneDirective],
+  imports: [FileListComponent, TransferPanelComponent, DriveDropZoneDirective, ComputerViewComponent],
   template: `
     <div class="workspace-drop-zone" appDriveDropZone [dropZoneEnabled]="currentView() === 'drive'" [dropZoneLocked]="locked()" (dropStarted)="dropStarted.emit()" (dropped)="externalDrop.emit($event)" (dropError)="dropError.emit($event)">
     <div class="breadcrumb">
@@ -48,7 +49,7 @@ import { FilePreviewRequest } from '../../services/file-preview-resolver';
       }
     </div>
 
-    @if (themeService.theme() === 'default' && (currentView() === 'drive' || currentView() === 'trash')) {
+    @if (themeService.theme() === 'default' && (currentView() === 'drive' || currentView() === 'trash' || currentView() === 'computer')) {
       <div class="view-mode-toggle default-view-mode-toggle">
         <button [class.active]="driveStore.displayMode() === 'list'" (click)="driveStore.setDisplayMode('list')" title="Modo Lista">
           <span class="material-symbols-outlined">view_list</span>
@@ -66,7 +67,11 @@ import { FilePreviewRequest } from '../../services/file-preview-resolver';
       </div>
     }
 
-    @if (currentView() === 'trash') {
+    @if (currentView() === 'computer') {
+      <app-computer-view
+        (previewRequested)="previewRequested.emit($event)"
+        (shareRequested)="shareRequested.emit($event)" />
+    } @else if (currentView() === 'trash') {
       <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" (previewRequested)="previewRequested.emit($event)" />
     } @else if (currentView() === 'transfers') {
       <app-transfer-panel [currentView]="currentView()" />

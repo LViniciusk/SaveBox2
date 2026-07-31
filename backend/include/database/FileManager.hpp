@@ -64,6 +64,11 @@ public:
     std::string get_file_name(uint64_t file_id, uint64_t user_id);
     std::vector<crow::json::wvalue> get_user_files_paginated(uint64_t user_id, int limit, int offset);
     std::vector<crow::json::wvalue> get_pending_uploads(uint64_t user_id);
+    crow::json::wvalue get_storage_tree(uint64_t user_id,
+                                        const std::string& provider,
+                                        std::optional<uint64_t> external_storage_id,
+                                        std::optional<uint64_t> folder_id,
+                                        int limit, int offset);
     std::vector<int> get_uploaded_chunks(uint64_t file_id, uint64_t user_id);
     void record_chunk_saved(uint64_t file_id, int chunk_index);
     int count_uploaded_chunks(uint64_t file_id);
@@ -99,6 +104,20 @@ public:
     std::string get_storage_provider(uint64_t file_id, uint64_t user_id);
     std::vector<ExternalSyncFile> get_external_sync_map(uint64_t user_id, uint64_t external_storage_id);
     void cleanup_external_sync(uint64_t user_id, uint64_t external_storage_id, const std::vector<std::string>& missing_external_ids);
+    crow::json::wvalue start_storage_move(uint64_t user_id, uint64_t file_id,
+                                          const std::string& target_provider,
+                                          std::optional<uint64_t> target_external_storage_id,
+                                          std::optional<uint64_t> target_available_bytes);
+    crow::json::wvalue get_storage_move(uint64_t user_id, uint64_t move_id);
+    crow::json::wvalue get_active_storage_moves(uint64_t user_id);
+    void set_storage_move_status(uint64_t user_id, uint64_t move_id, const std::string& status);
+    uint64_t record_storage_move_chunk(uint64_t user_id, uint64_t move_id, uint64_t item_id,
+                                       int chunk_index, uint64_t size_bytes);
+    void update_storage_move_progress(uint64_t user_id, uint64_t move_id, uint64_t item_id, uint64_t transferred_bytes);
+    void mark_storage_move_item_uploaded(uint64_t user_id, uint64_t move_id, uint64_t item_id,
+                                         std::optional<std::string> target_external_file_id);
+    crow::json::wvalue cancel_storage_move(uint64_t user_id, uint64_t move_id);
+    crow::json::wvalue complete_storage_move(uint64_t user_id, uint64_t move_id, class FileChunker& chunker);
 
 private:
     DatabasePool& pool_;

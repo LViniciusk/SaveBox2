@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 #include <sodium.h>
 #include <jwt-cpp/jwt.h>
+#include <algorithm>
 #include "utils/utils.hpp"
 
 namespace {
@@ -203,6 +204,11 @@ void GoogleDriveService::unlink_account(uint64_t user_id, std::optional<uint64_t
 
     pqxx::result result;
     if (storage_id.has_value()) {
+        auto active = txn.exec(
+            "SELECT 1 FROM storage_move_jobs WHERE (source_external_storage_id=$1 OR target_external_storage_id=$1) "
+            "AND status IN ('prepared','transferring','paused','target_uploaded','committing','cleanup_pending') LIMIT 1",
+            pqxx::params{*storage_id});
+        if (!active.empty()) throw std::runtime_error("ACCOUNT_HAS_ACTIVE_STORAGE_MOVES");
         result = txn.exec(
             "UPDATE user_external_storages SET is_unlinking = TRUE "
             "WHERE user_id = $1 AND id = $2 AND provider = 'google_drive' AND is_unlinking = FALSE RETURNING id",
@@ -585,4 +591,157 @@ std::pair<uint64_t, uint64_t> GoogleDriveService::get_total_quota(uint64_t user_
     txn.commit();
 
     return {total_virtual_used, total_virtual_max};
+}
+
+GoogleDriveService::ResumableSession GoogleDriveService::create_resumable_session(
+    uint64_t user_id, uint64_t storage_id, uint64_t size_bytes, const std::string& opaque_name) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto storage = txn.exec(
+        "SELECT root_folder_id,is_unlinking FROM user_external_storages WHERE id=$1 AND user_id=$2 AND provider='google_drive'",
+        pqxx::params{storage_id,user_id});
+    if (storage.empty()) throw std::runtime_error("STORAGE_TARGET_NOT_FOUND");
+    if (storage[0][1].as<bool>()) throw std::runtime_error("STORAGE_TARGET_UNAVAILABLE");
+    const std::string root_folder_id = storage[0][0].as<std::string>();
+    txn.commit();
+
+    const std::string access_token = get_access_token_for_storage(storage_id);
+    nlohmann::json metadata = {{"name", opaque_name}, {"parents", nlohmann::json::array({root_folder_id})}};
+    cpr::Response response = make_post_request(
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable",
+        metadata.dump(),
+        cpr::Header{
+            {"Authorization", "Bearer " + access_token},
+            {"Content-Type", "application/json; charset=UTF-8"},
+            {"X-Upload-Content-Type", "application/octet-stream"},
+            {"X-Upload-Content-Length", std::to_string(size_bytes)}
+        });
+    if (response.status_code != 200) throw std::runtime_error("GOOGLE_SESSION_FAILED");
+    auto location = response.header.find("location");
+    if (location == response.header.end() || location->second.empty()) throw std::runtime_error("GOOGLE_SESSION_FAILED");
+    return {location->second, access_token};
+}
+
+uint64_t GoogleDriveService::get_external_file_size(uint64_t user_id, uint64_t storage_id,
+                                                    const std::string& external_file_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto storage = txn.exec(
+        "SELECT root_folder_id FROM user_external_storages WHERE id=$1 AND user_id=$2 AND provider='google_drive'",
+        pqxx::params{storage_id,user_id});
+    if (storage.empty() || storage[0][0].is_null()) throw std::runtime_error("STORAGE_TARGET_NOT_FOUND");
+    const std::string root_folder_id = storage[0][0].as<std::string>();
+    txn.commit();
+    const std::string token = get_access_token_for_storage(storage_id);
+    cpr::Response response = make_get_request(
+        "https://www.googleapis.com/drive/v3/files/" + external_file_id + "?fields=size%2Cparents",
+        cpr::Header{{"Authorization", "Bearer " + token}});
+    if (response.status_code != 200) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+    picojson::value json;
+    if (!picojson::parse(json,response.text).empty() || !json.is<picojson::object>()) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+    const auto& object = json.get<picojson::object>();
+    auto size = object.find("size");
+    auto parents = object.find("parents");
+    if (size == object.end() || !size->second.is<std::string>() ||
+        parents == object.end() || !parents->second.is<picojson::array>()) {
+        throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+    }
+    const auto& parent_ids = parents->second.get<picojson::array>();
+    const bool in_target_root = std::any_of(parent_ids.begin(), parent_ids.end(), [&](const picojson::value& parent) {
+        return parent.is<std::string>() && parent.get<std::string>() == root_folder_id;
+    });
+    if (!in_target_root) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+    return std::stoull(size->second.get<std::string>());
+}
+
+GoogleDriveService::QuotaCacheEntry GoogleDriveService::get_quota_for_storage(uint64_t storage_id) {
+    std::lock_guard<std::mutex> lock(quota_cache_mutex_);
+    const auto now = std::chrono::steady_clock::now();
+    auto cached = quota_cache_.find(storage_id);
+    if (cached != quota_cache_.end() && now < cached->second.expires_at) return cached->second;
+
+    const std::string token = get_access_token_for_storage(storage_id);
+    cpr::Response response = make_get_request(
+        "https://www.googleapis.com/drive/v3/about?fields=storageQuota",
+        cpr::Header{{"Authorization", "Bearer " + token}});
+    if (response.status_code != 200) throw std::runtime_error("STORAGE_UNAVAILABLE");
+
+    picojson::value json;
+    if (!picojson::parse(json, response.text).empty() || !json.is<picojson::object>()) {
+        throw std::runtime_error("STORAGE_UNAVAILABLE");
+    }
+    const auto& root = json.get<picojson::object>();
+    const auto quota_it = root.find("storageQuota");
+    if (quota_it == root.end() || !quota_it->second.is<picojson::object>()) {
+        throw std::runtime_error("STORAGE_UNAVAILABLE");
+    }
+    const auto& quota = quota_it->second.get<picojson::object>();
+    uint64_t used = 0;
+    std::optional<uint64_t> max;
+    const auto usage_it = quota.find("usage");
+    const auto limit_it = quota.find("limit");
+    if (usage_it != quota.end() && usage_it->second.is<std::string>()) used = std::stoull(usage_it->second.get<std::string>());
+    if (limit_it != quota.end() && limit_it->second.is<std::string>()) max = std::stoull(limit_it->second.get<std::string>());
+
+    QuotaCacheEntry entry{used, max, now + std::chrono::seconds(30)};
+    quota_cache_[storage_id] = entry;
+    return entry;
+}
+
+std::vector<GoogleDriveService::StorageTarget> GoogleDriveService::get_storage_targets(uint64_t user_id) {
+    struct AccountRow {
+        uint64_t id;
+        std::string email;
+        std::string picture;
+        bool unlinking;
+        uint64_t nanika_used;
+    };
+    std::vector<AccountRow> rows;
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+        auto result = txn.exec(
+            "SELECT s.id, s.account_email, s.account_picture, s.is_unlinking, COALESCE(SUM(f.size_bytes) FILTER (WHERE f.is_upload_complete = TRUE AND f.deleted_at IS NULL), 0) "
+            "FROM user_external_storages s LEFT JOIN files f ON f.external_storage_id = s.id "
+            "WHERE s.user_id = $1 AND s.provider = 'google_drive' "
+            "GROUP BY s.id, s.account_email, s.account_picture, s.is_unlinking ORDER BY s.id",
+            pqxx::params{user_id});
+        for (const auto& row : result) {
+            rows.push_back({
+                row[0].as<uint64_t>(),
+                row[1].is_null() ? "" : row[1].as<std::string>(),
+                row[2].is_null() ? "" : row[2].as<std::string>(),
+                row[3].as<bool>(),
+                row[4].as<uint64_t>()
+            });
+        }
+        txn.commit();
+    }
+
+    std::vector<StorageTarget> targets;
+    targets.reserve(rows.size());
+    for (const auto& row : rows) {
+        StorageTarget target;
+        target.id = row.id;
+        target.account_email = row.email;
+        target.account_picture = row.picture;
+        target.nanika_used_bytes = row.nanika_used;
+        if (row.unlinking) {
+            target.status = "unlinking";
+        } else {
+            try {
+                const auto quota = get_quota_for_storage(row.id);
+                target.status = "ready";
+                target.used_bytes = quota.used_bytes;
+                target.max_bytes = quota.max_bytes;
+                if (quota.max_bytes.has_value()) {
+                    target.available_bytes = *quota.max_bytes > quota.used_bytes ? *quota.max_bytes - quota.used_bytes : 0;
+                }
+            } catch (...) {
+                target.status = "unavailable";
+            }
+        }
+        targets.push_back(std::move(target));
+    }
+    return targets;
 }

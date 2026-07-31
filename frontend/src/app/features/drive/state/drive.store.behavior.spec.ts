@@ -56,7 +56,7 @@ describe('DriveStore public behavior', () => {
     drive.batchSoftDeleteFolders.and.returnValue(of(undefined));
     drive.batchHardDeleteFiles.and.returnValue(of(undefined));
     drive.batchHardDeleteFolders.and.returnValue(of(undefined));
-    drive.getLinkedGoogleAccounts.and.returnValue(of([]));
+    drive.getLinkedGoogleAccounts.and.returnValue(of({ accounts: [] }));
     drive.generateGoogleState.and.returnValue(of({ state: 'state' }));
     drive.unlinkGoogleAccount.and.returnValue(of({}));
     drive.downloadExternalMetadata.and.returnValue(of({
@@ -82,7 +82,7 @@ describe('DriveStore public behavior', () => {
     const names = ['a.pdf', 'b.jpg', 'c.docx', 'd.xlsx', 'e.mp4', 'f.mp3', 'g.bin'];
     drive.getTree.and.returnValue(of({
       folders: [{ id: 10, parent_id: null, encrypted_name: 'root' }],
-      files: names.map((encrypted_name, id) => ({ id, encrypted_name, size_bytes: id ? 1024 : 0, folder_id: null, encrypted_fdk: 'fdk', is_hidden: false, storage_provider: 'local' as const })),
+      files: names.map((encrypted_name, id) => ({ id, encrypted_name, size_bytes: id ? 1024 : 0, folder_id: null, encrypted_fdk: 'fdk', is_hidden: false, storage_provider: 'local' as const, external_storage_id: null })),
     }));
     await store.loadTree();
     expect(store.files().map(file => file.type)).toEqual(['folder', 'pdf', 'image', 'doc', 'spreadsheet', 'video', 'audio', 'unknown']);
@@ -99,7 +99,8 @@ describe('DriveStore public behavior', () => {
       size_bytes: 1,
       encrypted_fdk: 'fdk',
       is_hidden: false,
-      storage_provider: 'local' as const,
+          storage_provider: 'local' as const,
+          external_storage_id: null,
     }));
     drive.getTree.and.callFake((_limit?: number, offset = 0) => of({
       folders: [],
@@ -111,6 +112,7 @@ describe('DriveStore public behavior', () => {
         encrypted_fdk: 'fdk',
         is_hidden: false,
         storage_provider: 'local' as const,
+        external_storage_id: null,
       }],
     }));
 
@@ -358,9 +360,19 @@ describe('DriveStore public behavior', () => {
     expect(localStorage.getItem('preferred_convert_incompatible')).toBe('true');
     expect(localStorage.getItem('preferred_incompatible_mode')).toBe('compressed');
     expect(localStorage.getItem('preferred_display_mode')).toBe('grid');
-    drive.getLinkedGoogleAccounts.and.returnValue(of({ accounts: [{ id: 1 }] } as any));
+    drive.getLinkedGoogleAccounts.and.returnValue(of({ accounts: [{ id: 1, account_email: 'one@example.com' }] }));
     await store.loadLinkedAccounts();
-    expect(store.linkedAccounts()).toEqual([{ id: 1 }] as any);
+    expect(store.linkedAccounts()).toEqual([{
+      id: 1,
+      accountEmail: 'one@example.com',
+      accountPicture: undefined,
+      rootFolderId: undefined,
+      status: 'ready',
+      usedBytes: 0,
+      maxBytes: null,
+      availableBytes: null,
+      nanikaUsedBytes: 0,
+    }]);
     drive.getLinkedGoogleAccounts.and.returnValue(throwError(() => new Error('offline')));
     await store.loadLinkedAccounts();
     expect(store.linkedAccounts()).toEqual([]);

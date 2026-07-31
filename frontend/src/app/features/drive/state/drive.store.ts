@@ -15,6 +15,8 @@ import { firstValueFromAbortable, isUploadAbortError } from '../upload/abortable
 import { FolderUploadCoordinatorService } from '../upload/folder-upload-coordinator.service';
 import { FolderUploadSourceFile } from '../upload/upload.models';
 import { resolveFilePreviewKind } from '../services/file-preview-resolver';
+import { LinkedGoogleAccount, StorageProvider } from './drive.types';
+import { StorageMoveEngineService } from '../storage-move/storage-move-engine.service';
 
 export interface TransferItem {
   id: string;
@@ -79,6 +81,7 @@ export interface PendingUpload {
   encrypted_fdk: string;
   uploaded_chunks_count: number;
   storage_provider: 'local' | 'google_drive';
+  external_storage_id: number | null;
 }
 
 export interface DriveFile {
@@ -93,7 +96,8 @@ export interface DriveFile {
   modifiedAt: string;
   owner: string;
   encryptedFdk?: string;
-  storageProvider: 'local' | 'google_drive';
+  storageProvider: StorageProvider;
+  externalStorageId: number | null;
   parentId?: number | null;
   folderId?: number | null;
   proxyExternalFileId?: string;
@@ -123,6 +127,7 @@ export class DriveStore {
   private readonly uploadEngine = inject(UploadEngineService);
   private readonly uploadBatchCoordinator = inject(UploadBatchCoordinatorService);
   private readonly folderUploadCoordinator = inject(FolderUploadCoordinatorService);
+  private readonly storageMoveEngine = inject(StorageMoveEngineService);
 
   constructor() {
     effect(() => {
@@ -177,7 +182,7 @@ export class DriveStore {
   readonly selectedFileIds = signal<Set<number>>(new Set());
 
   readonly displayMode = signal<'list' | 'grid'>((localStorage.getItem('preferred_display_mode') as 'list' | 'grid') || 'list');
-  readonly linkedAccounts = signal<any[]>([]);
+  readonly linkedAccounts = signal<LinkedGoogleAccount[]>([]);
   readonly trashFiles = signal<DriveFile[]>([]);
   readonly transfers = signal<TransferItem[]>([]);
   readonly transferGroups = signal<TransferGroup[]>([]);
@@ -358,9 +363,18 @@ export class DriveStore {
 
   async loadLinkedAccounts(): Promise<void> {
     try {
-      const res: any = await firstValueFrom(this.driveService.getLinkedGoogleAccounts());
-      const accounts = Array.isArray(res) ? res : (res?.accounts ?? []);
-      this.linkedAccounts.set(accounts);
+      const res = await firstValueFrom(this.driveService.getLinkedGoogleAccounts());
+      this.linkedAccounts.set(res.accounts.map(account => ({
+        id: account.id,
+        accountEmail: account.account_email,
+        accountPicture: account.account_picture,
+        rootFolderId: account.root_folder_id,
+        status: 'ready',
+        usedBytes: 0,
+        maxBytes: null,
+        availableBytes: null,
+        nanikaUsedBytes: 0,
+      })));
     } catch (e) {
       console.error('Failed to load linked accounts', e);
       this.linkedAccounts.set([]);
@@ -459,6 +473,7 @@ export class DriveStore {
           modifiedAt: '—',
           owner: 'eu',
           storageProvider: 'local',
+          externalStorageId: null,
           parentId: (folder.parent_id !== undefined && folder.parent_id !== null) ? folder.parent_id : null
         });
       }
@@ -484,6 +499,7 @@ export class DriveStore {
           owner: 'eu',
           encryptedFdk: file.encrypted_fdk,
           storageProvider: file.storage_provider,
+          externalStorageId: file.external_storage_id,
           folderId: (file.folder_id !== undefined && file.folder_id !== null) ? file.folder_id : null,
           isHidden: file.is_hidden
         });
@@ -563,6 +579,7 @@ export class DriveStore {
         owner: 'eu',
         encryptedFdk: prepared.encryptedFdk,
         storageProvider: upload.provider,
+        externalStorageId: upload.provider === 'local' ? null : null,
         folderId: upload.folderId,
         isHidden: false
       }];
@@ -1670,6 +1687,7 @@ export class DriveStore {
   }
 
   async renameItem(file: DriveFile, newName: string): Promise<void> {
+    this.assertStorageMoveInactive(file);
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
     const encName = await this.cryptoService.encryptName(newName);
     const hash = await this.cryptoService.hashName(newName);
@@ -1693,6 +1711,7 @@ export class DriveStore {
   }
 
   async moveItem(file: DriveFile, targetFolderId: number | null): Promise<void> {
+    this.assertStorageMoveInactive(file);
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
 
     if (file.isFolder) {
@@ -1705,6 +1724,7 @@ export class DriveStore {
   }
 
   async trashItem(file: DriveFile): Promise<void> {
+    this.assertStorageMoveInactive(file);
     if (file.isFolder) {
       await firstValueFrom(this.driveService.trashFolder(file.id));
     } else {
@@ -1743,6 +1763,7 @@ export class DriveStore {
           modifiedAt: '—',
           owner: 'eu',
           storageProvider: 'local',
+          externalStorageId: null,
           parentId: (folder.parent_id !== undefined && folder.parent_id !== null) ? folder.parent_id : null
         });
       }
@@ -1765,6 +1786,7 @@ export class DriveStore {
           modifiedAt: '—',
           owner: 'eu',
           storageProvider: file.storage_provider,
+          externalStorageId: file.external_storage_id,
           folderId: (file.folder_id !== undefined && file.folder_id !== null) ? file.folder_id : null
         });
       }
@@ -1918,6 +1940,7 @@ export class DriveStore {
   }
 
   async permanentDeleteItem(file: DriveFile): Promise<void> {
+    this.assertStorageMoveInactive(file);
     if (file.isFolder) {
       await firstValueFrom(this.driveService.hardDeleteFolder(file.id));
     } else {
@@ -1933,6 +1956,12 @@ export class DriveStore {
     await this.loadQuota();
   }
 
+  private assertStorageMoveInactive(file: DriveFile): void {
+    if (!file.isFolder && this.storageMoveEngine.activeFileIds().has(file.id)) {
+      throw new Error('Este arquivo está sendo transferido entre armazenamentos.');
+    }
+  }
+
   async emptyTrash(): Promise<void> {
     await firstValueFrom(this.driveService.emptyTrash());
     await this.loadTrash();
@@ -1940,6 +1969,7 @@ export class DriveStore {
   }
 
   async batchTrashItems(files: DriveFile[]): Promise<void> {
+    files.forEach(file => this.assertStorageMoveInactive(file));
     const fileIds = files.filter(f => !f.isFolder).map(f => f.id);
     const folderIds = files.filter(f => f.isFolder).map(f => f.id);
 
@@ -1957,6 +1987,7 @@ export class DriveStore {
   }
 
   async batchPermanentDeleteItems(files: DriveFile[]): Promise<void> {
+    files.forEach(file => this.assertStorageMoveInactive(file));
     const fileIds = files.filter(f => !f.isFolder).map(f => f.id);
     const folderIds = files.filter(f => f.isFolder).map(f => f.id);
     

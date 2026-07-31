@@ -615,6 +615,7 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     modifiedAt: new Date().toISOString(),
     owner: 'Nanika',
     storageProvider: 'local',
+    externalStorageId: null,
   });
 
   isDragging = false;
@@ -637,6 +638,7 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
         shareUuid: this.shareId(),
         shareFdk: this.fdk(),
         storageProvider: 'local',
+        externalStorageId: null,
       });
       this.loadHeaderThumbnail();
     } else if (this.isImage()) {

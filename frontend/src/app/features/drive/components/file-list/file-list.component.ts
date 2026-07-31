@@ -1842,6 +1842,7 @@ export class FileListComponent implements OnInit, OnDestroy {
         modifiedAt: '—',
         owner: '—',
         storageProvider: 'local',
+        externalStorageId: null,
         parentId: parentId
       };
 

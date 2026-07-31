@@ -13,6 +13,7 @@ describe('getPublicShareAvailability', () => {
     modifiedAt: '',
     owner: '',
     storageProvider: 'local',
+    externalStorageId: null,
     ...overrides,
   });
 

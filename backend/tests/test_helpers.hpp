@@ -88,6 +88,8 @@ public:
     bool token_exchange_ok = true;
     bool create_folder_ok = true;
     bool refresh_token_ok = true;
+    bool final_file_in_root = true;
+    mutable int quota_requests = 0;
     std::string mock_root_folder_id = "mock_folder_123";
     std::string mock_access_token = "mock_access_token_xyz";
     std::string mock_refresh_token = "mock_refresh_token_abc";
@@ -122,7 +124,10 @@ protected:
         res.error = cpr::Error{};
         res.error.code = cpr::ErrorCode::OK;
         
-        if (url.find("drive/v3/files") != std::string::npos) {
+        if (url.find("upload/drive/v3/files") != std::string::npos) {
+            res.status_code = 200;
+            res.header["location"] = "https://upload.example/session-redacted";
+        } else if (url.find("drive/v3/files") != std::string::npos) {
             res.status_code = create_folder_ok ? 200 : 500;
             res.text = create_folder_ok ? R"({"id": ")" + mock_root_folder_id + R"("})" : R"({"error": "internal"})";
         }
@@ -134,13 +139,18 @@ protected:
         res.error = cpr::Error{};
         res.error.code = cpr::ErrorCode::OK;
         
-        if (url.find("drive/v3/files") != std::string::npos) {
+        if (url.find("?fields=size%2Cparents") != std::string::npos) {
+            res.status_code = 200;
+            const auto parent = final_file_in_root ? mock_root_folder_id : "wrong-root";
+            res.text = R"({"size":"10","parents":[")" + parent + R"("]})";
+        } else if (url.find("drive/v3/files") != std::string::npos) {
             res.status_code = 200;
             res.text = R"({"files": []})";
         } else if (url.find("oauth2/v2/userinfo") != std::string::npos) {
             res.status_code = 200;
             res.text = R"({"email": "mock@test.com"})";
         } else if (url.find("drive/v3/about") != std::string::npos) {
+            ++quota_requests;
             res.status_code = 200;
             res.text = R"({
                 "storageQuota": {
