@@ -23,6 +23,7 @@ tags:
   - name: Compartilhamento
   - name: Lixeira
   - name: Google Drive
+    description: Provedor privado. Operações autenticadas são suportadas, mas compartilhamento público não é oferecido e o backend não atua como proxy de mídia. Arquivos armazenados no Google Drive não podem criar links públicos Nanika.
 
 components:
   securitySchemes:
@@ -211,6 +212,31 @@ components:
         share_uuid:
           type: string
           description: codigo de 7 caracteres para acesso público.
+
+    SharedFileMetadata:
+      type: object
+      required: [encrypted_name, size_bytes, storage_provider]
+      properties:
+        encrypted_name:
+          type: string
+          description: Nome protegido pela FDK do compartilhamento.
+        size_bytes:
+          type: integer
+          format: int64
+        storage_provider:
+          type: string
+          enum: [local]
+
+    GoogleDriveSharingUnsupported:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          example: Compartilhamento publico nao esta disponivel para arquivos armazenados no Google Drive.
+        code:
+          type: string
+          enum: [GOOGLE_DRIVE_SHARING_UNSUPPORTED]
 
 paths:
   /api/docs:
@@ -1068,7 +1094,8 @@ paths:
   /files/{fileId}/share:
     post:
       tags: [Compartilhamento]
-      summary: Gera link compartilhável para arquivo
+      summary: Gera link compartilhável para arquivo local
+      description: Somente arquivos no armazenamento local podem ser compartilhados publicamente. Arquivos privados do Google Drive não são publicados nem transferidos pelo backend.
       security:
         - bearerAuth: []
       parameters:
@@ -1077,6 +1104,17 @@ paths:
           required: true
           schema:
             type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [encrypted_name_fdk]
+              properties:
+                encrypted_name_fdk:
+                  type: string
+                  minLength: 1
       responses:
         '200':
           description: codigo de compartilhamento gerado
@@ -1084,19 +1122,27 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ShareResponse'
+        '400':
+          description: Corpo inválido ou encrypted_name_fdk ausente
         '401':
           description: Token ausente ou inválido
         '404':
           description: Não encontrado ou acesso negado
+        '422':
+          description: Compartilhamento público indisponível para arquivos do Google Drive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GoogleDriveSharingUnsupported'
         '500':
           description: Erro interno
 
   /share/{token}:
     get:
       tags: [Compartilhamento]
-      summary: Baixa arquivo por link público
+      summary: Obtém metadados criptografados de um compartilhamento local
       parameters:
-        - name: codigo
+        - name: token
           in: path
           required: true
           schema:
@@ -1104,12 +1150,43 @@ paths:
             description: codigo de 7 caracteres
       responses:
         '200':
-          description: Arquivo retornado
-          headers:
-            X-Encrypted-Name:
-              description: Nome criptografado do arquivo
+          description: Metadados retornados
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharedFileMetadata'
+        '404':
+          description: Link inválido ou expirado
+        '500':
+          description: Erro interno
+
+  /share/{token}/download:
+    get:
+      tags: [Compartilhamento]
+      summary: Baixa bytes criptografados de um compartilhamento local
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            description: codigo de 7 caracteres
+        - name: Range
+          in: header
+          required: false
+          schema:
+            type: string
+            example: bytes=0-4194319
+      responses:
+        '200':
+          description: Conteúdo criptografado completo
+          content:
+            application/octet-stream:
               schema:
                 type: string
+                format: binary
+        '206':
+          description: Conteúdo criptografado parcial
           content:
             application/octet-stream:
               schema:
@@ -1117,6 +1194,8 @@ paths:
                 format: binary
         '404':
           description: Link inválido ou expirado
+        '416':
+          description: Intervalo solicitado inválido
         '500':
           description: Erro interno
 

@@ -82,7 +82,7 @@ describe('DriveStore public behavior', () => {
     const names = ['a.pdf', 'b.jpg', 'c.docx', 'd.xlsx', 'e.mp4', 'f.mp3', 'g.bin'];
     drive.getTree.and.returnValue(of({
       folders: [{ id: 10, parent_id: null, encrypted_name: 'root' }],
-      files: names.map((encrypted_name, id) => ({ id, encrypted_name, size_bytes: id ? 1024 : 0, folder_id: null, encrypted_fdk: 'fdk', is_hidden: false })),
+      files: names.map((encrypted_name, id) => ({ id, encrypted_name, size_bytes: id ? 1024 : 0, folder_id: null, encrypted_fdk: 'fdk', is_hidden: false, storage_provider: 'local' as const })),
     }));
     await store.loadTree();
     expect(store.files().map(file => file.type)).toEqual(['folder', 'pdf', 'image', 'doc', 'spreadsheet', 'video', 'audio', 'unknown']);
@@ -99,6 +99,7 @@ describe('DriveStore public behavior', () => {
       size_bytes: 1,
       encrypted_fdk: 'fdk',
       is_hidden: false,
+      storage_provider: 'local' as const,
     }));
     drive.getTree.and.callFake((_limit?: number, offset = 0) => of({
       folders: [],
@@ -109,6 +110,7 @@ describe('DriveStore public behavior', () => {
         size_bytes: 1,
         encrypted_fdk: 'fdk',
         is_hidden: false,
+        storage_provider: 'local' as const,
       }],
     }));
 
@@ -324,7 +326,7 @@ describe('DriveStore public behavior', () => {
     await store.batchTrashItems([{ id: 1, isFolder: false } as DriveFile]);
     expect(drive.batchSoftDeleteFiles).toHaveBeenCalledWith([1]);
     expect(drive.batchSoftDeleteFolders).not.toHaveBeenCalled();
-    store.trashFiles.set([{ id: 3, isFolder: false, decryptedName: '__PROXY__x', folderId: null } as DriveFile]);
+    store.trashFiles.set([{ id: 3, isFolder: false, decryptedName: 'x.proxy.mp4', folderId: null } as DriveFile]);
     await store.batchPermanentDeleteItems([{ id: 2, isFolder: false, decryptedName: 'x', folderId: null } as DriveFile]);
     expect(drive.batchHardDeleteFiles).toHaveBeenCalledWith([2, 3]);
     await store.emptyTrash();

@@ -53,9 +53,7 @@ import { firstValueFrom } from 'rxjs';
           [filename]="decryptedName()"
           [sizeBytes]="sizeBytes()"
           [isVideo]="isVideo()"
-          [isImage]="isImage()"
-          [storageProvider]="metadata()?.storage_provider || 'local'"
-          [publicDownloadUrl]="metadata()?.public_download_url || null">
+          [isImage]="isImage()">
         </app-public-media-player>
       }
     </div>

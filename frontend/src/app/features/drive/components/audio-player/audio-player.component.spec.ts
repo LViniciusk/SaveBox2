@@ -66,4 +66,14 @@ describe('AudioPlayerComponent', () => {
     component.requestClose();
     expect(signal.aborted).toBeTrue();
   });
+
+  it('keeps private Google Drive playback without exposing a share action', async () => {
+    const googleFile: DriveFile = { ...file, storageProvider: 'google_drive' };
+    fixture.componentRef.setInput('file', googleFile);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(loader.load).toHaveBeenCalledWith(googleFile, jasmine.any(AbortSignal));
+    expect(fixture.nativeElement.querySelector('[aria-label*="Compartilh"]')).toBeNull();
+  });
 });

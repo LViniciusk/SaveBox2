@@ -8,8 +8,6 @@ export interface EncryptedFileMetadata {
   encrypted_name: string;
   size_bytes: number;
   storage_provider?: 'local' | 'google_drive';
-  external_file_id?: string;
-  public_download_url?: string;
 }
 
 @Injectable({ providedIn: 'root' })

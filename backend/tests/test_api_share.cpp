@@ -73,6 +73,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         crow::request req;
         req.url = "/files/" + std::to_string(file_a_1_id) + "/share";
         req.method = crow::HTTPMethod::Post;
+        req.body = R"({"encrypted_name_fdk":"shared_name"})";
         req.add_header("Authorization", "Bearer " + token_a);
 
         crow::response res = router.handle_share_file(req, file_a_1_id);
@@ -93,10 +94,21 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         REQUIRE(check[0][0].as<int>() == 1);
     }
 
+    SECTION("Gerar Link: encrypted_name_fdk obrigatorio") {
+        crow::request req;
+        req.method = crow::HTTPMethod::Post;
+        req.add_header("Authorization", "Bearer " + token_a);
+
+        const crow::response res = router.handle_share_file(req, file_a_1_id);
+
+        REQUIRE(res.code == 400);
+    }
+
     SECTION("Gerar Link: Segurança IDOR") {
         crow::request req;
         req.url = "/files/" + std::to_string(file_a_1_id) + "/share";
         req.method = crow::HTTPMethod::Post;
+        req.body = R"({"encrypted_name_fdk":"shared_name"})";
         req.add_header("Authorization", "Bearer " + token_b);
 
         crow::response res = router.handle_share_file(req, file_a_1_id);
@@ -109,8 +121,8 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         {
             auto conn = pool.acquire_connection();
             pqxx::work txn(*conn);
-            txn.exec("INSERT INTO shared_links (file_id, share_uuid) VALUES ($1, $2)",
-                     pqxx::params{file_a_1_id, fixed_uuid});
+            txn.exec("INSERT INTO shared_links (file_id, share_uuid, encrypted_name_fdk) VALUES ($1, $2, $3)",
+                     pqxx::params{file_a_1_id, fixed_uuid, "shared_name"});
             txn.commit();
         }
 
@@ -128,6 +140,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         crow::request req_share;
         req_share.url = "/files/" + std::to_string(file_a_1_id) + "/share";
         req_share.method = crow::HTTPMethod::Post;
+        req_share.body = R"({"encrypted_name_fdk":"shared_name"})";
         req_share.add_header("Authorization", "Bearer " + token_a);
 
         crow::response res_share = router.handle_share_file(req_share, file_a_1_id);
@@ -169,8 +182,8 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         {
             auto conn = pool.acquire_connection();
             pqxx::work txn(*conn);
-            txn.exec("INSERT INTO shared_links (file_id, share_uuid) VALUES ($1, $2)",
-                     pqxx::params{file_a_1_id, partial_uuid});
+            txn.exec("INSERT INTO shared_links (file_id, share_uuid, encrypted_name_fdk) VALUES ($1, $2, $3)",
+                     pqxx::params{file_a_1_id, partial_uuid, "shared_name"});
             txn.commit();
         }
 
@@ -208,8 +221,8 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
             );
             file_big_id = big_file_res[0][0].as<int>();
 
-            txn.exec("INSERT INTO shared_links (file_id, share_uuid) VALUES ($1, $2)",
-                     pqxx::params{file_big_id, oom_uuid});
+            txn.exec("INSERT INTO shared_links (file_id, share_uuid, encrypted_name_fdk) VALUES ($1, $2, $3)",
+                     pqxx::params{file_big_id, oom_uuid, "shared_name"});
             txn.commit();
         }
 
@@ -247,11 +260,11 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         Base62Generator::mock_next_token = "COLLIDE";
 
         crow::request req_share1;
-        req_share1.url = "/api/files/share";
+        req_share1.url = "/files/" + std::to_string(file_a_1_id) + "/share";
         req_share1.method = crow::HTTPMethod::Post;
         
         crow::json::wvalue req_body;
-        req_body["file_id"] = file_a_1_id;
+        req_body["encrypted_name_fdk"] = "shared_name_1";
         req_share1.body = req_body.dump();
 
         req_share1.add_header("Authorization", "Bearer " + token_user_a);
@@ -269,11 +282,11 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         Base62Generator::mock_next_token = "COLLIDE";
         
         crow::request req_share2;
-        req_share2.url = "/api/files/share";
+        req_share2.url = "/files/" + std::to_string(file_a_2_id) + "/share";
         req_share2.method = crow::HTTPMethod::Post;
         
         crow::json::wvalue req_body2;
-        req_body2["file_id"] = file_a_2_id;
+        req_body2["encrypted_name_fdk"] = "shared_name_2";
         req_share2.body = req_body2.dump();
         req_share2.add_header("Authorization", "Bearer " + token_user_a);
 
@@ -287,11 +300,11 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
 
     SECTION("Rate Limit de Alterações de Compartilhamento (10 por hora)") {
         crow::request req_limit;
-        req_limit.url = "/api/files/share";
+        req_limit.url = "/files/" + std::to_string(file_a_1_id) + "/share";
         req_limit.method = crow::HTTPMethod::Post;
         
         crow::json::wvalue req_limit_body;
-        req_limit_body["file_id"] = file_a_1_id;
+        req_limit_body["encrypted_name_fdk"] = "shared_name";
         req_limit.body = req_limit_body.dump();
         
         std::string token_user_a = auth.generate_token(user_a_id);
@@ -330,6 +343,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         crow::request req_create;
         req_create.url = "/files/" + std::to_string(file_a_1_id) + "/share";
         req_create.method = crow::HTTPMethod::Post;
+        req_create.body = R"({"encrypted_name_fdk":"shared_name"})";
         req_create.add_header("Authorization", "Bearer " + token_user_a);
         crow::response res_create = router.handle_share_file(req_create, file_a_1_id);
         REQUIRE(res_create.code == 200);
@@ -350,12 +364,12 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
 
         // 3. Obter metadados publicos
         crow::request req_meta;
-        req_meta.url = "/share/" + share_uuid + "/metadata";
+        req_meta.url = "/share/" + share_uuid;
         req_meta.method = crow::HTTPMethod::Get;
         crow::response res_meta = router.handle_get_share_metadata(req_meta, share_uuid);
         REQUIRE(res_meta.code == 200);
         auto body_meta = crow::json::load(res_meta.body);
-        REQUIRE(body_meta["encrypted_name"].s() == "file_share");
+        REQUIRE(body_meta["encrypted_name"].s() == "shared_name");
         REQUIRE(body_meta["size_bytes"].i() == 15);
 
         // 4. Revogar link
@@ -385,4 +399,114 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
     }
 
     std::filesystem::remove_all(test_dir);
+}
+
+TEST_CASE("API Share - Google Drive nao admite compartilhamento publico", "[api][share][google-drive]") {
+    const std::string conn_str = get_secure_conn_string();
+    DatabasePool pool(2, conn_str);
+    MockEmailService mock_email;
+    AuthService auth("share_google_pepper", "share_google_secret", &mock_email);
+    FileManager file_mgr(pool);
+    FolderManager folder_mgr(pool);
+    FileChunker chunker("./test_share_google_disabled/");
+    ApiRouter router(pool, auth, folder_mgr, &file_mgr, &chunker);
+
+    int user_id = 0;
+    int google_file_id = 0;
+    int google_file_without_external_id = 0;
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+        txn.exec("DELETE FROM users WHERE username = 'share_google_disabled_user'");
+        const auto user = txn.exec(
+            "INSERT INTO users (username, email, password_hash, is_email_verified) "
+            "VALUES ('share_google_disabled_user', 'share-google-disabled@test.com', 'hash', true) RETURNING id"
+        );
+        user_id = user[0][0].as<int>();
+        const auto google_file = txn.exec(
+            "INSERT INTO files (user_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, "
+            "is_upload_complete, storage_provider, external_file_id) "
+            "VALUES ($1, 'google_ciphertext', 'google_hash', 'google_fdk', 32, 0, true, 'google_drive', 'external-id') RETURNING id",
+            pqxx::params{user_id}
+        );
+        google_file_id = google_file[0][0].as<int>();
+        const auto google_file_without_id = txn.exec(
+            "INSERT INTO files (user_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, "
+            "is_upload_complete, storage_provider) "
+            "VALUES ($1, 'google_ciphertext_2', 'google_hash_2', 'google_fdk_2', 32, 0, true, 'google_drive') RETURNING id",
+            pqxx::params{user_id}
+        );
+        google_file_without_external_id = google_file_without_id[0][0].as<int>();
+        txn.commit();
+    }
+
+    struct Cleanup {
+        DatabasePool& pool;
+        int user_id;
+        ~Cleanup() {
+            Base62Generator::mock_next_token.clear();
+            try {
+                auto conn = pool.acquire_connection();
+                pqxx::work txn(*conn);
+                txn.exec("DELETE FROM users WHERE id = $1", pqxx::params{user_id});
+                txn.commit();
+                std::filesystem::remove_all("./test_share_google_disabled/");
+            } catch (...) {}
+        }
+    } cleanup{pool, user_id};
+
+    const std::string token = auth.generate_token(static_cast<uint64_t>(user_id));
+
+    SECTION("criacao retorna 422 antes de gerar UUID ou alterar shared_links") {
+        Base62Generator::mock_next_token = "UNUSED1";
+        crow::request req;
+        req.method = crow::HTTPMethod::Post;
+        req.add_header("Authorization", "Bearer " + token);
+        req.body = R"({"encrypted_name_fdk":"nao-deve-ser-processado"})";
+
+        const crow::response response = router.handle_share_file(req, google_file_id);
+        REQUIRE(response.code == 422);
+        const auto body = crow::json::load(response.body);
+        REQUIRE(body["code"].s() == "GOOGLE_DRIVE_SHARING_UNSUPPORTED");
+        REQUIRE(Base62Generator::mock_next_token == "UNUSED1");
+
+        auto conn = pool.acquire_connection();
+        pqxx::nontransaction txn(*conn);
+        const auto links = txn.exec(
+            "SELECT count(*) FROM shared_links WHERE file_id = $1",
+            pqxx::params{google_file_id}
+        );
+        REQUIRE(links[0][0].as<int>() == 0);
+    }
+
+    SECTION("criacao tambem bloqueia Google sem external_file_id") {
+        crow::request req;
+        req.method = crow::HTTPMethod::Post;
+        req.body = R"({"encrypted_name_fdk":"ciphertext"})";
+        req.add_header("Authorization", "Bearer " + token);
+        const crow::response response = router.handle_share_file(req, google_file_without_external_id);
+        REQUIRE(response.code == 422);
+    }
+
+    SECTION("criacao bloqueia Google mesmo sem GoogleDriveService") {
+        ApiRouter router_without_gdrive(pool, auth, folder_mgr, &file_mgr, &chunker, nullptr);
+        crow::request req;
+        req.method = crow::HTTPMethod::Post;
+        req.body = R"({"encrypted_name_fdk":"ciphertext"})";
+        req.add_header("Authorization", "Bearer " + token);
+
+        const crow::response response = router_without_gdrive.handle_share_file(req, google_file_id);
+
+        REQUIRE(response.code == 422);
+    }
+
+    SECTION("FileManager aplica a mesma policy") {
+        try {
+            file_mgr.share_file(static_cast<uint64_t>(google_file_id), static_cast<uint64_t>(user_id), "ciphertext");
+            FAIL("FileManager aceitou compartilhamento publico do Google Drive");
+        } catch (const std::runtime_error& error) {
+            REQUIRE(std::string(error.what()) == "SHARING_UNSUPPORTED_PROVIDER");
+        }
+    }
+
 }

@@ -7,6 +7,7 @@ import { AudioPlayerComponent } from '../audio-player/audio-player.component';
 import { DecryptedMediaLoaderService } from '../../services/decrypted-media-loader.service';
 import { resolveFilePreviewKind } from '../../services/file-preview-resolver';
 import { ShareModalComponent } from '../share-modal/share-modal.component';
+import { getPublicShareAvailability } from '../../policies/public-share-policy';
 
 @Component({
   selector: 'app-image-player',
@@ -26,9 +27,15 @@ import { ShareModalComponent } from '../share-modal/share-modal.component';
         </div>
         
         <div class="header-right">
-          <button class="share-btn" (click)="$event.stopPropagation(); isShareOpen.set(true)">
-            <span class="material-symbols-outlined">group</span> Compartilhar
-          </button>
+          @if (shareAvailability().allowed) {
+            <button class="share-btn" (click)="openShare($event)">
+              <span class="material-symbols-outlined">group</span> Compartilhar
+            </button>
+          } @else {
+            <button class="share-btn" disabled aria-disabled="true" title="Compartilhamento público indisponível para Google Drive">
+              <span class="material-symbols-outlined">group_off</span> Compartilhamento indisponível
+            </button>
+          }
           @if (playlist().length > 1) {
             <div class="nav-controls">
               <button class="icon-btn" (click)="prevImage($event)" [disabled]="currentIndex() === 0 || isVideoPlaying() || isVideoLoading()">
@@ -170,7 +177,7 @@ import { ShareModalComponent } from '../share-modal/share-modal.component';
         </div>
       }
 
-      @if (isShareOpen()) {
+      @if (isShareOpen() && shareAvailability().allowed) {
         <div class="player-share-modal" (click)="$event.stopPropagation()">
           <app-share-modal [file]="file()" (close)="isShareOpen.set(false)" />
         </div>
@@ -625,6 +632,7 @@ export class ImagePlayerComponent implements OnDestroy {
   readonly translateY = signal(0);
   readonly isVideoReady = signal(false);
   readonly isShareOpen = signal(false);
+  readonly shareAvailability = computed(() => getPublicShareAvailability(this.file()));
 
   isDragging = false;
   private hasDragged = false;
@@ -907,6 +915,11 @@ export class ImagePlayerComponent implements OnDestroy {
     } catch (e) {
       console.error('[ImagePlayer] Erro no download do arquivo:', e);
     }
+  }
+
+  protected openShare(event: Event): void {
+    event.stopPropagation();
+    if (this.shareAvailability().allowed) this.isShareOpen.set(true);
   }
 
   protected prevImage(event?: Event) {

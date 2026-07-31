@@ -46,6 +46,15 @@ describe('VideoPlayerComponent', () => {
     expect(stream.destroyStream).toHaveBeenCalled();
   });
 
+  it('does not open sharing for a private Google Drive file', () => {
+    fixture.componentRef.setInput('file', { ...file, storageProvider: 'google_drive' });
+    fixture.detectChanges();
+    const shareButton = fixture.nativeElement.querySelector('.share-btn') as HTMLButtonElement;
+    expect(shareButton.disabled).toBeTrue();
+    shareButton.click();
+    expect(component.isShareOpen()).toBeFalse();
+  });
+
   it('calculates a bounded progress percentage', () => {
     component.duration.set(10);
     component.currentTime.set(7);

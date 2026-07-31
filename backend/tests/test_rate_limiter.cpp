@@ -94,7 +94,7 @@ TEST_CASE("Rate Limiter - Prevenção de Reverse DoS (Eviction Segura)", "[rate_
         REQUIRE(res_api.code == 200);
     }
 
-    SECTION("Compatibilidade Cloudflare via CF-Connecting-IP") {
+    SECTION("Respeita CF-Connecting-IP da Cloudflare") {
         const std::string proxy_ip = "192.168.1.50";
         const std::string cf_ip = "203.0.113.5";
         

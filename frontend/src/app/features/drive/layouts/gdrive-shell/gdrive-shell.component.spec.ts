@@ -12,12 +12,13 @@ class SidebarStubComponent {
   readonly viewChange = output<any>(); readonly createFolderRequested = output<void>(); readonly uploadFileRequested = output<void>(); readonly uploadFolderRequested = output<void>(); readonly pinnedFolderNavigate = output<number>();
 }
 
-@Component({ selector: 'app-drive-workspace', standalone: true, template: '<button id="trash" (click)="emptyTrashRequested.emit()"></button>' })
+@Component({ selector: 'app-drive-workspace', standalone: true, template: '<button id="trash" (click)="emptyTrashRequested.emit()"></button><button id="share" (click)="shareRequested.emit(file)"></button>' })
 class WorkspaceStubComponent {
+  readonly file = { id: 7, storageProvider: 'local' };
   readonly currentView = input<string>();
   readonly locked = input(false);
   readonly createFolderRequested = output<void>(); readonly uploadFileRequested = output<void>();
-  readonly videoSelected = output<any>(); readonly imageSelected = output<any>(); readonly previewRequested = output<any>(); readonly shareRequested = output<any>(); readonly emptyTrashRequested = output<void>();
+  readonly previewRequested = output<any>(); readonly shareRequested = output<any>(); readonly emptyTrashRequested = output<void>();
   readonly dropStarted = output<void>(); readonly externalDrop = output<any>(); readonly dropError = output<unknown>();
 }
 
@@ -71,5 +72,15 @@ describe('GDriveShellComponent', () => {
     projected.className = 'projected-content';
     fixture.nativeElement.querySelector('.content-inner').append(projected);
     expect(fixture.nativeElement.querySelector('.projected-content')).not.toBeNull();
+  });
+
+  it('forwards local share requests from the workspace', () => {
+    const share = jasmine.createSpy('share');
+    component.shareRequested.subscribe(share);
+    fixture.detectChanges();
+
+    fixture.nativeElement.querySelector('#share').click();
+
+    expect(share).toHaveBeenCalledWith(jasmine.objectContaining({ id: 7, storageProvider: 'local' }));
   });
 });

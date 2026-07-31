@@ -93,7 +93,7 @@ export interface DriveFile {
   modifiedAt: string;
   owner: string;
   encryptedFdk?: string;
-  storageProvider?: string;
+  storageProvider: 'local' | 'google_drive';
   parentId?: number | null;
   folderId?: number | null;
   proxyExternalFileId?: string;
@@ -103,7 +103,6 @@ export interface DriveFile {
   forceOriginal?: boolean;
   shareUuid?: string;
   shareFdk?: Uint8Array;
-  publicDownloadUrl?: string;
 }
 
 export interface QuotaState {
@@ -459,6 +458,7 @@ export class DriveStore {
           sizeFormatted: '—',
           modifiedAt: '—',
           owner: 'eu',
+          storageProvider: 'local',
           parentId: (folder.parent_id !== undefined && folder.parent_id !== null) ? folder.parent_id : null
         });
       }
@@ -483,9 +483,9 @@ export class DriveStore {
           modifiedAt: '—',
           owner: 'eu',
           encryptedFdk: file.encrypted_fdk,
-          storageProvider: (file as any).storage_provider || 'local',
+          storageProvider: file.storage_provider,
           folderId: (file.folder_id !== undefined && file.folder_id !== null) ? file.folder_id : null,
-          isHidden: !!(file as any).is_hidden
+          isHidden: file.is_hidden
         });
       }
 
@@ -1681,8 +1681,7 @@ export class DriveStore {
       
       // Se tiver proxy (dual mode), renomeia também
       const proxyName = file.decryptedName + '.proxy.mp4';
-      const legacyProxyName = '__PROXY__' + file.decryptedName;
-      const proxyFile = untracked(() => this.files()).find(f => (f.decryptedName === proxyName || f.decryptedName === legacyProxyName) && f.folderId === file.folderId);
+      const proxyFile = untracked(() => this.files()).find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
       if (proxyFile) {
         const newProxyName = newName + '.proxy.mp4';
         const proxyEncName = await this.cryptoService.encryptName(newProxyName);
@@ -1713,8 +1712,7 @@ export class DriveStore {
       
       // Se tiver proxy, manda pra lixeira tambem
       const proxyName = file.decryptedName + '.proxy.mp4';
-      const legacyProxyName = '__PROXY__' + file.decryptedName;
-      const proxyFile = untracked(() => this.files()).find(f => (f.decryptedName === proxyName || f.decryptedName === legacyProxyName) && f.folderId === file.folderId);
+      const proxyFile = untracked(() => this.files()).find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
       if (proxyFile) {
         await firstValueFrom(this.driveService.trashFile(proxyFile.id));
       }
@@ -1744,6 +1742,7 @@ export class DriveStore {
           sizeFormatted: '—',
           modifiedAt: '—',
           owner: 'eu',
+          storageProvider: 'local',
           parentId: (folder.parent_id !== undefined && folder.parent_id !== null) ? folder.parent_id : null
         });
       }
@@ -1765,6 +1764,7 @@ export class DriveStore {
           sizeFormatted: this.formatSize(file.size_bytes),
           modifiedAt: '—',
           owner: 'eu',
+          storageProvider: file.storage_provider,
           folderId: (file.folder_id !== undefined && file.folder_id !== null) ? file.folder_id : null
         });
       }
@@ -1881,7 +1881,7 @@ export class DriveStore {
     } else {
       await firstValueFrom(this.driveService.restoreFile(file.id));
       
-      const proxyName = '__PROXY__' + file.decryptedName;
+      const proxyName = file.decryptedName + '.proxy.mp4';
       const proxyFile = untracked(() => this.trashFiles()).find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
       if (proxyFile) {
         await firstValueFrom(this.driveService.restoreFile(proxyFile.id));
@@ -1900,9 +1900,8 @@ export class DriveStore {
       } else {
         await firstValueFrom(this.driveService.restoreFile(file.id));
         
-        const proxyName1 = '__PROXY__' + file.decryptedName;
-        const proxyName2 = file.decryptedName + '.proxy.mp4';
-        const proxyFiles = trashFiles.filter(p => (p.decryptedName === proxyName1 || p.decryptedName === proxyName2) && p.folderId === file.folderId);
+        const proxyName = file.decryptedName + '.proxy.mp4';
+        const proxyFiles = trashFiles.filter(p => p.decryptedName === proxyName && p.folderId === file.folderId);
         for (const proxy of proxyFiles) {
           await firstValueFrom(this.driveService.restoreFile(proxy.id));
         }
@@ -1924,7 +1923,7 @@ export class DriveStore {
     } else {
       await firstValueFrom(this.driveService.hardDeleteFile(file.id));
       
-      const proxyName = '__PROXY__' + file.decryptedName;
+      const proxyName = file.decryptedName + '.proxy.mp4';
       const proxyFile = untracked(() => this.trashFiles()).find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
       if (proxyFile) {
         await firstValueFrom(this.driveService.hardDeleteFile(proxyFile.id));
@@ -1965,9 +1964,8 @@ export class DriveStore {
     const trashFiles = untracked(() => this.trashFiles());
     const proxyIds: number[] = [];
     for (const f of files.filter(f => !f.isFolder)) {
-      const proxyName1 = '__PROXY__' + f.decryptedName;
-      const proxyName2 = f.decryptedName + '.proxy.mp4';
-      const proxyFiles = trashFiles.filter(p => (p.decryptedName === proxyName1 || p.decryptedName === proxyName2) && p.folderId === f.folderId);
+      const proxyName = f.decryptedName + '.proxy.mp4';
+      const proxyFiles = trashFiles.filter(p => p.decryptedName === proxyName && p.folderId === f.folderId);
       proxyFiles.forEach(p => proxyIds.push(p.id));
     }
     

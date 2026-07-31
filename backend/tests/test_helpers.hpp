@@ -134,10 +134,7 @@ protected:
         res.error = cpr::Error{};
         res.error.code = cpr::ErrorCode::OK;
         
-        if (url.find("fields=webContentLink") != std::string::npos) {
-            res.status_code = 200;
-            res.text = R"({"webContentLink":"https://drive.google.com/uc?export=download&id=mock-public-file"})";
-        } else if (url.find("drive/v3/files") != std::string::npos) {
+        if (url.find("drive/v3/files") != std::string::npos) {
             res.status_code = 200;
             res.text = R"({"files": []})";
         } else if (url.find("oauth2/v2/userinfo") != std::string::npos) {

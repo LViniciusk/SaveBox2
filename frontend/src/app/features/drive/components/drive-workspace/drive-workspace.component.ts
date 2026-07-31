@@ -151,8 +151,6 @@ export class DriveWorkspaceComponent {
   readonly themeService = inject(ThemeService);
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
-  readonly videoSelected = output<DriveFile>();
-  readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
   readonly previewRequested = output<FilePreviewRequest>();
   readonly shareRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();

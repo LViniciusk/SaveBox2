@@ -8,10 +8,10 @@ O SaveBox 2.0 foi construído com a filosofia de Zero-Knowledge, atuando como um
 
 * **Upload e Download em Chunks:** Suporte nativo para arquivos massivos. Os arquivos são divididos em chunks para upload seguro e resumível. O download suporta *Partial Content* (Header HTTP `Range`) para streaming de vídeos e pausas em downloads.
 * **Hierarquia de Arquivos Lógica:** Estrutura de árvore com pastas, subpastas, suporte a navegação recursiva e paginação.
-* **Links Públicos Seguros:** Compartilhamento de arquivos via UUID v4, compatível com a arquitetura E2EE.
+* **Links Públicos Seguros:** Compartilhamento E2EE de arquivos armazenados localmente via código público.
 * **Segurança Anti-IDOR:** Todas as rotas validadas com JWT verificam a propriedade do arquivo no Banco de Dados antes de qualquer manipulação de disco.
 * **Exclusão em Cascata:** Exclusão recursiva de árvores de diretórios com limpeza automática de arquivos no disco rígido.
-* **Integração Google Drive:** Permite aos usuários vincularem suas contas do Google para salvar arquivos na nuvem de forma segura.
+* **Integração Google Drive:** Permite vincular contas e operar arquivos privados diretamente entre o navegador e o Google Drive. Compartilhamento público não é suportado para esse provedor.
 
 ## Tecnologias Utilizadas
 
@@ -85,10 +85,14 @@ As pastas fixadas persistem somente a associação entre usuário e pasta e sua 
 ### Compartilhamento (Links Públicos)
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
-| `POST` | `/files/<id>/share` | Gera e retorna um codigo de 7 caracteres para acesso público. |
-| `GET` | `/share/<codigo>` | Rota pública sem JWT. Retorna cabeçalho `X-Encrypted-Name`. |
+| `POST` | `/files/<id>/share` | Gera um código público para um arquivo no armazenamento local. Arquivos do Google Drive retornam `422`. |
+| `GET` | `/share/<codigo>` | Retorna metadados criptografados de um compartilhamento local, sem JWT. Links antigos do Google Drive retornam `410`. |
+| `GET` | `/share/<codigo>/download` | Baixa bytes criptografados de um compartilhamento local, com suporte a `Range`. Links antigos do Google Drive retornam `410`. |
 
 ### Armazenamento Externo (Google Drive)
+
+O Google Drive é um provedor privado: upload, pré-visualização, download e demais operações autenticadas continuam disponíveis, mas a aplicação não cria links públicos do Google nem usa o backend como proxy de mídia. Arquivos armazenados no Google Drive não podem criar links públicos Nanika.
+
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
 | `GET` | `/api/storage/google/generate-state` | Gera um OAuth state seguro via cookies para o fluxo do OAuth2. |
@@ -140,8 +144,8 @@ k6 run performance_tests/load_auth_stampede.js
 # NOTA: Crie um arquivo no banco de dados e passe o ID dele
 k6 run -e JWT_TOKEN="token" -e FILE_ID="1" performance_tests/load_upload_chunks.js
 
-# Teste de Velocidade no Control Plane do Google Drive
-k6 run -e JWT_TOKEN="token" performance_tests/load_google_drive_proxy.js
+# Teste de Velocidade no Control Plane privado do Google Drive
+k6 run -e JWT_TOKEN="token" performance_tests/load_google_drive_control_plane.js
 ```
 
 ### 3. Soak Testing (Deteção de Memory Leaks)

@@ -34,6 +34,29 @@ describe('ShareModalComponent', () => {
     component = fixture.componentInstance;
   });
 
+  it('renders only the unavailable state and performs no work for Google files', async () => {
+    fixture.componentRef.setInput('file', {
+      id: 7,
+      isFolder: false,
+      storageProvider: 'google_drive',
+      encryptedFdk: 'encrypted-fdk',
+      encryptedName: 'ciphertext',
+    } as any);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(fixture.nativeElement.textContent).toContain('Compartilhamento indisponível');
+    expect(fixture.nativeElement.querySelector('.generate-btn')).toBeNull();
+    expect(driveSpy.listShares).not.toHaveBeenCalled();
+
+    await component.generateLink();
+    await component.buildShareUrl('share-token');
+    expect(cryptoSpy.decryptName).not.toHaveBeenCalled();
+    expect(kasumiSpy.encryptName).not.toHaveBeenCalled();
+    expect(driveSpy.createShareLink).not.toHaveBeenCalled();
+    expect(component.generatedLink()).toBeNull();
+  });
+
   describe('buildShareUrl', () => {
     it('should convert standard Base64 FDK into Base64 URL-Safe format without padding', async () => {
       // Arrange

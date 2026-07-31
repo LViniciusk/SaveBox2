@@ -213,8 +213,7 @@ export class VideoStreamService {
       // Tenta achar a versão proxy (otimizada H.264 720p) caso exista
       const allFiles = this.driveStore.files();
       const proxyName = file.decryptedName + '.proxy.mp4';
-      const legacyProxyName = '__PROXY__' + file.decryptedName;
-      const proxyFile = allFiles.find(f => (f.decryptedName === proxyName || f.decryptedName === legacyProxyName) && f.folderId === file.folderId);
+      const proxyFile = allFiles.find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
       if (proxyFile) {
         if (environment.logs.transmuxer) console.log('[VideoStream] Proxy version found! Using optimized stream instead of original master.');
         fileToPlay = proxyFile;
@@ -240,7 +239,7 @@ export class VideoStreamService {
         for (let i = 0; i < fdkString.length; i++) fdk[i] = fdkString.charCodeAt(i);
       }
 
-      let gdriveUrl: string | null = fileToPlay.publicDownloadUrl ?? null;
+      let gdriveUrl: string | null = null;
       let gdriveToken: string | null = null;
 
       if (!fileToPlay.shareFdk && fileToPlay.storageProvider === 'google_drive') {
@@ -1278,8 +1277,6 @@ export class VideoStreamService {
         ? this.shareService.downloadSharedFileRange(shareUuid, start, end)
         : (gdriveUrl && gdriveToken)
         ? this.driveService.downloadExternalFileRange(gdriveUrl, gdriveToken, start, end)
-        : gdriveUrl
-        ? this.driveService.downloadPublicFileRange(gdriveUrl, start, end)
         : this.driveService.downloadFileRange(fileId, start, end);
 
       request$.pipe(

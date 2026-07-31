@@ -4,7 +4,7 @@ import { previewMimeType, resolveFilePreviewKind } from './file-preview-resolver
 describe('file preview resolver', () => {
   const file = (values: Partial<DriveFile>): DriveFile => ({
     id: 1, isFolder: false, encryptedName: 'cipher', decryptedName: null, type: 'unknown',
-    sizeBytes: 1, sizeFormatted: '1 B', modifiedAt: '', owner: '', ...values,
+    sizeBytes: 1, sizeFormatted: '1 B', modifiedAt: '', owner: '', storageProvider: 'local', ...values,
   });
 
   it('prioritizes MIME information and supports audio extensions', () => {

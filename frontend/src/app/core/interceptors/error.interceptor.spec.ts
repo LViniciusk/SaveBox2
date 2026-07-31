@@ -78,12 +78,12 @@ describe('ErrorInterceptor', () => {
 
   it('should ignore 401 and 403 if URL is public share', () => {
     // Act
-    httpClient.get('/api/share/123').subscribe({
+    httpClient.get('/share/123').subscribe({
       error: () => {}
     });
 
     // Assert
-    const req = httpMock.expectOne('/api/share/123');
+    const req = httpMock.expectOne('/share/123');
     req.flush('Unauthorized', { status: 401, statusText: 'Unauthorized' });
 
     expect(authSpy.logout).not.toHaveBeenCalled();

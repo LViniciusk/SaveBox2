@@ -115,8 +115,8 @@ describe('DriveStore', () => {
   describe('clearDecryptedNames', () => {
     it('should set decryptedName to null for all files', () => {
       store.files.set([
-        { id: 1, isFolder: false, decryptedName: 'test.pdf', encryptedName: 'enc1', type: 'pdf', sizeBytes: 100, sizeFormatted: '100 B', modifiedAt: '', owner: '' },
-        { id: 2, isFolder: true, decryptedName: 'folder', encryptedName: 'enc2', type: 'folder', sizeBytes: 0, sizeFormatted: '0 B', modifiedAt: '', owner: '' }
+        { id: 1, isFolder: false, decryptedName: 'test.pdf', encryptedName: 'enc1', type: 'pdf', sizeBytes: 100, sizeFormatted: '100 B', modifiedAt: '', owner: '', storageProvider: 'local' },
+        { id: 2, isFolder: true, decryptedName: 'folder', encryptedName: 'enc2', type: 'folder', sizeBytes: 0, sizeFormatted: '0 B', modifiedAt: '', owner: '', storageProvider: 'local' }
       ]);
       store.clearDecryptedNames();
       expect(store.files()[0].decryptedName).toBeNull();
@@ -134,7 +134,7 @@ describe('DriveStore', () => {
 
     it('should navigate to parent folder', () => {
       store.files.set([
-        { id: 10, isFolder: true, parentId: 5, decryptedName: 'child', encryptedName: 'enc', type: 'folder', sizeBytes: 0, sizeFormatted: '', modifiedAt: '', owner: '' }
+        { id: 10, isFolder: true, parentId: 5, decryptedName: 'child', encryptedName: 'enc', type: 'folder', sizeBytes: 0, sizeFormatted: '', modifiedAt: '', owner: '', storageProvider: 'local' }
       ]);
       store.currentFolderId.set(10);
       store.navigateUp();

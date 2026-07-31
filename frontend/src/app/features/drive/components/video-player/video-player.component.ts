@@ -4,6 +4,7 @@ import { VideoStreamService } from '../../services/video-stream.service';
 import { DriveFile } from '../../state/drive.store';
 import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.component';
 import { ShareModalComponent } from '../share-modal/share-modal.component';
+import { getPublicShareAvailability } from '../../policies/public-share-policy';
 
 @Component({
   selector: 'app-video-player',
@@ -34,9 +35,15 @@ import { ShareModalComponent } from '../share-modal/share-modal.component';
             @if (isPublicShare()) {
               <span class="file-size-badge">{{ file().sizeFormatted }}</span>
             } @else {
-              <button class="share-btn" (click)="$event.stopPropagation(); isShareOpen.set(true)">
-                <span class="material-symbols-outlined">group</span> Compartilhar
-              </button>
+              @if (shareAvailability().allowed) {
+                <button class="share-btn" (click)="openShare($event)">
+                  <span class="material-symbols-outlined">group</span> Compartilhar
+                </button>
+              } @else {
+                <button class="share-btn" disabled aria-disabled="true" title="Compartilhamento público indisponível para Google Drive">
+                  <span class="material-symbols-outlined">group_off</span> Compartilhamento indisponível
+                </button>
+              }
             }
           </div>
         </div>
@@ -173,7 +180,7 @@ import { ShareModalComponent } from '../share-modal/share-modal.component';
                         </button>
       }
 
-      @if (isShareOpen()) {
+      @if (isShareOpen() && shareAvailability().allowed) {
         <div class="player-share-modal" (click)="$event.stopPropagation()">
           <app-share-modal [file]="file()" (close)="isShareOpen.set(false)" />
         </div>
@@ -779,6 +786,7 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
   readonly centerFlashIcon = signal<string | null>(null);
   readonly videoRenderedWidth = signal<number | null>(null);
   readonly isShareOpen = signal(false);
+  readonly shareAvailability = computed(() => getPublicShareAvailability(this.file()));
 
   private idleTimer: any = null;
   private flashTimeout: any = null;
@@ -1086,6 +1094,11 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   protected downloadVideo() {
     this.download.emit();
+  }
+
+  protected openShare(event: Event): void {
+    event.stopPropagation();
+    if (this.shareAvailability().allowed) this.isShareOpen.set(true);
   }
 
   protected onClose() {

@@ -25,6 +25,7 @@ export interface DriveFileDto {
   size_bytes: number;
   encrypted_fdk: string;
   is_hidden: boolean;
+  storage_provider: 'local' | 'google_drive';
   mime_type?: string;
 }
 
@@ -240,41 +241,6 @@ export class DriveService {
     });
   }
 
-  downloadPublicFileRange(url: string, start: number, end: number): Observable<Blob> {
-    return this.http.get(url, {
-      headers: new HttpHeaders().set('Range', `bytes=${start}-${end}`),
-      observe: 'response',
-      responseType: 'blob',
-    }).pipe(
-      map(response => {
-        if ((response.status !== 200 && response.status !== 206) || !response.body) {
-          throw new Error('Resposta Range pública inválida');
-        }
-        return response.body;
-      })
-    );
-  }
-
-  async downloadPublicFileInRanges(
-    url: string,
-    totalSize: number,
-    onProgress?: (loaded: number, total: number) => void,
-    signal?: AbortSignal,
-  ): Promise<Blob> {
-    const rangeSize = 4_194_320;
-    if (totalSize <= 0) {
-      return firstValueFromAbortable(this.http.get(url, { responseType: 'blob' }), signal);
-    }
-
-    const chunks: Blob[] = [];
-    for (let start = 0; start < totalSize; start += rangeSize) {
-      const end = Math.min(start + rangeSize - 1, totalSize - 1);
-      chunks.push(await firstValueFromAbortable(this.downloadPublicFileRange(url, start, end), signal));
-      onProgress?.(end + 1, totalSize);
-    }
-    return new Blob(chunks, { type: 'application/octet-stream' });
-  }
-
   getLinkedGoogleAccounts(): Observable<any[]> {
     return this.http.get<any[]>(`${environment.apiUrl}/api/storage/google/accounts`, {
       withCredentials: true,
@@ -391,9 +357,10 @@ export class DriveService {
     });
   }
 
-  createShareLink(fileId: number, encryptedNameFdk?: string): Observable<{ share_id: string }> {
-    const body = encryptedNameFdk ? { encrypted_name_fdk: encryptedNameFdk } : {};
-    return this.http.post<{ share_uuid: string }>(`${environment.apiUrl}/files/${fileId}/share`, body, {
+  createShareLink(fileId: number, encryptedNameFdk: string): Observable<{ share_id: string }> {
+    return this.http.post<{ share_uuid: string }>(`${environment.apiUrl}/files/${fileId}/share`, {
+      encrypted_name_fdk: encryptedNameFdk,
+    }, {
       withCredentials: true
     }).pipe(
       map(res => ({ share_id: res.share_uuid }))

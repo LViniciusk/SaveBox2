@@ -5,15 +5,14 @@ import { DriveWorkspaceComponent } from './drive-workspace.component';
 import { DriveFile, DriveStore } from '../../state/drive.store';
 import { DriveDropZoneDirective } from '../../directives/drive-drop-zone.directive';
 
-@Component({ selector: 'app-file-list', standalone: true, template: '' })
+@Component({ selector: 'app-file-list', standalone: true, template: '<button id="share" (click)="shareRequested.emit(file)"></button>' })
 class FileListStubComponent {
+  readonly file = { id: 7, storageProvider: 'local' } as DriveFile;
   readonly files = input<DriveFile[]>([]);
   readonly viewMode = input<'drive' | 'storage' | 'trash'>('drive');
   readonly quota = input<any>(null);
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
-  readonly videoSelected = output<DriveFile>();
-  readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
   readonly previewRequested = output<any>();
   readonly shareRequested = output<DriveFile>();
 }
@@ -127,5 +126,15 @@ describe('DriveWorkspaceComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.querySelector('[data-id="-9999"]')).toBeNull();
+  });
+
+  it('forwards local share requests from the file list', () => {
+    const share = jasmine.createSpy('share');
+    fixture.componentInstance.shareRequested.subscribe(share);
+    fixture.detectChanges();
+
+    fixture.nativeElement.querySelector('#share').click();
+
+    expect(share).toHaveBeenCalledWith(jasmine.objectContaining({ id: 7, storageProvider: 'local' }));
   });
 });

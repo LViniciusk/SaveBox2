@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Output, inject, input, output, OnInit, signal } from '@angular/core';
+import { Component, computed, inject, input, output, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DriveService } from '../../services/drive.service';
@@ -6,6 +6,7 @@ import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { KasumiCryptoService } from '../../../../core/crypto/kasumi-crypto.service';
 import { DriveFile } from '../../state/drive.store';
 import { firstValueFrom } from 'rxjs';
+import { getPublicShareAvailability } from '../../policies/public-share-policy';
 @Component({
   selector: 'app-share-modal',
   standalone: true,
@@ -14,13 +15,16 @@ import { firstValueFrom } from 'rxjs';
     <div class="modal-backdrop" (click)="onBackdropClick($event)">
       <div class="modal-content">
         <div class="modal-header">
-          <h2>Gerenciar Compartilhamento</h2>
+          <h2>{{ unavailableMessage() ? 'Compartilhamento indisponível' : 'Gerenciar Compartilhamento' }}</h2>
           <button class="close-btn" (click)="closeModal()">
             <span class="material-symbols-outlined">close</span>
           </button>
         </div>
 
         <div class="modal-body">
+          @if (unavailableMessage(); as message) {
+            <div class="unavailable-state">{{ message }}</div>
+          } @else {
           <p class="file-info">
             Arquivo: {{ file().decryptedName || file().encryptedName }}
           </p>
@@ -87,6 +91,7 @@ import { firstValueFrom } from 'rxjs';
                 </div>
               </div>
             }
+          }
           }
 
           <div class="modal-actions">
@@ -335,6 +340,11 @@ import { firstValueFrom } from 'rxjs';
       .cancel-btn:hover {
         background: #e8eaed;
       }
+      .unavailable-state {
+        padding: 24px 0;
+        text-align: center;
+        color: #5f6368;
+      }
     `
   ]
 })
@@ -352,12 +362,22 @@ export class ShareModalComponent implements OnInit {
   readonly generatedLink = signal<string | null>(null);
   readonly activeShares = signal<{ id: number, share_id: string, created_at: string }[]>([]);
   readonly copySuccess = signal(false);
+  readonly unavailableMessage = computed(() => {
+    const availability = getPublicShareAvailability(this.file());
+    return availability.allowed ? null : availability.message;
+  });
 
   ngOnInit() {
     this.loadActiveShares();
   }
 
   async loadActiveShares() {
+    if (this.unavailableMessage()) {
+      this.loading.set(false);
+      this.generatedLink.set(null);
+      this.activeShares.set([]);
+      return;
+    }
     this.loading.set(true);
     this.error.set(null);
     try {
@@ -378,6 +398,11 @@ export class ShareModalComponent implements OnInit {
   }
 
   async generateLink() {
+    if (this.unavailableMessage()) {
+      this.loading.set(false);
+      this.generatedLink.set(null);
+      return;
+    }
     this.loading.set(true);
     this.error.set(null);
 
@@ -420,6 +445,10 @@ export class ShareModalComponent implements OnInit {
   }
 
   async buildShareUrl(shareId: string) {
+    if (this.unavailableMessage()) {
+      this.generatedLink.set(null);
+      return;
+    }
     try {
       const encryptedFdk = this.file().encryptedFdk;
       if (!encryptedFdk) {

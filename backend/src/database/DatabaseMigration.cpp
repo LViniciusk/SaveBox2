@@ -96,7 +96,7 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 total_chunks INTEGER NOT NULL DEFAULT 1,
                 is_upload_complete BOOLEAN NOT NULL DEFAULT FALSE,
                 is_hidden BOOLEAN NOT NULL DEFAULT FALSE,
-                storage_provider VARCHAR(20) DEFAULT 'local',
+                storage_provider VARCHAR(20) NOT NULL DEFAULT 'local' CHECK (storage_provider IN ('local', 'google_drive')),
                 external_file_id VARCHAR(255) NULL,
                 external_storage_id BIGINT REFERENCES user_external_storages(id) ON DELETE CASCADE,
                 proxy_external_file_id VARCHAR(255) NULL,
@@ -113,12 +113,12 @@ bool DatabaseMigration::run(DatabasePool& pool) {
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS shared_links (
                 id SERIAL PRIMARY KEY,
-                file_id BIGINT UNIQUE REFERENCES files(id) ON DELETE CASCADE,
+                file_id BIGINT UNIQUE NOT NULL REFERENCES files(id) ON DELETE CASCADE,
                 share_uuid VARCHAR(7) UNIQUE NOT NULL,
-                encrypted_name_fdk TEXT DEFAULT '',
-                hourly_changes INT DEFAULT 1,
-                last_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                encrypted_name_fdk TEXT NOT NULL CHECK (encrypted_name_fdk <> ''),
+                hourly_changes INT NOT NULL DEFAULT 1,
+                last_changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
         )");
 

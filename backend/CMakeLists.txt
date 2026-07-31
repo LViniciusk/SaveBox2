@@ -81,7 +81,7 @@ if(NOT EXISTS "${CROW_HEADER_PATH}")
                   "${CROW_HEADER_PATH}")
 endif()
 
-# Compatibilidade com ASIO recente do MSYS2/UCRT
+# Configuração do ASIO atual no MSYS2/UCRT
 file(READ "${CROW_HEADER_PATH}" CROW_HEADER_CONTENT)
 string(REPLACE "asio::io_service" "asio::io_context" CROW_HEADER_CONTENT "${CROW_HEADER_CONTENT}")
 string(REPLACE "asio::ip::address::from_string" "asio::ip::make_address" CROW_HEADER_CONTENT "${CROW_HEADER_CONTENT}")

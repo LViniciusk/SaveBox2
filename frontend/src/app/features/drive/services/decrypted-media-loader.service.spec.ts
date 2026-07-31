@@ -61,7 +61,8 @@ describe('DecryptedMediaLoaderService', () => {
   function file(values: Partial<DriveFile>): DriveFile {
     return {
       id: 1, isFolder: false, encryptedName: 'cipher', decryptedName: 'file.bin', type: 'unknown',
-      sizeBytes: 10, sizeFormatted: '10 B', modifiedAt: '', owner: '', encryptedFdk: 'fdk', ...values,
+      sizeBytes: 10, sizeFormatted: '10 B', modifiedAt: '', owner: '', encryptedFdk: 'fdk',
+      storageProvider: 'local', ...values,
     };
   }
 });

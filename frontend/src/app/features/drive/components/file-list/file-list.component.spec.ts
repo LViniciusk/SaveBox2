@@ -206,19 +206,16 @@ describe('FileListComponent', () => {
     expect(mockDriveStore.navigateTo).toHaveBeenCalledWith(3);
   });
 
-  it('routes audio through the generic preview event without the legacy image event', () => {
+  it('routes audio through the generic preview event', () => {
     const audio = { id: 9, isFolder: false, decryptedName: 'song.m4a', type: 'audio', sizeBytes: 1 } as DriveFile;
     fixture.componentRef.setInput('files', [audio]);
     fixture.detectChanges();
     const preview = jasmine.createSpy('preview');
-    const legacy = jasmine.createSpy('legacy');
     component.previewRequested.subscribe(preview);
-    component.imageSelected.subscribe(legacy);
 
     component.onFileDblClick(audio, new Event('dblclick'));
 
     expect(preview).toHaveBeenCalledWith(jasmine.objectContaining({ file: audio }));
-    expect(legacy).not.toHaveBeenCalled();
   });
 
   it('routes the context-menu preview through the same generic event as double click', () => {
@@ -285,6 +282,37 @@ describe('FileListComponent', () => {
     const share = spyOn(component.shareRequested, 'emit');
     component.onShare(file, event);
     expect(share).toHaveBeenCalledWith(file);
+  });
+
+  it('disables Google sharing in list/grid and both themes without emitting', () => {
+    const googleFile = {
+      id: 91,
+      isFolder: false,
+      encryptedName: 'ciphertext',
+      decryptedName: 'remote.mp4',
+      type: 'video',
+      sizeBytes: 1,
+      storageProvider: 'google_drive',
+    } as DriveFile;
+    mockDriveStore.files.set([googleFile]);
+    fixture.componentRef.setInput('files', [googleFile]);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    const share = spyOn(component.shareRequested, 'emit');
+
+    for (const [theme, mode] of [['gdrive', 'list'], ['default', 'grid']] as const) {
+      document.documentElement.dataset['theme'] = theme;
+      mockDriveStore.displayMode.set(mode);
+      component.activeMenuFileId.set(googleFile.id);
+      fixture.detectChanges();
+      const action = [...fixture.nativeElement.querySelectorAll('.menu-item')]
+        .find((item: Element) => item.textContent?.includes('Compartilhamento indisponível')) as HTMLButtonElement;
+      expect(action).toBeTruthy();
+      expect(action.disabled).toBeTrue();
+      expect(action.getAttribute('aria-disabled')).toBe('true');
+    }
+
+    component.onShare(googleFile, { stopPropagation: jasmine.createSpy() } as any);
+    expect(share).not.toHaveBeenCalled();
   });
 
   it('opens and clamps file/container menus, while respecting locked and trash views', () => {

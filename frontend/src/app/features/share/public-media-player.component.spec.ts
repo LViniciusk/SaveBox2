@@ -6,7 +6,6 @@ import { KasumiCryptoService } from '../../core/crypto/kasumi-crypto.service';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { VideoStreamService } from '../drive/services/video-stream.service';
-import { DriveService } from '../drive/services/drive.service';
 import { of, throwError } from 'rxjs';
 
 describe('PublicMediaPlayerComponent', () => {
@@ -15,11 +14,9 @@ describe('PublicMediaPlayerComponent', () => {
   let httpMock: HttpTestingController;
   let kasumiSpy: any;
   let shareSpy: any;
-  let driveSpy: any;
 
   beforeEach(async () => {
     shareSpy = jasmine.createSpyObj('ShareService', ['downloadSharedFileRange', 'downloadSharedFile', 'downloadSharedFileInRanges']);
-    driveSpy = jasmine.createSpyObj('DriveService', ['downloadPublicFileRange', 'downloadPublicFileInRanges']);
     kasumiSpy = jasmine.createSpyObj('KasumiCryptoService', ['decryptFile', 'extractMetadata']);
     const videoStreamSpy = jasmine.createSpyObj('VideoStreamService', ['destroyStream']);
 
@@ -30,7 +27,6 @@ describe('PublicMediaPlayerComponent', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: ShareService, useValue: shareSpy },
-        { provide: DriveService, useValue: driveSpy },
         { provide: KasumiCryptoService, useValue: kasumiSpy },
         { provide: VideoStreamService, useValue: videoStreamSpy }
       ]
@@ -78,7 +74,7 @@ describe('PublicMediaPlayerComponent', () => {
 
   function setInputs(overrides: Partial<{
     shareId: string; fdk: Uint8Array; filename: string; sizeBytes: number;
-    isVideo: boolean; isImage: boolean; storageProvider: string;
+    isVideo: boolean; isImage: boolean;
   }> = {}) {
     fixture.componentRef.setInput('shareId', overrides.shareId ?? 'share-1');
     fixture.componentRef.setInput('fdk', overrides.fdk ?? new Uint8Array([1, 2]));
@@ -86,7 +82,6 @@ describe('PublicMediaPlayerComponent', () => {
     fixture.componentRef.setInput('sizeBytes', overrides.sizeBytes ?? 2048);
     fixture.componentRef.setInput('isVideo', overrides.isVideo ?? false);
     fixture.componentRef.setInput('isImage', overrides.isImage ?? false);
-    if (overrides.storageProvider) fixture.componentRef.setInput('storageProvider', overrides.storageProvider);
   }
 
   it('should classify files, initialize non-media and clean up', () => {
@@ -142,8 +137,7 @@ describe('PublicMediaPlayerComponent', () => {
       filename: () => 'movie.mp4',
       sizeBytes: () => 2048,
       isVideo: () => true,
-      isImage: () => false,
-      storageProvider: () => 'local'
+      isImage: () => false
     });
     const loadHeaderThumbnail = spyOn(component, 'loadHeaderThumbnail').and.resolveTo();
 
@@ -164,8 +158,7 @@ describe('PublicMediaPlayerComponent', () => {
       filename: () => 'movie.mp4',
       sizeBytes: () => 3 * 1024 * 1024,
       isVideo: () => true,
-      isImage: () => false,
-      storageProvider: () => 'local'
+      isImage: () => false
     });
 
     const header = new Blob(['header']);

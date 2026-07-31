@@ -6,7 +6,8 @@ import { CommonModule } from '@angular/common';
 import { DialogService } from '../../../../core/dialog/dialog.service';
 import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 import { DefaultLockedPreviewComponent } from '../../../../shared/ui/default-locked-preview/default-locked-preview.component';
-import { FilePreviewRequest, resolveFilePreviewKind } from '../../services/file-preview-resolver';
+import { FilePreviewRequest } from '../../services/file-preview-resolver';
+import { getPublicShareAvailability } from '../../policies/public-share-policy';
 
 @Component({
   selector: 'app-file-list',
@@ -70,10 +71,19 @@ import { FilePreviewRequest, resolveFilePreviewKind } from '../../services/file-
                 <span class="material-symbols-outlined">download</span>
                 Baixar
               </button>
-              <button class="menu-item" (click)="onShare(file, $event)">
-                <span class="material-symbols-outlined">share</span>
-                Compartilhar
-              </button>
+              @if (getShareAvailability(file); as availability) {
+                @if (availability.allowed) {
+                  <button class="menu-item" (click)="onShare(file, $event)">
+                    <span class="material-symbols-outlined">share</span>
+                    Compartilhar
+                  </button>
+                } @else if (availability.reason === 'google_drive') {
+                  <button class="menu-item" disabled aria-disabled="true" [title]="availability.message">
+                    <span class="material-symbols-outlined">share_off</span>
+                    Compartilhamento indisponível
+                  </button>
+                }
+              }
             }
             <button class="menu-item" (click)="onRename(file, $event)">
               <span class="material-symbols-outlined">edit</span>
@@ -1350,8 +1360,6 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   @Output() createFolderRequested = new EventEmitter<void>();
   @Output() uploadFileRequested = new EventEmitter<void>();
-  @Output() videoSelected = new EventEmitter<DriveFile>();
-  @Output() imageSelected = new EventEmitter<{ file: DriveFile, playlist: DriveFile[] }>();
   @Output() previewRequested = new EventEmitter<FilePreviewRequest>();
   @Output() shareRequested = new EventEmitter<DriveFile>();
 
@@ -1685,8 +1693,7 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   hasProxy(file: DriveFile): boolean {
     const proxyName = file.decryptedName + '.proxy.mp4';
-    const legacyProxyName = '__PROXY__' + file.decryptedName;
-    return this.driveStore.files().some(f => (f.decryptedName === proxyName || f.decryptedName === legacyProxyName) && f.folderId === file.folderId);
+    return this.driveStore.files().some(f => f.decryptedName === proxyName && f.folderId === file.folderId);
   }
 
   checkSubmenuBounds(event: MouseEvent) {
@@ -1834,6 +1841,7 @@ export class FileListComponent implements OnInit, OnDestroy {
         sizeFormatted: '—',
         modifiedAt: '—',
         owner: '—',
+        storageProvider: 'local',
         parentId: parentId
       };
 
@@ -1950,8 +1958,7 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   getProxySize(file: DriveFile): number {
     const proxyName = file.decryptedName + '.proxy.mp4';
-    const legacyProxyName = '__PROXY__' + file.decryptedName;
-    const proxy = this.driveStore.files().find(f => (f.decryptedName === proxyName || f.decryptedName === legacyProxyName) && f.folderId === file.folderId);
+    const proxy = this.driveStore.files().find(f => f.decryptedName === proxyName && f.folderId === file.folderId);
     return proxy ? proxy.sizeBytes : 0;
   }
 
@@ -2105,8 +2112,6 @@ export class FileListComponent implements OnInit, OnDestroy {
     } else {
       const playlist = this.sortedFiles().filter(f => !f.isFolder);
       this.previewRequested.emit({ file, playlist });
-      // Compatibility for consumers that still listen to the legacy output.
-      if (resolveFilePreviewKind(file) !== 'audio') this.imageSelected.emit({ file, playlist: [...playlist] });
     }
   }
 
@@ -2184,6 +2189,11 @@ export class FileListComponent implements OnInit, OnDestroy {
   onShare(file: DriveFile, event: MouseEvent) {
     event.stopPropagation();
     this.closeMenu();
+    if (!getPublicShareAvailability(file).allowed) return;
     this.shareRequested.emit(file);
+  }
+
+  getShareAvailability(file: DriveFile) {
+    return getPublicShareAvailability(file);
   }
 }

@@ -223,14 +223,6 @@ describe('DriveService', () => {
     expect(result).toEqual({ share_id: 'uuid-123' });
   });
 
-  it('should create share link without fdk', () => {
-    service.createShareLink(100).subscribe();
-    const req = httpMock.expectOne(`${environment.apiUrl}/files/100/share`);
-    expect(req.request.method).toBe('POST');
-    expect(req.request.body).toEqual({});
-    req.flush({ share_uuid: 'uuid-123' });
-  });
-  
   it('should get linked google accounts', () => {
     service.getLinkedGoogleAccounts().subscribe();
     const req = httpMock.expectOne(`${environment.apiUrl}/api/storage/google/accounts`);

@@ -69,8 +69,6 @@ export class GDriveShellComponent {
   readonly uploadFileRequested = output<void>();
   readonly uploadFolderRequested = output<void>();
   readonly pinnedFolderNavigate = output<number>();
-  readonly videoSelected = output<DriveFile>();
-  readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
   readonly previewRequested = output<FilePreviewRequest>();
   readonly shareRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();

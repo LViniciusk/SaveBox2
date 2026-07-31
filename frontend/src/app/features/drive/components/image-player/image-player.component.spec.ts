@@ -93,6 +93,15 @@ describe('ImagePlayerComponent', () => {
     expect(fixture.nativeElement.textContent).not.toContain('Nenhuma visualização disponível');
   });
 
+  it('does not open sharing for a private Google Drive file', () => {
+    fixture.componentRef.setInput('file', { ...image, storageProvider: 'google_drive' });
+    fixture.detectChanges();
+    const shareButton = fixture.nativeElement.querySelector('.share-btn') as HTMLButtonElement;
+    expect(shareButton.disabled).toBeTrue();
+    shareButton.click();
+    expect(component.isShareOpen()).toBeFalse();
+  });
+
   it('handles failed downloads without exposing an error after abort', async () => {
     drive.downloadFileInRanges.and.returnValue(Promise.reject(new Error('network')));
     await (component as any).loadImage({ ...image, id: 9 });

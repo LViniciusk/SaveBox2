@@ -454,6 +454,10 @@ std::string FileManager::share_file(uint64_t file_id, uint64_t user_id, const st
         if (result.empty()) {
             throw std::runtime_error("NOT_FOUND");
         }
+        const std::string provider = result[0][1].as<std::string>();
+        if (provider == "google_drive") {
+            throw std::runtime_error("SHARING_UNSUPPORTED_PROVIDER");
+        }
     }
 
     {
@@ -495,45 +499,16 @@ std::string FileManager::share_file(uint64_t file_id, uint64_t user_id, const st
     throw std::runtime_error("ERROR_GENERATING_SHARE_LINK");
 }
 
-std::pair<std::string, std::string> FileManager::get_file_storage_info(uint64_t file_id, uint64_t user_id) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-    auto res = txn.exec(
-        "SELECT storage_provider, external_file_id FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
-        pqxx::params{file_id, user_id}
-    );
-    txn.commit();
-    if (res.empty()) throw std::runtime_error("NOT_FOUND");
-    std::string provider = res[0][0].is_null() ? "local" : res[0][0].as<std::string>();
-    std::string ext_id = res[0][1].is_null() ? "" : res[0][1].as<std::string>();
-    return {provider, ext_id};
-}
-
-std::pair<std::string, std::string> FileManager::get_share_storage_info(const std::string& share_uuid, uint64_t user_id) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-    auto res = txn.exec(
-        "SELECT f.storage_provider, f.external_file_id "
-        "FROM shared_links s JOIN files f ON s.file_id = f.id "
-        "WHERE s.share_uuid = $1 AND f.user_id = $2",
-        pqxx::params{share_uuid, user_id}
-    );
-    txn.commit();
-    if (res.empty()) throw std::runtime_error("NOT_FOUND");
-    std::string provider = res[0][0].is_null() ? "local" : res[0][0].as<std::string>();
-    std::string ext_id = res[0][1].is_null() ? "" : res[0][1].as<std::string>();
-    return {provider, ext_id};
-}
-
 FileManager::SharedFileInfo FileManager::get_shared_file_info(const std::string& uuid) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
     auto res = txn.exec(
-        "SELECT f.id, f.encrypted_name, f.storage_provider, f.external_file_id, f.size_bytes "
+        "SELECT f.id, f.encrypted_name, f.size_bytes "
         "FROM shared_links s "
         "JOIN files f ON s.file_id = f.id "
-        "WHERE s.share_uuid = $1 AND f.deleted_at IS NULL AND f.is_upload_complete = TRUE",
+        "WHERE s.share_uuid = $1 AND f.storage_provider = 'local' "
+        "AND f.deleted_at IS NULL AND f.is_upload_complete = TRUE",
         pqxx::params{uuid}
     );
 
@@ -544,9 +519,7 @@ FileManager::SharedFileInfo FileManager::get_shared_file_info(const std::string&
     SharedFileInfo info;
     info.file_id = res[0][0].as<uint64_t>();
     info.encrypted_name = res[0][1].as<std::string>();
-    info.storage_provider = res[0][2].is_null() ? "local" : res[0][2].as<std::string>();
-    info.external_file_id = res[0][3].is_null() ? "" : res[0][3].as<std::string>();
-    info.size_bytes = res[0][4].is_null() ? 0 : res[0][4].as<size_t>();
+    info.size_bytes = res[0][2].as<size_t>();
 
     txn.commit();
     return info;
@@ -1184,10 +1157,11 @@ crow::json::wvalue FileManager::get_shared_file_metadata(const std::string& uuid
     pqxx::work txn(*conn);
 
     auto res = txn.exec(
-        "SELECT s.encrypted_name_fdk, f.encrypted_name, f.size_bytes, f.storage_provider, f.external_file_id "
+        "SELECT s.encrypted_name_fdk, f.size_bytes "
         "FROM shared_links s "
         "JOIN files f ON s.file_id = f.id "
-        "WHERE s.share_uuid = $1 AND f.deleted_at IS NULL AND f.is_upload_complete = TRUE",
+        "WHERE s.share_uuid = $1 AND f.storage_provider = 'local' "
+        "AND f.deleted_at IS NULL AND f.is_upload_complete = TRUE",
         pqxx::params{uuid}
     );
 
@@ -1195,21 +1169,10 @@ crow::json::wvalue FileManager::get_shared_file_metadata(const std::string& uuid
         throw std::runtime_error("NOT_FOUND");
     }
 
-    std::string enc_name = res[0][0].as<std::string>();
-    if (enc_name.empty()) {
-        enc_name = res[0][1].as<std::string>();
-    }
-
-    std::string storage_provider = res[0][3].is_null() ? "local" : res[0][3].as<std::string>();
-    std::string external_file_id = res[0][4].is_null() ? "" : res[0][4].as<std::string>();
-
     crow::json::wvalue meta;
-    meta["encrypted_name"] = enc_name;
-    meta["size_bytes"] = res[0][2].as<uint64_t>();
-    meta["storage_provider"] = storage_provider;
-    if (storage_provider == "google_drive" && !external_file_id.empty()) {
-        meta["external_file_id"] = external_file_id;
-    }
+    meta["encrypted_name"] = res[0][0].as<std::string>();
+    meta["size_bytes"] = res[0][1].as<uint64_t>();
+    meta["storage_provider"] = "local";
 
     txn.commit();
     return meta;

@@ -16,6 +16,7 @@ import { CommonModule } from '@angular/common';
 import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
 import { FilePreviewRequest } from '../../services/file-preview-resolver';
+import { getPublicShareAvailability } from '../../policies/public-share-policy';
 
 /**
  * Main vault page — Google Drive clone layout.
@@ -382,25 +383,17 @@ export class VaultHomeComponent implements OnInit {
   readonly shareFile = signal<DriveFile | null>(null);
 
   onShareRequested(file: DriveFile) {
+    if (!getPublicShareAvailability(file).allowed) {
+      this.shareFile.set(null);
+      return;
+    }
     this.shareFile.set(file);
   }
 
-  onVideoSelected(file: DriveFile): void {
-    this.onPreviewRequested({
-      file,
-      playlist: this.driveStore.files().filter(item => !item.isFolder),
-    });
-  }
-
-  onImageSelected(payload: { file: DriveFile, playlist: DriveFile[] }) {
-    this.activeImagePlaylist.set(payload.playlist);
-    this.activeVideoFile.set(null);
-    this.activeImageFile.set(payload.file);
-  }
-
   onPreviewRequested(request: FilePreviewRequest): void {
-    const payload = { file: request.file, playlist: [...request.playlist] };
-    this.onImageSelected(payload);
+    this.activeImagePlaylist.set([...request.playlist]);
+    this.activeVideoFile.set(null);
+    this.activeImageFile.set(request.file);
   }
 
   @HostListener('document:contextmenu', ['$event'])

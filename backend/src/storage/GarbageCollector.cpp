@@ -85,7 +85,7 @@ void GarbageCollector::run_cleanup() {
         )");
 
         for (const auto& row : deleted_rows) {
-            std::string provider = row["storage_provider"].is_null() ? "" : row["storage_provider"].as<std::string>();
+            std::string provider = row["storage_provider"].as<std::string>();
             if (provider == "google_drive") {
                 if (!row["external_file_id"].is_null() && !row["external_storage_id"].is_null()) {
                     std::string ext_file_id = row["external_file_id"].as<std::string>();

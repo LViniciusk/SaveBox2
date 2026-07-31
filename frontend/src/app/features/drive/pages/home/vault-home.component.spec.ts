@@ -35,8 +35,6 @@ class GDriveShellStubComponent {
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
   readonly uploadFolderRequested = output<void>();
-  readonly videoSelected = output<any>();
-  readonly imageSelected = output<any>();
   readonly previewRequested = output<any>();
   readonly shareRequested = output<any>();
   readonly pinnedFolderNavigate = output<number>();
@@ -196,6 +194,19 @@ describe('VaultHomeComponent theme switching', () => {
     expect(driveStore.loadQuota).toHaveBeenCalledOnceWith();
     expect(driveStore.loadTree).toHaveBeenCalledOnceWith();
     expect(TestBed.inject(PinnedFoldersStore).load).toHaveBeenCalledOnceWith();
+  });
+
+  it('opens sharing only for local files regardless of theme', () => {
+    const component = fixture.componentInstance;
+    const local = { id: 1, isFolder: false, storageProvider: 'local' } as any;
+    const google = { id: 3, isFolder: false, storageProvider: 'google_drive' } as any;
+
+    component.onShareRequested(local);
+    expect(component.shareFile()).toBe(local);
+    component.shareFile.set(null);
+    themeService.setTheme('default');
+    component.onShareRequested(google);
+    expect(component.shareFile()).toBeNull();
   });
 
   it('locks the drive and clears decrypted names', () => {
