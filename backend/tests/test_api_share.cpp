@@ -7,11 +7,12 @@
 #include "storage/FileChunker.hpp"
 #include "test_helpers.hpp"
 #include "utils.hpp"
-#include "utils/utils.hpp"
+#include "utils/RandomIds.hpp"
 #include <crow_all.h>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public]") {
     std::string test_dir = "./test_share_links/";
@@ -203,7 +204,80 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
 
         std::string expose = res.get_header_value("Access-Control-Expose-Headers");
         REQUIRE(expose.find("Content-Range") != std::string::npos);
-        REQUIRE(expose.find("X-Encrypted-Name") != std::string::npos);
+        REQUIRE(expose.find("X-Encrypted-Name") == std::string::npos);
+        REQUIRE(res.get_header_value("X-Encrypted-Name").empty());
+    }
+
+    SECTION("A17: metadado persistido nao controla header de resposta") {
+        const std::vector<std::string> malicious_names = {
+            "cr\rname",
+            "lf\nname",
+            "crlf\r\nname",
+            "quote\"name",
+            "tab\tname",
+            std::string("del") + static_cast<char>(127) + "name"
+        };
+
+        for (size_t i = 0; i < malicious_names.size(); ++i) {
+            const std::string& malicious_name = malicious_names[i];
+            const std::string uuid = "a17-" + std::to_string(i);
+
+            auto conn = pool.acquire_connection();
+            pqxx::work txn(*conn);
+            txn.exec("DELETE FROM shared_links WHERE file_id = $1", pqxx::params{file_a_1_id});
+            txn.exec(
+                "UPDATE files SET encrypted_name = $1 WHERE id = $2",
+                pqxx::params{malicious_name, file_a_1_id}
+            );
+            txn.exec(
+                "INSERT INTO shared_links (file_id, share_uuid, encrypted_name_fdk) VALUES ($1, $2, $3)",
+                pqxx::params{file_a_1_id, uuid, "shared_name"}
+            );
+            txn.commit();
+
+            crow::request full_req;
+            full_req.url = "/share/" + uuid;
+            full_req.method = crow::HTTPMethod::Get;
+            crow::response full_res = router.handle_get_shared_file(full_req, uuid);
+
+            REQUIRE(full_res.code == 200);
+            REQUIRE(full_res.body == "Conteudo Ultra Secreto Publico");
+            REQUIRE(full_res.get_header_value("Content-Length") == std::to_string(full_res.body.size()));
+            REQUIRE(full_res.get_header_value("Accept-Ranges") == "bytes");
+            REQUIRE(full_res.get_header_value("X-Encrypted-Name").empty());
+            REQUIRE(full_res.get_header_value("Access-Control-Expose-Headers").find("X-Encrypted-Name") == std::string::npos);
+
+            std::string expected_safe_name = malicious_name;
+            for (char& c : expected_safe_name) {
+                if (c == '\r' || c == '\n' || c == '"' || static_cast<unsigned char>(c) < 32 || static_cast<unsigned char>(c) == 127) {
+                    c = '_';
+                }
+            }
+            REQUIRE(full_res.get_header_value("Content-Disposition") ==
+                    "attachment; filename=\"" + expected_safe_name + "\"");
+
+            crow::request range_req;
+            range_req.url = "/share/" + uuid;
+            range_req.method = crow::HTTPMethod::Get;
+            range_req.add_header("Range", "bytes=0-4");
+            crow::response range_res = router.handle_get_shared_file(range_req, uuid);
+
+            REQUIRE(range_res.code == 206);
+            REQUIRE(range_res.body == "Conte");
+            REQUIRE(range_res.get_header_value("Content-Length") == "5");
+            REQUIRE(range_res.get_header_value("Content-Range").find("bytes 0-4/") == 0);
+            REQUIRE(range_res.get_header_value("Accept-Ranges") == "bytes");
+            REQUIRE(range_res.get_header_value("X-Encrypted-Name").empty());
+
+            crow::request metadata_req;
+            metadata_req.url = "/share/" + uuid;
+            metadata_req.method = crow::HTTPMethod::Get;
+            crow::response metadata_res = router.handle_get_share_metadata(metadata_req, uuid);
+            REQUIRE(metadata_res.code == 200);
+            const auto metadata = crow::json::load(metadata_res.body);
+            REQUIRE(metadata);
+            REQUIRE(metadata["encrypted_name"].s() == "shared_name");
+        }
     }
 
     SECTION("Proteção Anti-OOM via Link Público (Arquivo > 5MB sem Range)") {
@@ -257,7 +331,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         std::string token_user_a = auth.generate_token(user_a_id);
 
         // Mock token for first share (MUST be set AFTER auth token generation to avoid JTI eating it)
-        Base62Generator::mock_next_token = "COLLIDE";
+        Base62Generator::test_next_token() = "COLLIDE";
 
         crow::request req_share1;
         req_share1.url = "/files/" + std::to_string(file_a_1_id) + "/share";
@@ -279,7 +353,7 @@ TEST_CASE("API Share - Compartilhamento de Links Publicos", "[api][share][public
         // For the second share, set the mock token to "COLLIDE" again.
         // The first attempt will throw pqxx::unique_violation, the loop will catch it,
         // and the second attempt will generate a random Base62 token.
-        Base62Generator::mock_next_token = "COLLIDE";
+        Base62Generator::test_next_token() = "COLLIDE";
         
         crow::request req_share2;
         req_share2.url = "/files/" + std::to_string(file_a_2_id) + "/share";
@@ -444,7 +518,7 @@ TEST_CASE("API Share - Google Drive nao admite compartilhamento publico", "[api]
         DatabasePool& pool;
         int user_id;
         ~Cleanup() {
-            Base62Generator::mock_next_token.clear();
+            Base62Generator::test_next_token().clear();
             try {
                 auto conn = pool.acquire_connection();
                 pqxx::work txn(*conn);
@@ -458,7 +532,7 @@ TEST_CASE("API Share - Google Drive nao admite compartilhamento publico", "[api]
     const std::string token = auth.generate_token(static_cast<uint64_t>(user_id));
 
     SECTION("criacao retorna 422 antes de gerar UUID ou alterar shared_links") {
-        Base62Generator::mock_next_token = "UNUSED1";
+        Base62Generator::test_next_token() = "UNUSED1";
         crow::request req;
         req.method = crow::HTTPMethod::Post;
         req.add_header("Authorization", "Bearer " + token);
@@ -468,7 +542,7 @@ TEST_CASE("API Share - Google Drive nao admite compartilhamento publico", "[api]
         REQUIRE(response.code == 422);
         const auto body = crow::json::load(response.body);
         REQUIRE(body["code"].s() == "GOOGLE_DRIVE_SHARING_UNSUPPORTED");
-        REQUIRE(Base62Generator::mock_next_token == "UNUSED1");
+        REQUIRE(Base62Generator::test_next_token() == "UNUSED1");
 
         auto conn = pool.acquire_connection();
         pqxx::nontransaction txn(*conn);

@@ -1,13 +1,14 @@
-import { Component, input, output } from '@angular/core';
+import { Component, input, output, signal } from '@angular/core';
 import { StorageTarget } from '../../state/drive.types';
+import { formatBytes } from '../../../../shared/utils/format-bytes';
 
 @Component({
   selector: 'app-storage-drive-card',
   standalone: true,
   template: `
     <button class="drive-card" [disabled]="target().status !== 'ready'" (click)="opened.emit(target())">
-      @if (target().accountPicture) {
-        <img [src]="target().accountPicture" alt="" />
+      @if (showPicture()) {
+        <img [src]="target().accountPicture" alt="" referrerpolicy="no-referrer" decoding="async" loading="lazy" (error)="onPictureError()" />
       } @else {
         <span class="material-symbols-outlined drive-icon">{{ target().provider === 'local' ? 'hard_drive' : 'cloud' }}</span>
       }
@@ -38,12 +39,24 @@ import { StorageTarget } from '../../state/drive.types';
   `],
 })
 export class StorageDriveCardComponent {
+  readonly formatSize = formatBytes;
   readonly target = input.required<StorageTarget>();
   readonly opened = output<StorageTarget>();
+  private readonly failedPictureUrl = signal<string | null>(null);
+
+  showPicture(): boolean {
+    const picture = this.target().accountPicture?.trim();
+    return !!picture && picture !== this.failedPictureUrl();
+  }
+
+  onPictureError(): void {
+    this.failedPictureUrl.set(this.target().accountPicture?.trim() ?? null);
+  }
 
   usedPercent(): number {
     const max = this.target().maxBytes;
-    return max ? Math.min((this.target().usedBytes / max) * 100, 100) : 0;
+    const used = this.target().usedBytes;
+    return max && used !== null ? Math.min((used / max) * 100, 100) : 0;
   }
 
   capacityLabel(): string {
@@ -52,10 +65,4 @@ export class StorageDriveCardComponent {
     return `${this.formatSize(target.availableBytes)} livre(s) de ${this.formatSize(target.maxBytes)}`;
   }
 
-  formatSize(bytes: number): string {
-    if (!bytes) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-    return `${Number((bytes / 1024 ** index).toFixed(1))} ${units[index]}`;
-  }
 }

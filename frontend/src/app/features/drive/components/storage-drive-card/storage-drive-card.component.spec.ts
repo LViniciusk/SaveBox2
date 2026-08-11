@@ -37,4 +37,27 @@ describe('StorageDriveCardComponent', () => {
     expect((fixture.nativeElement.querySelector('button') as HTMLButtonElement).disabled).toBeTrue();
     expect(fixture.nativeElement.textContent).toContain('Indisponível');
   });
+
+  it('falls back after a broken picture and accepts a new URL', () => {
+    fixture.componentRef.setInput('target', {
+      ...target,
+      provider: 'google_drive',
+      accountPicture: 'https://example.test/old.png',
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('img')).not.toBeNull();
+
+    (fixture.nativeElement.querySelector('img') as HTMLImageElement).dispatchEvent(new Event('error'));
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('img')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.drive-icon')).not.toBeNull();
+
+    fixture.componentRef.setInput('target', {
+      ...target,
+      provider: 'google_drive',
+      accountPicture: 'https://example.test/new.png',
+    });
+    fixture.detectChanges();
+    expect((fixture.nativeElement.querySelector('img') as HTMLImageElement).src).toContain('new.png');
+  });
 });

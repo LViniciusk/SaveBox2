@@ -1,8 +1,7 @@
 export type UploadProvider = 'local' | 'google_drive';
 
-export interface PreparedUpload {
+export interface UploadPlan {
   file: File;
-  encryptedBlob: Blob;
   encryptedName: string;
   nameHash: string;
   encryptedFdk: string;
@@ -13,7 +12,28 @@ export interface PreparedUpload {
   thumbnail?: string;
 }
 
-export interface UploadProgressUpdate {
+export interface GoogleUploadPlan extends UploadPlan {
+  baseNonce: Uint8Array;
+  /** Exact metadata plaintext required to reproduce contextual recovery ciphertext. */
+  rematerializationMetadata?: string;
+}
+
+export interface GoogleUploadSession {
+  session_uri: string;
+  access_token: string;
+}
+
+export interface LocalUploadPlan extends UploadPlan {
+  baseNonce: Uint8Array;
+  /** Exact metadata plaintext required to reproduce contextual recovery ciphertext. */
+  rematerializationMetadata?: string;
+}
+
+export type InitializedUpload =
+  | { provider: 'local'; plan: LocalUploadPlan }
+  | { provider: 'google_drive'; plan: GoogleUploadPlan };
+
+interface UploadProgressUpdate {
   progress: number;
   transferredBytes: number;
   totalBytes: number;
@@ -22,6 +42,7 @@ export interface UploadProgressUpdate {
 export interface UploadExecutionControl {
   shouldPause(): boolean;
   shouldCancel(): boolean;
+  shouldDetach?(): boolean;
   signal?: AbortSignal;
 }
 
@@ -32,9 +53,12 @@ export interface UploadEngineCallbacks {
 export interface UploadExecutionResult {
   paused: boolean;
   cancelled?: boolean;
+  googleSession?: GoogleUploadSession;
+  googleCleanupPending?: boolean;
 }
 
 export interface BatchUploadRequestItem {
+  client_ref: string;
   folder_id: number | null;
   encrypted_name: string;
   name_hash: string;
@@ -45,11 +69,10 @@ export interface BatchUploadRequestItem {
 }
 
 export interface BatchUploadResponseItem {
+  client_ref: string;
   file_id: number;
   name_hash: string;
   storage_provider: UploadProvider;
-  access_token?: string;
-  root_folder_id?: string;
 }
 
 export interface UploadBatchCandidate {
@@ -64,6 +87,8 @@ export interface UploadBatchResult {
   transferId: string;
   status: 'success' | 'paused' | 'cancelled' | 'error';
   error?: unknown;
+  googleSession?: GoogleUploadSession;
+  googleCleanupPending?: boolean;
 }
 
 export interface UploadBatchSummary {
@@ -77,6 +102,13 @@ export interface UploadBatchSummary {
 export class UploadAbortError extends DOMException {
   constructor() {
     super('Upload cancelled', 'AbortError');
+  }
+}
+
+export class UploadPauseError extends Error {
+  constructor() {
+    super('Upload paused');
+    this.name = 'UploadPauseError';
   }
 }
 

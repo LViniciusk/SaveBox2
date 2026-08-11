@@ -24,10 +24,15 @@ export class DecryptedMediaLoaderService {
     this.throwIfAborted(signal);
     const encryptedBlob = await this.downloadEncrypted(file, signal);
     this.throwIfAborted(signal);
-    const fdk = await this.resolveFdk(file);
-    this.throwIfAborted(signal);
-    const decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk);
-    this.throwIfAborted(signal);
+    const fdk = await this.resolveOwnedFdk(file);
+    let decryptedBlob: Blob;
+    try {
+      this.throwIfAborted(signal);
+      decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk, file.sizeBytes);
+      this.throwIfAborted(signal);
+    } finally {
+      fdk.fill(0);
+    }
 
     const mimeType = previewMimeType(file);
     const url = URL.createObjectURL(new Blob([decryptedBlob], { type: mimeType }));
@@ -56,8 +61,8 @@ export class DecryptedMediaLoaderService {
     return this.driveService.downloadFileInRanges(file.id, file.sizeBytes, signal);
   }
 
-  private async resolveFdk(file: DriveFile): Promise<Uint8Array> {
-    if (file.shareUuid && file.shareFdk) return file.shareFdk;
+  private async resolveOwnedFdk(file: DriveFile): Promise<Uint8Array> {
+    if (file.shareUuid && file.shareFdk) return file.shareFdk.slice();
     if (!file.encryptedFdk) throw new Error('Chave de criptografia nao encontrada (FDK)');
     const base64 = await this.cryptoService.decryptName(file.encryptedFdk);
     const binary = atob(base64);

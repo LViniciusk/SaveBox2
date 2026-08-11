@@ -100,7 +100,7 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
 
         <!-- Error Alert Overlay -->
         @if (streamService.error()) {
-          <div class="error-overlay">
+          <div class="error-overlay" (click)="$event.stopPropagation()">
             <span class="material-symbols-outlined error-icon">error</span>
             <div class="error-text">{{ streamService.error() }}</div>
             <button class="retry-btn" (click)="retryPlayback()">Tentar Novamente</button>
@@ -158,7 +158,7 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
                 <div class="time-display">
                   <span class="current-time">{{ formatTime(currentTime()) }}</span>
                   <span class="time-separator">/</span>
-                  <span class="total-time">{{ formatTime(duration()) }}</span>
+                  <span class="total-time">{{ formatDuration(duration()) }}</span>
                 </div>
               </div>
 
@@ -432,6 +432,10 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
         color: #f1f5f9;
         z-index: 10;
         font-family: 'Inter', sans-serif;
+      }
+
+      .error-overlay {
+        pointer-events: auto;
       }
 
       .spinner {
@@ -870,10 +874,6 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     }
   }
 
-  onVideoPlay() {
-    this.isPlaying.set(true);
-  }
-
   @HostListener('document:fullscreenchange')
   protected onFullscreenChange() {
     const isFS = !!document.fullscreenElement;
@@ -1077,6 +1077,10 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
       return `${h}:${mStr}:${sStr}`;
     }
     return `${m}:${sStr}`;
+  }
+
+  protected formatDuration(val: number): string {
+    return Number.isFinite(val) && val > 0 ? this.formatTime(val) : '--:--';
   }
 
   private startStream() {

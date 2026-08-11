@@ -4,7 +4,6 @@ import { AuthCallbackComponent } from './auth-callback.component';
 import { AuthService } from '../../../../core/auth/auth.service';
 import { ActivatedRoute, Router } from '@angular/router';
 import { signal } from '@angular/core';
-import { of } from 'rxjs';
 
 describe('AuthCallbackComponent', () => {
   let component: AuthCallbackComponent;
@@ -22,8 +21,7 @@ describe('AuthCallbackComponent', () => {
     routerSpy = jasmine.createSpyObj('Router', ['navigate']);
 
     activatedRouteStub = {
-      snapshot: { queryParams: {} },
-      fragment: of(null)
+      snapshot: { queryParams: {}, fragment: null }
     };
 
     TestBed.configureTestingModule({
@@ -42,39 +40,128 @@ describe('AuthCallbackComponent', () => {
     component = fixture.componentInstance;
   };
 
-  it('should call linkGoogleDrive if code and state are in queryParams', () => {
-    activatedRouteStub.snapshot.queryParams = { code: '123', state: 'abc' };
+  it('links Google Drive exclusively when code and state are present', () => {
+    activatedRouteStub.snapshot = {
+      queryParams: { code: '123', state: 'abc' },
+      fragment: null,
+    };
     createComponent();
     component.ngOnInit();
-    fixture.detectChanges();
-    
+
     expect(authSpy.linkGoogleDrive).toHaveBeenCalledWith('123', 'abc');
+    expect(authSpy.linkGoogleDrive).toHaveBeenCalledTimes(1);
+    expect(authSpy.handleOAuthCallback).not.toHaveBeenCalled();
   });
 
-  it('should handle fragment if present in URL', () => {
-    activatedRouteStub.fragment = of('id_token=jwt123');
+  it('handles the Google login fragment when no link code exists', () => {
+    activatedRouteStub.snapshot = {
+      queryParams: {},
+      fragment: 'id_token=jwt123&state=nonce123',
+    };
     createComponent();
-    fixture.detectChanges();
-    
-    expect(authSpy.handleOAuthCallback).toHaveBeenCalledWith('id_token=jwt123');
+    component.ngOnInit();
+
+    expect(authSpy.handleOAuthCallback).toHaveBeenCalledWith('id_token=jwt123&state=nonce123');
+    expect(authSpy.handleOAuthCallback).toHaveBeenCalledTimes(1);
+    expect(authSpy.linkGoogleDrive).not.toHaveBeenCalled();
   });
 
-  it('should handle missing fragment but present queryParams', () => {
-    activatedRouteStub.fragment = of(null);
-    activatedRouteStub.snapshot.queryParams = { some_param: 'value' };
+  it('fails safely with an empty callback when no callback data exists', () => {
+    activatedRouteStub.snapshot = { queryParams: {}, fragment: null };
     createComponent();
-    fixture.detectChanges();
-    
-    expect(authSpy.handleOAuthCallback).toHaveBeenCalledWith('some_param=value');
-  });
+    component.ngOnInit();
 
-  it('should handle missing fragment and missing queryParams', () => {
-    activatedRouteStub.fragment = of('');
-    activatedRouteStub.snapshot.queryParams = {};
-    createComponent();
-    fixture.detectChanges();
-    
     expect(authSpy.handleOAuthCallback).toHaveBeenCalledWith('');
+    expect(authSpy.handleOAuthCallback).toHaveBeenCalledTimes(1);
+    expect(authSpy.linkGoogleDrive).not.toHaveBeenCalled();
+  });
+
+  it('does not convert arbitrary query parameters into an OAuth fragment', () => {
+    activatedRouteStub.snapshot = {
+      queryParams: { foo: 'bar' },
+      fragment: null,
+    };
+    createComponent();
+    component.ngOnInit();
+
+    expect(authSpy.handleOAuthCallback).toHaveBeenCalledWith('');
+    expect(authSpy.linkGoogleDrive).not.toHaveBeenCalled();
+  });
+
+  it('gives code and state precedence over a simultaneous login fragment', () => {
+    activatedRouteStub.snapshot = {
+      queryParams: { code: 'x', state: 'y' },
+      fragment: 'id_token=z&state=w',
+    };
+    createComponent();
+    component.ngOnInit();
+
+    expect(authSpy.linkGoogleDrive).toHaveBeenCalledWith('x', 'y');
+    expect(authSpy.handleOAuthCallback).not.toHaveBeenCalled();
+  });
+
+  it('returns safely to Drive when Google rejects Drive linking', () => {
+    activatedRouteStub.snapshot = {
+      queryParams: { error: 'access_denied', state: 'drive-state' },
+      fragment: null,
+    };
+    createComponent();
+    component.ngOnInit();
+
+    expect(authSpy.linkGoogleDrive).not.toHaveBeenCalled();
+    expect(authSpy.handleOAuthCallback).not.toHaveBeenCalled();
+    expect(routerSpy.navigate).toHaveBeenCalledWith(['/drive/home'], { replaceUrl: true });
+  });
+
+  it('returns safely to Drive for any provider error with state', () => {
+    activatedRouteStub.snapshot = {
+      queryParams: { error: 'temporarily_unavailable', state: 'drive-state' },
+      fragment: null,
+    };
+    createComponent();
+    component.ngOnInit();
+
+    expect(authSpy.linkGoogleDrive).not.toHaveBeenCalled();
+    expect(authSpy.handleOAuthCallback).not.toHaveBeenCalled();
+    expect(routerSpy.navigate).toHaveBeenCalledWith(['/drive/home'], { replaceUrl: true });
+  });
+
+  it('fails closed when provider error and code are both present', () => {
+    activatedRouteStub.snapshot = {
+      queryParams: { code: 'unused', error: 'access_denied', state: 'drive-state' },
+      fragment: null,
+    };
+    createComponent();
+    component.ngOnInit();
+
+    expect(authSpy.linkGoogleDrive).not.toHaveBeenCalled();
+    expect(authSpy.handleOAuthCallback).not.toHaveBeenCalled();
+    expect(routerSpy.navigate).toHaveBeenCalledWith(['/drive/home'], { replaceUrl: true });
+  });
+
+  it('does not treat a provider error without state as Drive linking', () => {
+    activatedRouteStub.snapshot = {
+      queryParams: { error: 'access_denied' },
+      fragment: null,
+    };
+    createComponent();
+    component.ngOnInit();
+
+    expect(authSpy.linkGoogleDrive).not.toHaveBeenCalled();
+    expect(authSpy.handleOAuthCallback).toHaveBeenCalledWith('');
+    expect(routerSpy.navigate).not.toHaveBeenCalled();
+  });
+
+  it('keeps login errors in the fragment login flow', () => {
+    activatedRouteStub.snapshot = {
+      queryParams: {},
+      fragment: 'error=access_denied&state=nonce',
+    };
+    createComponent();
+    component.ngOnInit();
+
+    expect(authSpy.handleOAuthCallback).toHaveBeenCalledWith('error=access_denied&state=nonce');
+    expect(authSpy.linkGoogleDrive).not.toHaveBeenCalled();
   });
 
   it('should navigate to login on goToLogin', () => {

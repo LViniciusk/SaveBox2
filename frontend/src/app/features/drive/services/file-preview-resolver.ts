@@ -1,4 +1,4 @@
-import { DriveFile } from '../state/drive.store';
+import type { DriveFile } from '../state/drive.store';
 
 export type FilePreviewKind = 'image' | 'video' | 'audio' | 'unsupported';
 
@@ -7,33 +7,87 @@ export interface FilePreviewRequest {
   playlist: readonly DriveFile[];
 }
 
-export function resolveFilePreviewKind(file: Pick<DriveFile, 'type' | 'decryptedName' | 'encryptedName' | 'mimeType'>): FilePreviewKind {
-  const mime = file.mimeType?.toLowerCase() ?? '';
-  if (mime.startsWith('image/')) return 'image';
-  if (mime.startsWith('video/')) return 'video';
-  if (mime.startsWith('audio/')) return 'audio';
+type SupportedPreviewKind = Exclude<FilePreviewKind, 'unsupported'>;
 
-  if (file.type === 'image' || file.type === 'video' || file.type === 'audio') return file.type;
+type PreviewFile = Pick<DriveFile, 'type' | 'decryptedName' | 'encryptedName' | 'mimeType'>;
 
+interface ExtensionPreviewMetadata {
+  readonly kind: SupportedPreviewKind;
+  readonly mimeType: string;
+}
+
+const MIME_KIND_BY_PREFIX: ReadonlyArray<readonly [string, SupportedPreviewKind]> = [
+  ['image/', 'image'],
+  ['video/', 'video'],
+  ['audio/', 'audio'],
+];
+
+const TYPE_KIND: ReadonlyMap<string, SupportedPreviewKind> = new Map([
+  ['image', 'image'],
+  ['video', 'video'],
+  ['audio', 'audio'],
+]);
+
+const EXTENSION_METADATA: ReadonlyMap<string, ExtensionPreviewMetadata> = new Map([
+  ['jpg', { kind: 'image', mimeType: 'image/jpeg' }],
+  ['jpeg', { kind: 'image', mimeType: 'image/jpeg' }],
+  ['png', { kind: 'image', mimeType: 'image/png' }],
+  ['gif', { kind: 'image', mimeType: 'image/gif' }],
+  ['webp', { kind: 'image', mimeType: 'image/webp' }],
+  ['bmp', { kind: 'image', mimeType: 'image/bmp' }],
+  ['avif', { kind: 'image', mimeType: 'image/avif' }],
+  ['mp4', { kind: 'video', mimeType: 'video/mp4' }],
+  ['mkv', { kind: 'video', mimeType: 'video/x-matroska' }],
+  ['avi', { kind: 'video', mimeType: 'video/x-msvideo' }],
+  ['mov', { kind: 'video', mimeType: 'video/quicktime' }],
+  ['webm', { kind: 'video', mimeType: 'video/webm' }],
+  ['m4v', { kind: 'video', mimeType: 'video/x-m4v' }],
+  ['mp3', { kind: 'audio', mimeType: 'audio/mpeg' }],
+  ['wav', { kind: 'audio', mimeType: 'audio/wav' }],
+  ['ogg', { kind: 'audio', mimeType: 'audio/ogg' }],
+  ['oga', { kind: 'audio', mimeType: 'audio/ogg' }],
+  ['opus', { kind: 'audio', mimeType: 'audio/opus' }],
+  ['aac', { kind: 'audio', mimeType: 'audio/aac' }],
+  ['flac', { kind: 'audio', mimeType: 'audio/flac' }],
+  ['m4a', { kind: 'audio', mimeType: 'audio/mp4' }],
+]);
+
+const DEFAULT_MIME_BY_KIND = {
+  image: 'application/octet-stream',
+  video: 'video/mp4',
+  audio: 'audio/mpeg',
+  unsupported: 'application/octet-stream',
+} as const satisfies Readonly<Record<FilePreviewKind, string>>;
+
+function extensionOf(
+  file: Pick<DriveFile, 'decryptedName' | 'encryptedName'>,
+): string {
   const name = (file.decryptedName || file.encryptedName).toLowerCase();
-  const extension = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : '';
-  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif'].includes(extension)) return 'image';
-  if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'm4v'].includes(extension)) return 'video';
-  if (['mp3', 'wav', 'ogg', 'oga', 'opus', 'aac', 'flac', 'm4a'].includes(extension)) return 'audio';
+  return name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : '';
+}
+
+function mimeKindOf(mimeType: string | null | undefined): SupportedPreviewKind | undefined {
+  const mime = mimeType ? mimeType.toLowerCase() : '';
+  const match = MIME_KIND_BY_PREFIX.find(([prefix]) => mime.startsWith(prefix));
+  return match ? match[1] : undefined;
+}
+
+export function resolveFilePreviewKind(file: PreviewFile): FilePreviewKind {
+  const mimeKind = mimeKindOf(file.mimeType);
+  if (mimeKind) return mimeKind;
+
+  const typeKind = TYPE_KIND.get(file.type);
+  if (typeKind) return typeKind;
+
+  const extensionMetadata = EXTENSION_METADATA.get(extensionOf(file));
+  if (extensionMetadata) return extensionMetadata.kind;
   return 'unsupported';
 }
 
-export function previewMimeType(file: Pick<DriveFile, 'type' | 'decryptedName' | 'encryptedName' | 'mimeType'>): string {
+export function previewMimeType(file: PreviewFile): string {
   if (file.mimeType) return file.mimeType;
-  const kind = resolveFilePreviewKind(file);
-  const name = (file.decryptedName || file.encryptedName).toLowerCase();
-  const extension = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : '';
-  const mimeByExtension: Record<string, string> = {
-    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
-    bmp: 'image/bmp', avif: 'image/avif', mp4: 'video/mp4', mkv: 'video/x-matroska',
-    avi: 'video/x-msvideo', mov: 'video/quicktime', webm: 'video/webm', m4v: 'video/x-m4v',
-    mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/opus',
-    aac: 'audio/aac', flac: 'audio/flac', m4a: 'audio/mp4',
-  };
-  return mimeByExtension[extension] ?? (kind === 'audio' ? 'audio/mpeg' : kind === 'video' ? 'video/mp4' : 'application/octet-stream');
+  const extensionMetadata = EXTENSION_METADATA.get(extensionOf(file));
+  if (extensionMetadata) return extensionMetadata.mimeType;
+
+  return DEFAULT_MIME_BY_KIND[resolveFilePreviewKind(file)];
 }

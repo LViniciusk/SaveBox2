@@ -1,14 +1,100 @@
 #include "database/FileManager.hpp"
 #include "database/DatabasePool.hpp"
 #include "storage/FileChunker.hpp"
-#include "utils/utils.hpp"
+#include "utils/RandomIds.hpp"
 #include <pqxx/pqxx>
+#include <algorithm>
+#include <exception>
+#include <limits>
+#include <unordered_set>
 
 namespace {
+std::optional<uint64_t> expected_local_chunk_size(uint64_t size_bytes, int total_chunks, int chunk_index) {
+    if (chunk_index < 0 || total_chunks <= 0) return std::nullopt;
+
+    constexpr uint64_t chunk_size = FileChunker::MAX_CHUNK_SIZE;
+    const auto index = static_cast<uint64_t>(chunk_index);
+    if (index > std::numeric_limits<uint64_t>::max() / chunk_size) return std::nullopt;
+
+    const uint64_t offset = index * chunk_size;
+    if (offset > size_bytes) return std::nullopt;
+    return std::min(chunk_size, size_bytes - offset);
+}
+
+void schedule_google_reconciliation(pqxx::transaction_base& txn, uint64_t move_id, uint64_t storage_id) {
+    txn.exec(
+        "INSERT INTO pending_storage_move_reconciliations "
+        "(move_job_id,external_storage_id,expires_at) VALUES($1,$2,CURRENT_TIMESTAMP+INTERVAL '7 days') "
+        "ON CONFLICT (move_job_id) DO NOTHING",
+        pqxx::params{move_id, storage_id});
+}
+
+void cleanup_uncommitted_local_targets(pqxx::transaction_base& txn, FileChunker* chunker, uint64_t move_id) {
+    if (!chunker) return;
+    const auto move = txn.exec(
+        "SELECT j.file_id,j.source_provider,j.target_provider,f.storage_provider "
+        "FROM storage_move_jobs j JOIN files f ON f.id=j.file_id "
+        "WHERE j.id=$1 FOR UPDATE",
+        pqxx::params{move_id});
+    if (move.empty() || move[0][1].as<std::string>() != "google_drive" ||
+        move[0][2].as<std::string>() != "local" || move[0][3].as<std::string>() != "google_drive") return;
+
+    const uint64_t file_id = move[0][0].as<uint64_t>();
+    struct Item { uint64_t id; bool proxy; };
+    std::vector<Item> items;
+    for (const auto& row : txn.exec("SELECT id,role FROM storage_move_items WHERE move_job_id=$1 FOR UPDATE", pqxx::params{move_id})) {
+        items.push_back({row[0].as<uint64_t>(), row[1].as<std::string>() == "proxy"});
+    }
+    for (const auto& item : items) {
+        chunker->delete_move_file(item.id);
+        chunker->delete_uncommitted_move_target(file_id, item.proxy);
+    }
+}
+
+void restore_uncommitted_local_source(pqxx::transaction_base& txn, FileChunker* chunker, uint64_t move_id) {
+    if (!chunker) return;
+    const auto move = txn.exec(
+        "SELECT j.file_id,j.source_provider,j.target_provider,f.storage_provider,f.size_bytes,f.proxy_size_bytes "
+        "FROM storage_move_jobs j JOIN files f ON f.id=j.file_id WHERE j.id=$1 FOR UPDATE",
+        pqxx::params{move_id});
+    if (move.empty() || move[0][1].as<std::string>() != "local" ||
+        move[0][2].as<std::string>() != "google_drive" || move[0][3].as<std::string>() != "local") return;
+
+    const uint64_t file_id = move[0][0].as<uint64_t>();
+    const uint64_t original_size = move[0][4].as<uint64_t>();
+    const std::optional<uint64_t> proxy_size = move[0][5].is_null()
+        ? std::nullopt : std::optional<uint64_t>(move[0][5].as<uint64_t>());
+
+    const auto canonical_size = chunker->try_get_file_size(file_id);
+    const auto quarantined_size = chunker->try_get_quarantined_file_size(move_id);
+    if (canonical_size && quarantined_size) throw std::runtime_error("STORAGE_MOVE_TARGET_CONFLICT");
+    if (!canonical_size && !quarantined_size) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+    if ((canonical_size && *canonical_size != original_size) ||
+        (quarantined_size && *quarantined_size != original_size)) {
+        throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+    }
+
+    const auto canonical_proxy_size = chunker->try_get_proxy_file_size(file_id);
+    const auto quarantined_proxy_size = chunker->try_get_quarantined_proxy_size(move_id);
+    if (!proxy_size.has_value()) {
+        if (canonical_proxy_size || quarantined_proxy_size) throw std::runtime_error("STORAGE_MOVE_TARGET_CONFLICT");
+    } else {
+        if (canonical_proxy_size && quarantined_proxy_size) throw std::runtime_error("STORAGE_MOVE_TARGET_CONFLICT");
+        if (!canonical_proxy_size && !quarantined_proxy_size) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+        if ((canonical_proxy_size && *canonical_proxy_size != *proxy_size) ||
+            (quarantined_proxy_size && *quarantined_proxy_size != *proxy_size)) {
+            throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+        }
+    }
+
+    if (quarantined_size) chunker->restore_quarantined_file(file_id, move_id);
+    if (quarantined_proxy_size) chunker->restore_quarantined_proxy(file_id, move_id);
+}
+
 crow::json::wvalue serialize_storage_move(pqxx::transaction_base& txn, uint64_t user_id, uint64_t move_id) {
     auto jobs = txn.exec(
         "SELECT id, file_id, status, source_provider, source_external_storage_id, target_provider, target_external_storage_id, "
-        "total_bytes, transferred_bytes, error_code, error_detail, created_at, updated_at, completed_at "
+        "total_bytes, transferred_bytes, error_code, error_detail, is_retryable, failure_stage, created_at, updated_at, completed_at "
         "FROM storage_move_jobs WHERE id = $1 AND user_id = $2",
         pqxx::params{move_id, user_id});
     if (jobs.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
@@ -25,9 +111,11 @@ crow::json::wvalue serialize_storage_move(pqxx::transaction_base& txn, uint64_t 
     job["transferred_bytes"] = row[8].as<int64_t>();
     if (!row[9].is_null()) job["error_code"] = row[9].as<std::string>();
     if (!row[10].is_null()) job["error_detail"] = row[10].as<std::string>();
-    job["created_at"] = row[11].as<std::string>();
-    job["updated_at"] = row[12].as<std::string>();
-    if (!row[13].is_null()) job["completed_at"] = row[13].as<std::string>();
+    job["is_retryable"] = row[11].as<bool>();
+    if (!row[12].is_null()) job["failure_stage"] = row[12].as<std::string>();
+    job["created_at"] = row[13].as<std::string>();
+    job["updated_at"] = row[14].as<std::string>();
+    if (!row[15].is_null()) job["completed_at"] = row[15].as<std::string>();
 
     auto rows = txn.exec(
         "SELECT id, file_id, role, source_external_file_id, target_external_file_id, total_bytes, transferred_bytes, status "
@@ -152,42 +240,60 @@ int FileManager::init_upload(uint64_t user_id, std::optional<uint64_t> folder_id
     return file_id;
 }
 
-void FileManager::mark_upload_complete(uint64_t file_id, uint64_t user_id) {
+bool FileManager::store_local_chunk(uint64_t file_id, uint64_t user_id, int chunk_index,
+                                     const std::string& binary_data, FileChunker& chunker) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
-    txn.exec(
-        "UPDATE files SET is_upload_complete = true WHERE id = $1 AND user_id = $2",
-        pqxx::params{file_id, user_id}
-    );
-    txn.commit();
-}
+    const auto file = txn.exec(
+        "SELECT storage_provider, is_upload_complete, size_bytes, total_chunks "
+        "FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL FOR UPDATE",
+        pqxx::params{file_id, user_id});
 
-bool FileManager::is_upload_complete(uint64_t file_id, uint64_t user_id) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-    auto result = txn.exec(
-        "SELECT is_upload_complete FROM files WHERE id = $1 AND user_id = $2",
-        pqxx::params{file_id, user_id}
-    );
-    txn.commit();
-    
-    if (result.empty()) {
-        throw std::runtime_error("NOT_FOUND");
+    if (file.empty()) throw std::runtime_error("NOT_FOUND");
+    if (file[0][0].as<std::string>() != "local") {
+        throw std::runtime_error("INVALID_STORAGE_PROVIDER");
     }
-    
-    return result[0][0].as<bool>();
-}
+    if (file[0][1].as<bool>()) throw std::runtime_error("UPLOAD_ALREADY_COMPLETE");
 
-int FileManager::get_total_chunks(uint64_t file_id, uint64_t user_id) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-    auto result = txn.exec(
-        "SELECT total_chunks FROM files WHERE id = $1 AND user_id = $2",
-        pqxx::params{file_id, user_id}
-    );
+    const int total_chunks = file[0][3].as<int>();
+    if (chunk_index < 0 || chunk_index >= total_chunks) {
+        throw std::runtime_error("INVALID_CHUNK_INDEX");
+    }
+
+    const auto expected_size = expected_local_chunk_size(
+        file[0][2].as<uint64_t>(), total_chunks, chunk_index);
+    if (!expected_size.has_value() || binary_data.size() != *expected_size) {
+        throw std::runtime_error("INVALID_CHUNK_SIZE");
+    }
+
+    if (!chunker.write_chunk(file_id, chunk_index, binary_data)) {
+        throw std::runtime_error("CHUNK_WRITE_FAILED");
+    }
+
+    const auto inserted = txn.exec(
+        "INSERT INTO file_chunks (file_id, chunk_index) VALUES ($1, $2) "
+        "ON CONFLICT DO NOTHING RETURNING chunk_index",
+        pqxx::params{file_id, chunk_index});
+
+    bool completed = false;
+    if (!inserted.empty()) {
+        const auto progress = txn.exec(
+            "UPDATE files SET "
+            "uploaded_chunks_count = uploaded_chunks_count + 1, "
+            "is_upload_complete = (uploaded_chunks_count + 1 = total_chunks) "
+            "WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL "
+            "AND is_upload_complete = FALSE "
+            "AND uploaded_chunks_count < total_chunks "
+            "RETURNING uploaded_chunks_count, is_upload_complete",
+            pqxx::params{file_id, user_id});
+        if (progress.size() != 1) {
+            throw std::runtime_error("UPLOAD_PROGRESS_CONFLICT");
+        }
+        completed = progress[0][1].as<bool>();
+    }
+
     txn.commit();
-    if (result.empty()) throw std::runtime_error("NOT_FOUND");
-    return result[0][0].as<int>();
+    return completed;
 }
 
 bool FileManager::can_user_download(uint64_t file_id, uint64_t user_id) {
@@ -208,24 +314,6 @@ bool FileManager::can_user_download(uint64_t file_id, uint64_t user_id) {
     }
 
     return true;
-}
-
-int FileManager::count_uploaded_chunks(uint64_t file_id) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-    
-    auto result = txn.exec(
-        "SELECT COUNT(*) FROM file_chunks WHERE file_id = $1",
-        pqxx::params{file_id}
-    );
-    
-    txn.commit();
-    
-    if (result.empty()) {
-        return 0;
-    }
-    
-    return result[0][0].as<int>();
 }
 
 std::vector<crow::json::wvalue> FileManager::get_user_files_paginated(uint64_t user_id, int limit, int offset) {
@@ -276,7 +364,7 @@ std::vector<crow::json::wvalue> FileManager::get_pending_uploads(uint64_t user_i
     pqxx::work txn(*conn);
 
     auto result = txn.exec(
-        "SELECT id, folder_id, encrypted_name, size_bytes, total_chunks, encrypted_fdk, storage_provider, external_storage_id FROM files "
+        "SELECT id, folder_id, encrypted_name, size_bytes, total_chunks, encrypted_fdk, storage_provider, external_storage_id, uploaded_chunks_count FROM files "
         "WHERE user_id = $1 AND is_upload_complete = false AND deleted_at IS NULL AND is_hidden = false "
         "ORDER BY id DESC",
         pqxx::params{user_id}
@@ -301,23 +389,99 @@ std::vector<crow::json::wvalue> FileManager::get_pending_uploads(uint64_t user_i
         item["external_storage_id"] = row[7].is_null()
             ? crow::json::wvalue(nullptr)
             : crow::json::wvalue(row[7].as<int64_t>());
-
-        int file_id = row[0].as<int>();
-        auto chunks_result = txn.exec(
-            "SELECT COUNT(*) FROM file_chunks WHERE file_id = $1",
-            pqxx::params{file_id}
-        );
-        int chunk_count = 0;
-        if (!chunks_result.empty()) {
-            chunk_count = chunks_result[0][0].as<int>();
-        }
-        item["uploaded_chunks_count"] = chunk_count;
+        item["uploaded_chunks_count"] = row[8].as<int>();
 
         files.push_back(std::move(item));
     }
 
     txn.commit();
     return files;
+}
+
+PendingGoogleRecoveryFile FileManager::get_pending_google_recovery_file(uint64_t file_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto result = txn.exec(
+        "SELECT f.name_hash, f.storage_provider, f.external_storage_id, f.is_upload_complete, f.size_bytes, "
+        "(s.id IS NOT NULL) "
+        "FROM files f "
+        "LEFT JOIN user_external_storages s ON s.id = f.external_storage_id "
+        "AND s.user_id = f.user_id AND s.provider = 'google_drive' AND s.is_unlinking = FALSE "
+        "WHERE f.id = $1 AND f.user_id = $2 AND f.deleted_at IS NULL",
+        pqxx::params{file_id, user_id});
+    txn.commit();
+
+    if (result.empty()) throw std::runtime_error("NOT_FOUND");
+    if (result[0][3].as<bool>()) throw std::runtime_error("UPLOAD_COMPLETE");
+    if (result[0][1].as<std::string>() != "google_drive") {
+        throw std::runtime_error("STORAGE_PROVIDER_MISMATCH");
+    }
+    if (result[0][2].is_null() || !result[0][5].as<bool>()) throw std::runtime_error("STORAGE_NOT_FOUND");
+
+    return PendingGoogleRecoveryFile{
+        result[0][2].as<uint64_t>(),
+        result[0][0].as<std::string>(),
+        result[0][4].as<uint64_t>(),
+    };
+}
+
+PendingGoogleRecoveryFile FileManager::mark_pending_google_upload_cancelled(uint64_t file_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    const auto result = txn.exec(
+        "SELECT f.name_hash, f.storage_provider, f.external_storage_id, f.is_upload_complete, "
+        "f.external_file_id, f.size_bytes, "
+        "EXISTS (SELECT 1 FROM user_external_storages s "
+        "WHERE s.id = f.external_storage_id AND s.user_id = f.user_id "
+        "AND s.provider = 'google_drive' AND s.is_unlinking = FALSE) "
+        "FROM files f WHERE f.id = $1 AND f.user_id = $2 FOR UPDATE",
+        pqxx::params{file_id, user_id});
+
+    if (result.empty()) throw std::runtime_error("NOT_FOUND");
+    if (result[0][3].as<bool>()) throw std::runtime_error("UPLOAD_COMPLETE");
+    if (result[0][1].is_null() || result[0][1].as<std::string>() != "google_drive") {
+        throw std::runtime_error("STORAGE_PROVIDER_MISMATCH");
+    }
+    if (!result[0][4].is_null()) throw std::runtime_error("EXTERNAL_UPLOAD_ALREADY_FINALIZED");
+    if (result[0][2].is_null() || !result[0][6].as<bool>()) {
+        throw std::runtime_error("STORAGE_NOT_FOUND");
+    }
+
+    const auto marked = txn.exec(
+        // Detached internal cleanup rows are GC-owned and must not re-enter Trash/folder lifecycle.
+        "UPDATE files SET deleted_at = COALESCE(deleted_at, CURRENT_TIMESTAMP), "
+        "is_external_cleanup_pending = TRUE, folder_id = NULL "
+        "WHERE id = $1 AND user_id = $2 AND storage_provider = 'google_drive' "
+        "AND is_upload_complete = FALSE AND external_file_id IS NULL "
+        "AND external_storage_id IS NOT NULL "
+        "RETURNING name_hash, external_storage_id, size_bytes",
+        pqxx::params{file_id, user_id});
+    if (marked.empty()) throw std::runtime_error("NOT_FOUND");
+    txn.commit();
+
+    return PendingGoogleRecoveryFile{
+        marked[0][1].as<uint64_t>(),
+        marked[0][0].as<std::string>(),
+        marked[0][2].as<uint64_t>(),
+    };
+}
+
+void FileManager::require_pending_local_recovery_file(uint64_t file_id, uint64_t user_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto result = txn.exec(
+        "SELECT storage_provider, is_upload_complete, "
+        "EXISTS (SELECT 1 FROM file_chunks WHERE file_id = files.id AND chunk_index = 0) "
+        "FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
+        pqxx::params{file_id, user_id});
+    txn.commit();
+
+    if (result.empty()) throw std::runtime_error("NOT_FOUND");
+    if (result[0][1].as<bool>()) throw std::runtime_error("UPLOAD_COMPLETE");
+    if (result[0][0].is_null() || result[0][0].as<std::string>() != "local") {
+        throw std::runtime_error("STORAGE_PROVIDER_MISMATCH");
+    }
+    if (!result[0][2].as<bool>()) throw std::runtime_error("RECOVERY_CHUNK_ZERO_MISSING");
 }
 
 crow::json::wvalue FileManager::get_storage_tree(uint64_t user_id,
@@ -452,16 +616,6 @@ std::vector<int> FileManager::get_uploaded_chunks(uint64_t file_id, uint64_t use
 
     txn.commit();
     return chunks;
-}
-
-void FileManager::record_chunk_saved(uint64_t file_id, int chunk_index) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-    txn.exec(
-        "INSERT INTO file_chunks (file_id, chunk_index) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-        pqxx::params{file_id, chunk_index}
-    );
-    txn.commit();
 }
 
 std::optional<std::string> FileManager::delete_file(uint64_t file_id, uint64_t user_id) {
@@ -605,37 +759,24 @@ crow::json::wvalue FileManager::update_file(uint64_t file_id, uint64_t user_id, 
 std::string FileManager::share_file(uint64_t file_id, uint64_t user_id, const std::string& encrypted_name_fdk) {
     auto conn = pool_.acquire_connection();
 
-    {
-        pqxx::work txn(*conn);
-        auto result = txn.exec(
-            "SELECT id, storage_provider FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
-            pqxx::params{file_id, user_id}
-        );
-        if (result.empty()) {
-            throw std::runtime_error("NOT_FOUND");
-        }
-        const std::string provider = result[0][1].as<std::string>();
-        if (provider == "google_drive") {
-            throw std::runtime_error("SHARING_UNSUPPORTED_PROVIDER");
-        }
-    }
-
-    {
-        pqxx::work txn(*conn);
-        auto rl_res = txn.exec(
-            "SELECT hourly_changes FROM shared_links WHERE file_id = $1 AND last_changed_at >= NOW() - INTERVAL '1 hour'",
-            pqxx::params{file_id}
-        );
-        if (!rl_res.empty() && rl_res[0][0].as<int>() >= 10) {
-            throw std::runtime_error("TOO_MANY_REQUESTS");
-        }
-    }
-
     for (int attempts = 0; attempts < 3; ++attempts) {
-        std::string token = Base62Generator::generate(7);
         try {
             pqxx::work txn(*conn);
-            txn.exec(
+            const auto file = txn.exec(
+                "SELECT storage_provider FROM files "
+                "WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL "
+                "FOR SHARE",
+                pqxx::params{file_id, user_id}
+            );
+            if (file.empty()) {
+                throw std::runtime_error("NOT_FOUND");
+            }
+            if (file[0][0].as<std::string>() == "google_drive") {
+                throw std::runtime_error("SHARING_UNSUPPORTED_PROVIDER");
+            }
+
+            std::string token = Base62Generator::generate(7);
+            const auto result = txn.exec(
                 "INSERT INTO shared_links (file_id, share_uuid, encrypted_name_fdk, hourly_changes, last_changed_at) "
                 "VALUES ($1, $2, $3, 1, CURRENT_TIMESTAMP) "
                 "ON CONFLICT (file_id) DO UPDATE SET "
@@ -645,11 +786,17 @@ std::string FileManager::share_file(uint64_t file_id, uint64_t user_id, const st
                 "        WHEN shared_links.last_changed_at >= NOW() - INTERVAL '1 hour' THEN shared_links.hourly_changes + 1 "
                 "        ELSE 1 "
                 "    END, "
-                "    last_changed_at = CURRENT_TIMESTAMP",
+                "    last_changed_at = CURRENT_TIMESTAMP "
+                "WHERE shared_links.last_changed_at < NOW() - INTERVAL '1 hour' "
+                "   OR shared_links.hourly_changes < 10 "
+                "RETURNING share_uuid",
                 pqxx::params{file_id, token, encrypted_name_fdk}
             );
+            if (result.empty()) {
+                throw std::runtime_error("TOO_MANY_REQUESTS");
+            }
             txn.commit();
-            return token;
+            return result[0][0].as<std::string>();
         } catch (const pqxx::unique_violation&) {
             if (attempts == 2) {
                 throw std::runtime_error("ERROR_GENERATING_SHARE_LINK");
@@ -690,7 +837,8 @@ crow::json::wvalue FileManager::get_trash(uint64_t user_id) {
     pqxx::work txn(*conn);
 
     auto file_rows = txn.exec(
-        "SELECT id, encrypted_name, size_bytes, folder_id, storage_provider, external_storage_id FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL",
+        "SELECT id, encrypted_name, size_bytes, folder_id, storage_provider, external_storage_id "
+        "FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL AND is_external_cleanup_pending = FALSE",
         pqxx::params{user_id}
     );
     std::vector<crow::json::wvalue> files;
@@ -749,6 +897,7 @@ std::optional<std::string> FileManager::restore_file(uint64_t file_id, uint64_t 
             "        FROM folders WHERE id = files.folder_id"
             "    ) "
             "WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL "
+            "AND is_external_cleanup_pending = FALSE "
             "RETURNING external_file_id",
             pqxx::params{file_id, user_id}
         );
@@ -770,149 +919,175 @@ std::optional<std::string> FileManager::restore_file(uint64_t file_id, uint64_t 
 }
 
 std::optional<std::string> FileManager::hard_delete_file(uint64_t file_id, uint64_t user_id, FileChunker* chunker) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-
-    auto deleted_files_res = txn.exec(
-        "WITH deleted_file AS ("
-        "  DELETE FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL "
-        "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
-        ") "
-        "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_file",
-        pqxx::params{file_id, user_id}
-    );
-
-    if (deleted_files_res.empty()) {
-        throw std::runtime_error("NOT_FOUND");
-    }
-
-    auto row = deleted_files_res[0];
-    auto fid = row[0].as<uint64_t>();
-    std::string provider = row[1].as<std::string>();
-    uint64_t size = row[2].as<uint64_t>();
-    
-    uint64_t freed_bytes = (provider == "local") ? size : 2048;
-    
     std::optional<std::string> ext_file_id_opt;
+    std::optional<uint64_t> local_file_id;
 
-    if (provider == "google_drive") {
-        if (!row[3].is_null() && !row[4].is_null()) {
-            std::string ext_file_id = row[3].as<std::string>();
-            ext_file_id_opt = ext_file_id;
-            txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
-                     pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+
+        auto deleted_files_res = txn.exec(
+            "WITH deleted_file AS ("
+            "  DELETE FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL "
+            "AND is_external_cleanup_pending = FALSE "
+            "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
+            ") "
+            "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_file",
+            pqxx::params{file_id, user_id}
+        );
+
+        if (deleted_files_res.empty()) {
+            throw std::runtime_error("NOT_FOUND");
         }
-    } else {
-        if (chunker) chunker->delete_file(fid);
+
+        auto row = deleted_files_res[0];
+        const auto fid = row[0].as<uint64_t>();
+        const std::string provider = row[1].as<std::string>();
+        const uint64_t size = row[2].as<uint64_t>();
+        const uint64_t freed_bytes = (provider == "local") ? size : 2048;
+
+        if (provider == "google_drive") {
+            if (!row[3].is_null() && !row[4].is_null()) {
+                const std::string ext_file_id = row[3].as<std::string>();
+                ext_file_id_opt = ext_file_id;
+                txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
+                         pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+            }
+        } else {
+            local_file_id = fid;
+        }
+
+        if (freed_bytes > 0) {
+            txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
+                     pqxx::params{freed_bytes, user_id});
+        }
+
+        txn.commit();
     }
 
-    if (freed_bytes > 0) {
-        txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
-                 pqxx::params{freed_bytes, user_id});
+    if (local_file_id && chunker) {
+        chunker->delete_file(*local_file_id);
     }
-
-    txn.commit();
     return ext_file_id_opt;
 }
 
 BatchHardDeleteResult FileManager::batch_hard_delete_files(uint64_t user_id, const std::vector<int>& file_ids, FileChunker* chunker) {
     if (file_ids.empty()) return {};
 
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-
-    std::string arr_str = "{";
-    for (size_t i = 0; i < file_ids.size(); ++i) {
-        arr_str += std::to_string(file_ids[i]);
-        if (i < file_ids.size() - 1) arr_str += ",";
-    }
-    arr_str += "}";
-
-    auto deleted_files_res = txn.exec(
-        "WITH deleted_files AS ("
-        "  DELETE FROM files WHERE id = ANY($1::int[]) AND user_id = $2 AND deleted_at IS NOT NULL "
-        "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
-        ") "
-        "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files",
-        pqxx::params{arr_str, user_id}
-    );
-
     BatchHardDeleteResult result;
-    uint64_t total_freed_bytes = 0;
+    std::vector<uint64_t> local_file_ids;
 
-    for (auto row : deleted_files_res) {
-        auto fid = row[0].as<uint64_t>();
-        std::string provider = row[1].as<std::string>();
-        uint64_t size = row[2].as<uint64_t>();
-        
-        uint64_t freed_bytes = (provider == "local") ? size : 2048;
-        total_freed_bytes += freed_bytes;
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
 
-        if (provider == "google_drive") {
-            if (!row[3].is_null() && !row[4].is_null()) {
-                std::string ext_file_id = row[3].as<std::string>();
-                result.external_files.push_back(ext_file_id);
-                txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
-                         pqxx::params{ext_file_id, row[4].as<uint64_t>()});
-            }
-        } else {
-            if (chunker) chunker->delete_file(fid);
+        std::string arr_str = "{";
+        for (size_t i = 0; i < file_ids.size(); ++i) {
+            arr_str += std::to_string(file_ids[i]);
+            if (i < file_ids.size() - 1) arr_str += ",";
         }
-        result.deleted_count++;
+        arr_str += "}";
+
+        auto deleted_files_res = txn.exec(
+            "WITH deleted_files AS ("
+            "  DELETE FROM files WHERE id = ANY($1::int[]) AND user_id = $2 AND deleted_at IS NOT NULL "
+            "AND is_external_cleanup_pending = FALSE "
+            "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
+            ") "
+            "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files",
+            pqxx::params{arr_str, user_id}
+        );
+
+        uint64_t total_freed_bytes = 0;
+        for (auto row : deleted_files_res) {
+            const auto fid = row[0].as<uint64_t>();
+            const std::string provider = row[1].as<std::string>();
+            const uint64_t size = row[2].as<uint64_t>();
+            const uint64_t freed_bytes = (provider == "local") ? size : 2048;
+            total_freed_bytes += freed_bytes;
+
+            if (provider == "google_drive") {
+                if (!row[3].is_null() && !row[4].is_null()) {
+                    const std::string ext_file_id = row[3].as<std::string>();
+                    result.external_files.push_back(ext_file_id);
+                    txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
+                             pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+                }
+            } else {
+                local_file_ids.push_back(fid);
+            }
+            result.deleted_count++;
+        }
+
+        if (total_freed_bytes > 0) {
+            txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
+                     pqxx::params{total_freed_bytes, user_id});
+        }
+
+        txn.commit();
     }
 
-    if (total_freed_bytes > 0) {
-        txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
-                 pqxx::params{total_freed_bytes, user_id});
+    if (chunker) {
+        for (const auto file_id : local_file_ids) {
+            chunker->delete_file(file_id);
+        }
     }
-
-    txn.commit();
     return result;
 }
 
 std::vector<std::string> FileManager::empty_trash(uint64_t user_id, FileChunker* chunker) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-
-    auto deleted_files_res = txn.exec(
-        "WITH deleted_files AS ("
-        "  DELETE FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL "
-        "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
-        ") "
-        "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files",
-        pqxx::params{user_id}
-    );
-
-    uint64_t freed_bytes = 0;
     std::vector<std::string> external_files;
+    std::vector<uint64_t> local_file_ids;
 
-    for (const auto& row : deleted_files_res) {
-        auto fid = row[0].as<uint64_t>();
-        std::string provider = row[1].as<std::string>();
-        uint64_t size = row[2].as<uint64_t>();
-        
-        freed_bytes += (provider == "local") ? size : 2048;
-        
-        if (provider == "google_drive") {
-            if (!row[3].is_null() && !row[4].is_null()) {
-                std::string ext_file_id = row[3].as<std::string>();
-                external_files.push_back(ext_file_id);
-                txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
-                         pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+
+        auto deleted_files_res = txn.exec(
+            "WITH deleted_files AS ("
+            "  DELETE FROM files WHERE user_id = $1 AND deleted_at IS NOT NULL "
+            "AND is_external_cleanup_pending = FALSE "
+            "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
+            ") "
+            "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files",
+            pqxx::params{user_id}
+        );
+
+        uint64_t freed_bytes = 0;
+        for (const auto& row : deleted_files_res) {
+            const auto fid = row[0].as<uint64_t>();
+            const std::string provider = row[1].as<std::string>();
+            const uint64_t size = row[2].as<uint64_t>();
+
+            freed_bytes += (provider == "local") ? size : 2048;
+
+            if (provider == "google_drive") {
+                if (!row[3].is_null() && !row[4].is_null()) {
+                    const std::string ext_file_id = row[3].as<std::string>();
+                    external_files.push_back(ext_file_id);
+                    txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
+                             pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+                }
+            } else {
+                local_file_ids.push_back(fid);
             }
-        } else {
-            if (chunker) chunker->delete_file(fid);
+        }
+
+        if (freed_bytes > 0) {
+            txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
+                     pqxx::params{freed_bytes, user_id});
+        }
+
+        txn.exec("DELETE FROM folders WHERE user_id = $1 AND deleted_at IS NOT NULL", pqxx::params{user_id});
+
+        txn.commit();
+    }
+
+    if (chunker) {
+        for (const auto file_id : local_file_ids) {
+            chunker->delete_file(file_id);
         }
     }
-
-    if (freed_bytes > 0) {
-        txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
-                 pqxx::params{freed_bytes, user_id});
-    }
-
-    txn.exec("DELETE FROM folders WHERE user_id = $1 AND deleted_at IS NOT NULL", pqxx::params{user_id});
-
-    txn.commit();
     return external_files;
 }
 
@@ -948,6 +1123,17 @@ int FileManager::init_external_upload(uint64_t user_id, std::optional<uint64_t> 
         );
         if (folder_check.empty()) {
             throw std::runtime_error("FORBIDDEN");
+        }
+    }
+
+    if (storage_provider == "google_drive" && external_storage_id.has_value()) {
+        const auto storage = txn.exec(
+            "SELECT id FROM user_external_storages "
+            "WHERE id = $1 AND user_id = $2 AND provider = 'google_drive' "
+            "AND is_unlinking = FALSE FOR SHARE",
+            pqxx::params{external_storage_id.value(), user_id});
+        if (storage.empty()) {
+            throw std::runtime_error("EXTERNAL_UPLOAD_INIT_CONFLICT");
         }
     }
 
@@ -1033,6 +1219,29 @@ std::vector<BatchInitResult> FileManager::batch_init_uploads(uint64_t user_id, c
     uint64_t total_metadata_cost = 0;
     const uint64_t metadata_cost = 2048;
 
+    std::vector<uint64_t> google_storage_ids;
+    for (const auto& file : files) {
+        if (file.storage_provider != "google_drive") continue;
+        if (!file.external_storage_id.has_value()) {
+            throw std::runtime_error("EXTERNAL_UPLOAD_INIT_CONFLICT");
+        }
+        google_storage_ids.push_back(file.external_storage_id.value());
+    }
+    std::sort(google_storage_ids.begin(), google_storage_ids.end());
+    google_storage_ids.erase(
+        std::unique(google_storage_ids.begin(), google_storage_ids.end()), google_storage_ids.end());
+
+    for (const auto storage_id : google_storage_ids) {
+        const auto storage = txn.exec(
+            "SELECT id FROM user_external_storages "
+            "WHERE id = $1 AND user_id = $2 AND provider = 'google_drive' "
+            "AND is_unlinking = FALSE FOR SHARE",
+            pqxx::params{storage_id, user_id});
+        if (storage.empty()) {
+            throw std::runtime_error("EXTERNAL_UPLOAD_INIT_CONFLICT");
+        }
+    }
+
     for (const auto& file : files) {
         if (file.folder_id.has_value()) {
             auto folder_check = txn.exec(
@@ -1102,7 +1311,7 @@ std::vector<BatchInitResult> FileManager::batch_init_uploads(uint64_t user_id, c
                  is_hidden + ")";
     }
 
-    query += " RETURNING id, name_hash, storage_provider";
+    query += " RETURNING id, folder_id, name_hash, storage_provider";
 
     std::vector<BatchInitResult> results;
     std::vector<int> local_ids;
@@ -1112,8 +1321,10 @@ std::vector<BatchInitResult> FileManager::batch_init_uploads(uint64_t user_id, c
         for (auto row : result) {
             BatchInitResult res;
             res.file_id = row[0].as<int>();
-            res.name_hash = row[1].as<std::string>();
-            res.storage_provider = row[2].as<std::string>();
+            if (row[1].is_null()) res.folder_id = std::nullopt;
+            else res.folder_id = row[1].as<uint64_t>();
+            res.name_hash = row[2].as<std::string>();
+            res.storage_provider = row[3].as<std::string>();
             
             if (res.storage_provider == "local") {
                 local_ids.push_back(static_cast<int>(res.file_id));
@@ -1149,7 +1360,7 @@ void FileManager::finalize_external_upload(uint64_t file_id, uint64_t user_id,
     pqxx::work txn(*conn);
 
     auto result = txn.exec(
-        "SELECT storage_provider, is_upload_complete FROM files "
+        "SELECT user_id, storage_provider, is_upload_complete, external_storage_id FROM files "
         "WHERE id = $1 AND deleted_at IS NULL",
         pqxx::params{file_id}
     );
@@ -1158,16 +1369,12 @@ void FileManager::finalize_external_upload(uint64_t file_id, uint64_t user_id,
         throw std::runtime_error("NOT_FOUND");
     }
 
-    auto owner_check = txn.exec(
-        "SELECT id FROM files WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
-        pqxx::params{file_id, user_id}
-    );
-    if (owner_check.empty()) {
+    if (result[0]["user_id"].as<uint64_t>() != user_id) {
         throw std::runtime_error("FORBIDDEN");
     }
 
-    std::string provider = result[0][0].as<std::string>();
-    bool already_complete = result[0][1].as<bool>();
+    std::string provider = result[0]["storage_provider"].as<std::string>();
+    bool already_complete = result[0]["is_upload_complete"].as<bool>();
 
     if (provider == "local") {
         throw std::runtime_error("INVALID_STORAGE_PROVIDER");
@@ -1177,11 +1384,31 @@ void FileManager::finalize_external_upload(uint64_t file_id, uint64_t user_id,
         throw std::runtime_error("ALREADY_COMPLETE");
     }
 
-    txn.exec(
-        "UPDATE files SET external_file_id = $1, is_upload_complete = true "
-        "WHERE id = $2 AND user_id = $3",
-        pqxx::params{external_file_id, file_id, user_id}
+    if (result[0]["external_storage_id"].is_null()) {
+        throw std::runtime_error("EXTERNAL_STORAGE_UNAVAILABLE");
+    }
+    const auto external_storage_id = result[0]["external_storage_id"].as<uint64_t>();
+
+    const auto storage = txn.exec(
+        "SELECT id FROM user_external_storages "
+        "WHERE id = $1 AND user_id = $2 AND provider = 'google_drive' "
+        "AND is_unlinking = FALSE FOR SHARE",
+        pqxx::params{external_storage_id, user_id}
     );
+    if (storage.empty()) {
+        throw std::runtime_error("EXTERNAL_STORAGE_UNAVAILABLE");
+    }
+
+    const auto updated = txn.exec(
+        "UPDATE files SET external_file_id = $1, is_upload_complete = TRUE "
+        "WHERE id = $2 AND user_id = $3 AND deleted_at IS NULL "
+        "AND storage_provider = 'google_drive' AND external_storage_id = $4 "
+        "AND is_upload_complete = FALSE RETURNING id",
+        pqxx::params{external_file_id, file_id, user_id, external_storage_id}
+    );
+    if (updated.empty()) {
+        throw std::runtime_error("FINALIZE_CONFLICT");
+    }
 
     txn.commit();
 }
@@ -1433,7 +1660,7 @@ crow::json::wvalue FileManager::get_active_storage_moves(uint64_t user_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
     auto rows = txn.exec(
-        "SELECT id FROM storage_move_jobs WHERE user_id = $1 AND status IN ('prepared','transferring','paused','target_uploaded','committing','cleanup_pending') ORDER BY created_at",
+        "SELECT id FROM storage_move_jobs WHERE user_id = $1 AND status IN ('prepared','transferring','paused','target_uploaded','committing','cleanup_pending','failed') ORDER BY created_at",
         pqxx::params{user_id});
     std::vector<crow::json::wvalue> jobs;
     for (const auto& row : rows) jobs.push_back(serialize_storage_move(txn, user_id, row[0].as<uint64_t>()));
@@ -1453,8 +1680,26 @@ void FileManager::set_storage_move_status(uint64_t user_id, uint64_t move_id, co
             pqxx::params{move_id, user_id});
     } else if (status == "transferring") {
         result = txn.exec(
-            "UPDATE storage_move_jobs SET status = 'transferring', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND status IN ('prepared','paused','transferring') RETURNING id",
+            "UPDATE storage_move_jobs SET status = 'transferring', error_code = NULL, error_detail = NULL, failure_stage = NULL, is_retryable = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND user_id = $2 AND status IN ('prepared','transferring') RETURNING id",
             pqxx::params{move_id, user_id});
+    } else if (status == "resume") {
+        const auto items = txn.exec(
+            "SELECT i.status FROM storage_move_items i "
+            "JOIN storage_move_jobs j ON j.id=i.move_job_id "
+            "WHERE i.move_job_id=$1 AND j.user_id=$2 FOR UPDATE",
+            pqxx::params{move_id, user_id});
+        bool all_uploaded = !items.empty();
+        for (const auto& item : items) {
+            const auto item_status = item[0].as<std::string>();
+            if (item_status != "target_uploaded" && item_status != "completed") {
+                all_uploaded = false;
+                break;
+            }
+        }
+        const std::string next_status = all_uploaded ? "target_uploaded" : "transferring";
+        result = txn.exec(
+            "UPDATE storage_move_jobs SET status = $1, error_code = NULL, error_detail = NULL, failure_stage = NULL, is_retryable = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND user_id = $3 AND status IN ('paused','prepared','transferring') RETURNING id",
+            pqxx::params{next_status, move_id, user_id});
     } else {
         throw std::invalid_argument("STORAGE_MOVE_INVALID_STATE");
     }
@@ -1467,11 +1712,16 @@ uint64_t FileManager::record_storage_move_chunk(uint64_t user_id, uint64_t move_
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
     auto item = txn.exec(
-        "SELECT i.total_bytes, j.target_provider, j.status FROM storage_move_items i JOIN storage_move_jobs j ON j.id = i.move_job_id "
+        "SELECT i.total_bytes, j.target_provider, j.status, i.status FROM storage_move_items i JOIN storage_move_jobs j ON j.id = i.move_job_id "
         "WHERE i.id = $1 AND i.move_job_id = $2 AND j.user_id = $3 FOR UPDATE",
         pqxx::params{item_id, move_id, user_id});
     if (item.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
-    if (item[0][1].as<std::string>() != "local" || item[0][2].as<std::string>() == "paused") throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+    const std::string job_status = item[0][2].as<std::string>();
+    if (item[0][1].as<std::string>() != "local" ||
+        job_status == "paused" || job_status == "cancelled" || job_status == "failed" ||
+        job_status == "target_uploaded" || job_status == "committing" || job_status == "cleanup_pending" ||
+        job_status == "completed" || item[0][3].as<std::string>() == "target_uploaded" ||
+        item[0][3].as<std::string>() == "completed") throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
     const uint64_t total = item[0][0].as<uint64_t>();
     const uint64_t offset = static_cast<uint64_t>(chunk_index) * FileChunker::MAX_CHUNK_SIZE;
     if (size_bytes > FileChunker::MAX_CHUNK_SIZE || offset > total || size_bytes > total - offset) throw std::invalid_argument("INVALID_CHUNK");
@@ -1494,11 +1744,16 @@ void FileManager::update_storage_move_progress(uint64_t user_id, uint64_t move_i
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
     auto item = txn.exec(
-        "SELECT i.total_bytes,j.status FROM storage_move_items i JOIN storage_move_jobs j ON j.id=i.move_job_id "
+        "SELECT i.total_bytes,j.status,i.status FROM storage_move_items i JOIN storage_move_jobs j ON j.id=i.move_job_id "
         "WHERE i.id=$1 AND i.move_job_id=$2 AND j.user_id=$3 FOR UPDATE",
         pqxx::params{item_id,move_id,user_id});
     if (item.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
-    if (item[0][1].as<std::string>() == "paused" || transferred_bytes > item[0][0].as<uint64_t>()) throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+    const std::string job_status = item[0][1].as<std::string>();
+    const std::string item_status = item[0][2].as<std::string>();
+    if (job_status == "paused" || job_status == "cancelled" || job_status == "failed" ||
+        job_status == "target_uploaded" || job_status == "committing" || job_status == "cleanup_pending" ||
+        job_status == "completed" || item_status == "target_uploaded" || item_status == "completed" ||
+        transferred_bytes > item[0][0].as<uint64_t>()) throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
     txn.exec("UPDATE storage_move_items SET transferred_bytes=GREATEST(transferred_bytes,$1),status='transferring' WHERE id=$2",pqxx::params{transferred_bytes,item_id});
     txn.exec(
         "UPDATE storage_move_jobs SET transferred_bytes=(SELECT COALESCE(SUM(transferred_bytes),0) FROM storage_move_items WHERE move_job_id=$1),status='transferring',updated_at=CURRENT_TIMESTAMP WHERE id=$1",
@@ -1511,22 +1766,104 @@ void FileManager::mark_storage_move_item_uploaded(uint64_t user_id, uint64_t mov
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
     auto item = txn.exec(
-        "SELECT i.total_bytes, i.transferred_bytes, j.target_provider, j.status FROM storage_move_items i JOIN storage_move_jobs j ON j.id=i.move_job_id "
+        "SELECT i.total_bytes, i.transferred_bytes, j.target_provider, i.status, i.target_external_file_id, j.status FROM storage_move_items i JOIN storage_move_jobs j ON j.id=i.move_job_id "
         "WHERE i.id=$1 AND i.move_job_id=$2 AND j.user_id=$3 FOR UPDATE",
         pqxx::params{item_id, move_id, user_id});
     if (item.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
     const std::string provider = item[0][2].as<std::string>();
+    const std::string item_status = item[0][3].as<std::string>();
+    const std::string job_status = item[0][5].as<std::string>();
     if ((provider == "google_drive") != target_external_file_id.has_value()) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
-    if (item[0][0].as<uint64_t>() != item[0][1].as<uint64_t>()) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+    if (item_status == "cancelled" || item_status == "failed") throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+    if (item_status == "target_uploaded" || item_status == "completed") {
+        const auto existing = item[0][4].is_null() ? std::optional<std::string>() : std::optional<std::string>(item[0][4].as<std::string>());
+        if (existing != target_external_file_id) throw std::runtime_error("STORAGE_MOVE_TARGET_CONFLICT");
+        txn.commit();
+        return;
+    }
+    if (job_status == "cancelled" || job_status == "failed" || job_status == "completed" ||
+        job_status == "cleanup_pending" || job_status == "committing") {
+        throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+    }
+    if (provider == "local" && item[0][0].as<uint64_t>() != item[0][1].as<uint64_t>()) {
+        throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+    }
     txn.exec(
-        "UPDATE storage_move_items SET status='target_uploaded', target_external_file_id=$1 WHERE id=$2",
+        "UPDATE storage_move_items SET status='target_uploaded', transferred_bytes=total_bytes, target_external_file_id=$1 WHERE id=$2",
         pqxx::params{target_external_file_id, item_id});
-    auto remaining = txn.exec("SELECT COUNT(*) FROM storage_move_items WHERE move_job_id=$1 AND status <> 'target_uploaded'", pqxx::params{move_id});
+    auto remaining = txn.exec("SELECT COUNT(*) FROM storage_move_items WHERE move_job_id=$1 AND status NOT IN ('target_uploaded','completed')", pqxx::params{move_id});
     if (remaining[0][0].as<int>() == 0) txn.exec("UPDATE storage_move_jobs SET status='target_uploaded', updated_at=CURRENT_TIMESTAMP WHERE id=$1", pqxx::params{move_id});
     txn.commit();
 }
 
-crow::json::wvalue FileManager::cancel_storage_move(uint64_t user_id, uint64_t move_id) {
+void FileManager::record_storage_move_failure(uint64_t user_id, uint64_t move_id,
+                                              const std::string& error_code, const std::string& failure_stage,
+                                              bool retryable,
+                                              const std::vector<std::string>& additional_external_file_ids,
+                                              FileChunker* chunker) {
+    static const std::unordered_set<std::string> codes{
+        "SOURCE_READ_FAILED", "GOOGLE_TARGET_SESSION_FAILED", "GOOGLE_TARGET_WRITE_FAILED",
+        "GOOGLE_TARGET_ACK_FAILED", "LOCAL_TARGET_WRITE_FAILED", "STORAGE_MOVE_NETWORK_FAILED",
+        "STORAGE_MOVE_TARGET_INCOMPLETE", "STORAGE_MOVE_INVALID_STATE"
+    };
+    static const std::unordered_set<std::string> stages{
+        "prepare", "source_metadata", "source_read", "target_session", "target_write", "target_ack", "commit", "cleanup"
+    };
+    if (codes.find(error_code) == codes.end() || stages.find(failure_stage) == stages.end()) throw std::invalid_argument("STORAGE_MOVE_INVALID_FAILURE");
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto job = txn.exec("SELECT status,target_provider,target_external_storage_id FROM storage_move_jobs WHERE id=$1 AND user_id=$2 FOR UPDATE", pqxx::params{move_id,user_id});
+    if (job.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
+    const std::string status = job[0][0].as<std::string>();
+    if (status == "completed" || status == "cancelled" || status == "cleanup_pending") throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+    if (status == "failed") {
+        txn.commit();
+        return;
+    }
+    if (!retryable) {
+        cleanup_uncommitted_local_targets(txn, chunker, move_id);
+        restore_uncommitted_local_source(txn, chunker, move_id);
+    }
+    if (retryable) {
+        txn.exec("UPDATE storage_move_jobs SET status='paused',error_code=$1,error_detail=$2,is_retryable=TRUE,failure_stage=$3,updated_at=CURRENT_TIMESTAMP WHERE id=$4",
+                 pqxx::params{error_code,"Falha recuperavel durante a transferencia",failure_stage,move_id});
+    } else {
+        if (job[0][1].as<std::string>() == "google_drive" && !job[0][2].is_null()) {
+            schedule_google_reconciliation(txn, move_id, job[0][2].as<uint64_t>());
+            txn.exec("INSERT INTO pending_external_deletions(external_file_id,external_storage_id,move_job_id) SELECT target_external_file_id,$1,$2 FROM storage_move_items WHERE move_job_id=$2 AND target_external_file_id IS NOT NULL ON CONFLICT DO NOTHING",
+                     pqxx::params{job[0][2].as<uint64_t>(),move_id});
+            for (const auto& external_id : additional_external_file_ids) {
+                txn.exec("INSERT INTO pending_external_deletions(external_file_id,external_storage_id,move_job_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+                         pqxx::params{external_id,job[0][2].as<uint64_t>(),move_id});
+            }
+        }
+        txn.exec("UPDATE storage_move_items SET status='failed' WHERE move_job_id=$1 AND status NOT IN ('completed','target_uploaded')", pqxx::params{move_id});
+        txn.exec("UPDATE storage_move_jobs SET status='failed',reserved_bytes=0,error_code=$1,error_detail=$2,is_retryable=FALSE,failure_stage=$3,completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$4",
+                 pqxx::params{error_code,"Falha permanente durante a transferencia",failure_stage,move_id});
+    }
+    txn.commit();
+}
+
+void FileManager::clear_storage_move(uint64_t user_id, uint64_t move_id) {
+    auto conn = pool_.acquire_connection();
+    pqxx::work txn(*conn);
+    auto row = txn.exec("SELECT status FROM storage_move_jobs WHERE id=$1 AND user_id=$2 FOR UPDATE", pqxx::params{move_id,user_id});
+    if (row.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
+    const std::string status = row[0][0].as<std::string>();
+    if (status != "completed" && status != "cancelled" && status != "failed") throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+    auto pending = txn.exec(
+        "SELECT 1 FROM pending_local_deletions WHERE move_job_id=$1 "
+        "UNION ALL SELECT 1 FROM pending_external_deletions WHERE move_job_id=$1 "
+        "UNION ALL SELECT 1 FROM pending_storage_move_reconciliations WHERE move_job_id=$1 LIMIT 1",
+        pqxx::params{move_id});
+    if (!pending.empty()) throw std::runtime_error("STORAGE_MOVE_CLEANUP_PENDING");
+    txn.exec("DELETE FROM storage_move_jobs WHERE id=$1", pqxx::params{move_id});
+    txn.commit();
+}
+
+crow::json::wvalue FileManager::cancel_storage_move(uint64_t user_id, uint64_t move_id,
+                                                    const std::vector<std::string>& additional_external_file_ids,
+                                                    FileChunker* chunker) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
     auto job = txn.exec(
@@ -1536,12 +1873,19 @@ crow::json::wvalue FileManager::cancel_storage_move(uint64_t user_id, uint64_t m
     const std::string status = job[0][0].as<std::string>();
     if (status == "completed" || status == "cleanup_pending" || status == "committing") throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
     if (status != "cancelled") {
+        cleanup_uncommitted_local_targets(txn, chunker, move_id);
+        restore_uncommitted_local_source(txn, chunker, move_id);
         if (job[0][1].as<std::string>() == "google_drive" && !job[0][2].is_null()) {
+            schedule_google_reconciliation(txn, move_id, job[0][2].as<uint64_t>());
             txn.exec(
-                "INSERT INTO pending_external_deletions(external_file_id,external_storage_id) "
-                "SELECT target_external_file_id,$1 FROM storage_move_items "
+                "INSERT INTO pending_external_deletions(external_file_id,external_storage_id,move_job_id) "
+                "SELECT target_external_file_id,$1,$2 FROM storage_move_items "
                 "WHERE move_job_id=$2 AND target_external_file_id IS NOT NULL ON CONFLICT DO NOTHING",
                 pqxx::params{job[0][2].as<uint64_t>(),move_id});
+            for (const auto& external_id : additional_external_file_ids) {
+                txn.exec("INSERT INTO pending_external_deletions(external_file_id,external_storage_id,move_job_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
+                         pqxx::params{external_id,job[0][2].as<uint64_t>(),move_id});
+            }
         }
         txn.exec("UPDATE storage_move_jobs SET status='cancelled', reserved_bytes=0, updated_at=CURRENT_TIMESTAMP, completed_at=CURRENT_TIMESTAMP WHERE id=$1", pqxx::params{move_id});
         txn.exec("UPDATE storage_move_items SET status='cancelled' WHERE move_job_id=$1 AND status <> 'completed'", pqxx::params{move_id});
@@ -1570,37 +1914,147 @@ crow::json::wvalue FileManager::complete_storage_move(uint64_t user_id, uint64_t
     const uint64_t file_id = job[0].as<uint64_t>();
     const std::string source_provider = job[2].as<std::string>();
     const std::string target_provider = job[4].as<std::string>();
-    auto items = txn.exec("SELECT id,role,total_bytes,target_external_file_id FROM storage_move_items WHERE move_job_id=$1 AND status='target_uploaded' ORDER BY id FOR UPDATE", pqxx::params{move_id});
+    struct MoveItem {
+        uint64_t id;
+        std::string role;
+        uint64_t total_bytes;
+        std::optional<std::string> target_external_file_id;
+        std::string status;
+    };
+    std::vector<MoveItem> items;
+    for (const auto& row : txn.exec(
+        "SELECT id,role,total_bytes,target_external_file_id,status FROM storage_move_items "
+        "WHERE move_job_id=$1 ORDER BY id FOR UPDATE", pqxx::params{move_id})) {
+        MoveItem item{
+            row[0].as<uint64_t>(), row[1].as<std::string>(), row[2].as<uint64_t>(),
+            row[3].is_null() ? std::nullopt : std::optional<std::string>(row[3].as<std::string>()),
+            row[4].as<std::string>()};
+        if (item.status != "target_uploaded" && item.status != "completed") {
+            throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+        }
+        items.push_back(std::move(item));
+    }
     if (items.empty()) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
-    txn.exec("UPDATE storage_move_jobs SET status='committing',updated_at=CURRENT_TIMESTAMP WHERE id=$1",pqxx::params{move_id});
 
-    std::vector<std::pair<uint64_t, std::string>> promoted;
-    bool source_quarantined = false;
+    auto file = txn.exec(
+        "SELECT size_bytes,proxy_size_bytes,external_file_id,proxy_external_file_id FROM files "
+        "WHERE id=$1 AND user_id=$2 FOR UPDATE",pqxx::params{file_id,user_id});
+    if (file.empty()) throw std::runtime_error("STORAGE_MOVE_NOT_FOUND");
+    const uint64_t file_size = file[0][0].as<uint64_t>();
+    const std::optional<uint64_t> proxy_size = file[0][1].is_null()
+        ? std::nullopt : std::optional<uint64_t>(file[0][1].as<uint64_t>());
+    std::optional<size_t> original_index;
+    std::optional<size_t> proxy_index;
+    for (size_t index = 0; index < items.size(); ++index) {
+        auto& item = items[index];
+        const uint64_t expected_size = item.role == "original"
+            ? file_size : item.role == "proxy" && proxy_size ? *proxy_size : 0;
+        if (item.role == "original") {
+            if (original_index) throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+            original_index = index;
+        } else if (item.role == "proxy") {
+            if (proxy_index || !proxy_size) throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+            proxy_index = index;
+        } else {
+            throw std::runtime_error("STORAGE_MOVE_INVALID_STATE");
+        }
+        if (item.total_bytes != expected_size) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+        if (target_provider == "local" && item.target_external_file_id) {
+            throw std::runtime_error("STORAGE_MOVE_TARGET_CONFLICT");
+        }
+        if (target_provider == "google_drive" && !item.target_external_file_id) {
+            throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+        }
+    }
+    if (!original_index || proxy_size.has_value() != proxy_index.has_value()) {
+        throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+    }
+
+    struct PhysicalArtifact { uint64_t item_id; bool proxy; };
+    std::vector<PhysicalArtifact> promoted;
+    std::vector<PhysicalArtifact> quarantined;
+    auto track_artifact = [](std::vector<PhysicalArtifact>& artifacts, uint64_t item_id, bool proxy) {
+        for (const auto& artifact : artifacts) {
+            if (artifact.item_id == item_id && artifact.proxy == proxy) return;
+        }
+        artifacts.push_back({item_id, proxy});
+    };
+    if (target_provider == "local") {
+        for (const auto& item : items) {
+            const auto staging_size = chunker.try_get_move_file_size(item.id);
+            const auto final_size = item.role == "original"
+                ? chunker.try_get_file_size(file_id)
+                : chunker.try_get_proxy_file_size(file_id);
+            if (staging_size && final_size) throw std::runtime_error("STORAGE_MOVE_TARGET_CONFLICT");
+            if (!staging_size && !final_size) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+            if ((staging_size && *staging_size != item.total_bytes) ||
+                (final_size && *final_size != item.total_bytes)) {
+                throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+            }
+            if (final_size) track_artifact(promoted, item.id, item.role == "proxy");
+        }
+    }
+
+    bool needs_quarantine_original = false;
+    bool needs_quarantine_proxy = false;
+    if (source_provider == "local") {
+        const auto canonical_size = chunker.try_get_file_size(file_id);
+        const auto quarantined_size = chunker.try_get_quarantined_file_size(move_id);
+        if (canonical_size && quarantined_size) throw std::runtime_error("STORAGE_MOVE_TARGET_CONFLICT");
+        if (!canonical_size && !quarantined_size) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+        if ((canonical_size && *canonical_size != file_size) ||
+            (quarantined_size && *quarantined_size != file_size)) {
+            throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+        }
+        needs_quarantine_original = canonical_size.has_value();
+        if (quarantined_size) track_artifact(quarantined, file_id, false);
+
+        const auto canonical_proxy_size = chunker.try_get_proxy_file_size(file_id);
+        const auto quarantined_proxy_size = chunker.try_get_quarantined_proxy_size(move_id);
+        if (!proxy_size.has_value()) {
+            if (canonical_proxy_size || quarantined_proxy_size) throw std::runtime_error("STORAGE_MOVE_TARGET_CONFLICT");
+        } else {
+            if (canonical_proxy_size && quarantined_proxy_size) throw std::runtime_error("STORAGE_MOVE_TARGET_CONFLICT");
+            if (!canonical_proxy_size && !quarantined_proxy_size) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+            if ((canonical_proxy_size && *canonical_proxy_size != *proxy_size) ||
+                (quarantined_proxy_size && *quarantined_proxy_size != *proxy_size)) {
+                throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
+            }
+            needs_quarantine_proxy = canonical_proxy_size.has_value();
+            if (quarantined_proxy_size) track_artifact(quarantined, file_id, true);
+        }
+    }
+
+    txn.exec("UPDATE storage_move_jobs SET status='committing',updated_at=CURRENT_TIMESTAMP WHERE id=$1",pqxx::params{move_id});
+    bool commit_attempted = false;
     try {
         if (target_provider == "local") {
             for (const auto& item : items) {
-                const uint64_t item_id = item[0].as<uint64_t>();
-                const std::string role = item[1].as<std::string>();
-                if (chunker.get_move_file_size(item_id) != item[2].as<uint64_t>()) throw std::runtime_error("STORAGE_MOVE_TARGET_INCOMPLETE");
-                if (role == "original") chunker.promote_move_file(item_id,file_id);
-                else chunker.promote_move_proxy(item_id,file_id);
-                promoted.emplace_back(item_id, role);
+                if (chunker.try_get_move_file_size(item.id)) {
+                    if (item.role == "original") chunker.promote_move_file(item.id,file_id);
+                    else chunker.promote_move_proxy(item.id,file_id);
+                    track_artifact(promoted, item.id, item.role == "proxy");
+                }
             }
         }
         if (source_provider == "local") {
-            chunker.quarantine_file(file_id, move_id);
-            source_quarantined = true;
-            chunker.quarantine_proxy(file_id, move_id);
+            if (needs_quarantine_original) {
+                chunker.quarantine_file(file_id, move_id);
+                track_artifact(quarantined, file_id, false);
+            }
+            if (needs_quarantine_proxy) {
+                chunker.quarantine_proxy(file_id, move_id);
+                track_artifact(quarantined, file_id, true);
+            }
         }
 
-    auto file = txn.exec("SELECT size_bytes,proxy_size_bytes,external_file_id,proxy_external_file_id FROM files WHERE id=$1 AND user_id=$2 FOR UPDATE",pqxx::params{file_id,user_id});
     const uint64_t ciphertext_size = job[6].as<uint64_t>();
     const uint64_t source_charge = quota_charge(source_provider, ciphertext_size);
     const uint64_t target_charge = quota_charge(target_provider, ciphertext_size);
-    const auto original = items[0];
-    std::optional<std::string> target_external_file_id = original[3].is_null() ? std::nullopt : std::optional<std::string>(original[3].as<std::string>());
-    std::optional<std::string> proxy_external_file_id;
-    if (items.size() > 1 && !items[1][3].is_null()) proxy_external_file_id = items[1][3].as<std::string>();
+    const auto& original = items[*original_index];
+    const std::optional<std::string> proxy_external_file_id = proxy_index
+        ? items[*proxy_index].target_external_file_id : std::nullopt;
+    std::optional<std::string> target_external_file_id = original.target_external_file_id;
     txn.exec(
         "UPDATE files SET storage_provider=$1, external_storage_id=$2, external_file_id=$3, physical_path=$4, "
         "proxy_external_file_id=$5, proxy_physical_path=$6 WHERE id=$7",
@@ -1609,7 +2063,7 @@ crow::json::wvalue FileManager::complete_storage_move(uint64_t user_id, uint64_t
             target_external_file_id,
             target_provider == "local" ? std::optional<std::string>(std::to_string(file_id)+".dat") : std::nullopt,
             proxy_external_file_id,
-            target_provider == "local" && items.size() > 1 ? std::optional<std::string>(std::to_string(file_id)+".proxy.dat") : std::nullopt,
+            target_provider == "local" && proxy_index ? std::optional<std::string>(std::to_string(file_id)+".proxy.dat") : std::nullopt,
             file_id});
     if (target_charge >= source_charge) {
         txn.exec("UPDATE users SET used_storage_bytes=used_storage_bytes+$1 WHERE id=$2",pqxx::params{target_charge-source_charge,user_id});
@@ -1631,22 +2085,38 @@ crow::json::wvalue FileManager::complete_storage_move(uint64_t user_id, uint64_t
     if (source_provider == "google_drive") {
         txn.exec(
             "UPDATE storage_move_jobs SET status='completed',completed_at=CURRENT_TIMESTAMP WHERE id=$1 "
-            "AND NOT EXISTS (SELECT 1 FROM pending_external_deletions WHERE move_job_id=$1)",
+            "AND NOT EXISTS (SELECT 1 FROM pending_external_deletions WHERE move_job_id=$1) "
+            "AND NOT EXISTS (SELECT 1 FROM pending_local_deletions WHERE move_job_id=$1) "
+            "AND NOT EXISTS (SELECT 1 FROM pending_storage_move_reconciliations WHERE move_job_id=$1)",
             pqxx::params{move_id});
     }
         auto result = serialize_storage_move(txn,user_id,move_id);
+        commit_attempted = true;
         txn.commit();
         return result;
     } catch (...) {
-        if (source_quarantined) {
-            chunker.restore_quarantined_proxy(file_id, move_id);
-            chunker.restore_quarantined_file(file_id, move_id);
+        const auto original_error = std::current_exception();
+        if (commit_attempted) std::rethrow_exception(original_error);
+
+        bool rollback_failed = false;
+        for (auto it = quarantined.rbegin(); it != quarantined.rend(); ++it) {
+            try {
+                if (it->proxy) chunker.restore_quarantined_proxy(file_id, move_id);
+                else chunker.restore_quarantined_file(file_id, move_id);
+            } catch (...) {
+                rollback_failed = true;
+            }
         }
         for (auto it = promoted.rbegin(); it != promoted.rend(); ++it) {
-            if (it->second == "original") chunker.demote_move_file(it->first, file_id);
-            else chunker.demote_move_proxy(it->first, file_id);
+            try {
+                if (it->proxy) chunker.demote_move_proxy(it->item_id, file_id);
+                else chunker.demote_move_file(it->item_id, file_id);
+            } catch (...) {
+                rollback_failed = true;
+            }
         }
-        throw;
+        if (rollback_failed) throw std::runtime_error("STORAGE_MOVE_ROLLBACK_FAILED");
+        std::rethrow_exception(original_error);
     }
 }
 

@@ -6,6 +6,7 @@ import { DriveView } from '../../state/drive.types';
 import { PinnedFoldersSectionComponent } from '../../components/pinned-folders-section/pinned-folders-section.component';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
 import { FilePreviewRequest } from '../../services/file-preview-resolver';
+import { formatBytes } from '../../../../shared/utils/format-bytes';
 
 interface BreadcrumbSegment {
   id: number | string | null;
@@ -82,10 +83,12 @@ interface BreadcrumbSegment {
           <app-drive-workspace
             [currentView]="currentView()"
             [locked]="locked()"
+            [movingFileIds]="movingFileIds()"
             (createFolderRequested)="createFolderRequested.emit()"
             (uploadFileRequested)="uploadFileRequested.emit()"
             (previewRequested)="previewRequested.emit($event)"
             (shareRequested)="shareRequested.emit($event)"
+            (storageMoveRequested)="storageMoveRequested.emit($event)"
             (emptyTrashRequested)="emptyTrashRequested.emit()"
             (dropStarted)="dropStarted.emit()"
             (externalDrop)="externalDrop.emit($event)"
@@ -134,6 +137,7 @@ interface BreadcrumbSegment {
   `],
 })
 export class DefaultShellComponent {
+  readonly formatSize = formatBytes;
   readonly currentView = input.required<DriveView>();
   readonly currentFolderId = input<number | null>(null);
   readonly currentPath = input<readonly BreadcrumbSegment[]>([{ id: null, name: 'Meu Drive' }]);
@@ -141,6 +145,7 @@ export class DefaultShellComponent {
   readonly canGoForward = input(false);
   readonly canGoUp = input(false);
   readonly locked = input(false);
+  readonly movingFileIds = input<ReadonlySet<number>>(new Set<number>());
   readonly quota = input.required<QuotaState>();
   readonly unlockRequested = output<void>();
   readonly lockRequested = output<void>();
@@ -151,6 +156,7 @@ export class DefaultShellComponent {
   readonly pinnedFolderNavigate = output<number>();
   readonly previewRequested = output<FilePreviewRequest>();
   readonly shareRequested = output<DriveFile>();
+  readonly storageMoveRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
   readonly externalDrop = output<DroppedItems>();
   readonly dropStarted = output<void>();
@@ -202,10 +208,4 @@ export class DefaultShellComponent {
     this.addressNavigate.emit(path ? `Nanika/${path}` : 'Nanika');
   }
 
-  formatSize(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), sizes.length - 1);
-    return `${parseFloat((bytes / Math.pow(1024, index)).toFixed(1))} ${sizes[index]}`;
-  }
 }

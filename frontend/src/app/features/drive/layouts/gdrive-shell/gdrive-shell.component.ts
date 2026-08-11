@@ -13,7 +13,7 @@ import { FilePreviewRequest } from '../../services/file-preview-resolver';
   imports: [TopbarComponent, GDriveSidebarComponent, DriveWorkspaceComponent],
   template: `
     <div class="vault-layout">
-      <app-topbar (unlockRequested)="unlockRequested.emit()" style="grid-area: topbar; z-index: 10;" />
+      <app-topbar (unlockRequested)="unlockRequested.emit()" (lockRequested)="lockRequested.emit()" style="grid-area: topbar; z-index: 10;" />
       <app-gdrive-sidebar
         [currentView]="currentView()"
         [currentFolderId]="currentFolderId()"
@@ -29,10 +29,12 @@ import { FilePreviewRequest } from '../../services/file-preview-resolver';
           <app-drive-workspace
             [currentView]="currentView()"
             [locked]="locked()"
+            [movingFileIds]="movingFileIds()"
             (createFolderRequested)="createFolderRequested.emit()"
             (uploadFileRequested)="uploadFileRequested.emit()"
             (previewRequested)="previewRequested.emit($event)"
             (shareRequested)="shareRequested.emit($event)"
+            (storageMoveRequested)="storageMoveRequested.emit($event)"
             (emptyTrashRequested)="emptyTrashRequested.emit()"
             (dropStarted)="dropStarted.emit()"
             (externalDrop)="externalDrop.emit($event)"
@@ -62,8 +64,10 @@ export class GDriveShellComponent {
   readonly currentView = input.required<DriveView>();
   readonly currentFolderId = input<number | null>(null);
   readonly locked = input(false);
+  readonly movingFileIds = input<ReadonlySet<number>>(new Set<number>());
   readonly quota = input.required<QuotaState>();
   readonly unlockRequested = output<void>();
+  readonly lockRequested = output<void>();
   readonly viewChange = output<DriveView>();
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
@@ -71,6 +75,7 @@ export class GDriveShellComponent {
   readonly pinnedFolderNavigate = output<number>();
   readonly previewRequested = output<FilePreviewRequest>();
   readonly shareRequested = output<DriveFile>();
+  readonly storageMoveRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
   readonly externalDrop = output<DroppedItems>();
   readonly dropStarted = output<void>();

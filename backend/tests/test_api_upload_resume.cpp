@@ -47,8 +47,8 @@ TEST_CASE("API Upload Resume - Listagem de Chunks Enviados", "[api][upload][resu
 
 
         auto res_file1 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_comp", "fc", "mock_fdk", 1000, 5, true});
-
         file_complete_id = res_file1[0][0].as<int>();
+
 
 
         auto res_file2 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_empty", "fe", "mock_fdk", 1000, 5, false});
@@ -172,7 +172,6 @@ TEST_CASE("API Upload Resume - Listagem de Uploads Pendentes", "[api][upload][pe
     int user_a_id = 0;
     int user_b_id = 0;
 
-    int file_complete_id = 0;
     int file_empty_id = 0;
     int file_partial_id = 0;
 
@@ -194,12 +193,11 @@ TEST_CASE("API Upload Resume - Listagem de Uploads Pendentes", "[api][upload][pe
         int folder_a_id = res_folder[0][0].as<int>();
 
         auto res_file1 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_comp", "fc2", "mock_fdk", 1000, 5, true});
-        file_complete_id = res_file1[0][0].as<int>();
 
         auto res_file2 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_empty", "fe2", "mock_fdk", 1000, 5, false});
         file_empty_id = res_file2[0][0].as<int>();
 
-        auto res_file3 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_part", "fp2", "mock_fdk", 1000, 5, false});
+        auto res_file3 = txn.exec("INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, uploaded_chunks_count, is_upload_complete) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id", pqxx::params{user_a_id, folder_a_id, "file_part", "fp2", "mock_fdk", 1000, 5, 3, false});
         file_partial_id = res_file3[0][0].as<int>();
 
         txn.exec("INSERT INTO file_chunks (file_id, chunk_index) VALUES ($1, $2), ($1, $3), ($1, $4)", pqxx::params{file_partial_id, 0, 1, 3});

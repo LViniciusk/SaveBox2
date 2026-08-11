@@ -1,14 +1,18 @@
-import { Component, EventEmitter, Output, inject, signal, HostListener, input } from '@angular/core';
+import { Component, EventEmitter, Injector, Output, inject, signal, HostListener, input } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { AppStateService } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
 import { CryptoService } from '../../../../core/crypto/crypto.service';
+import { SecurityPhraseChangeError } from '../../../../core/crypto/crypto.service';
+import { downloadSecurityPhraseRecoveryFile } from '../../../../core/crypto/recovery-file';
 import { DriveStore } from '../../state/drive.store';
+import { ComputerStore } from '../../state/computer.store';
 import { CommonModule } from '@angular/common';
 import { DialogService } from '../../../../core/dialog/dialog.service';
 import { ThemeService } from '../../../../core/theme/theme.service';
 import { environment } from '../../../../../environments/environment';
 import { firstValueFrom } from 'rxjs';
+import { formatBytes } from '../../../../shared/utils/format-bytes';
 
 @Component({
   selector: 'app-topbar',
@@ -40,15 +44,15 @@ import { firstValueFrom } from 'rxjs';
             Desbloquear Drive
           </button>
         } @else {
-          <button class="lock-btn" (click)="lockVault()" title="Trancar Drive">
+          <button class="lock-btn" (click)="requestLock()" title="Trancar Drive">
             <span class="material-symbols-outlined">lock</span>
           </button>
         }
 
         <div class="avatar-container">
           <button class="avatar-btn" (click)="toggleProfileMenu()">
-            @if (appState.user()?.picture) {
-              <img [src]="appState.user()?.picture" alt="Avatar" class="avatar-img" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            @if (hasProfilePicture()) {
+              <img [src]="appState.user()?.picture" alt="Avatar" class="avatar-img" referrerpolicy="no-referrer" (error)="onProfilePictureError()" />
             } @else {
               <div class="avatar-fallback">{{ appState.user()?.name?.charAt(0) || 'U' }}</div>
             }
@@ -70,8 +74,8 @@ import { firstValueFrom } from 'rxjs';
               <div class="profile-main-section">
                 <div class="profile-pic-ring">
                   <div class="profile-pic-wrapper" (click)="editProfilePic($event)" title="Mudar foto de perfil">
-                    @if (appState.user()?.picture) {
-                      <img [src]="appState.user()?.picture" alt="Avatar" class="profile-pic-large" crossorigin="anonymous" referrerpolicy="no-referrer" />
+                    @if (hasProfilePicture()) {
+                      <img [src]="appState.user()?.picture" alt="Avatar" class="profile-pic-large" referrerpolicy="no-referrer" (error)="onProfilePictureError()" />
                     } @else {
                       <div class="profile-pic-fallback-large">{{ appState.user()?.name?.charAt(0) || 'U' }}</div>
                     }
@@ -107,8 +111,8 @@ import { firstValueFrom } from 'rxjs';
 
                     @for (acc of driveStore.linkedAccounts(); track acc.id) {
                       <div class="profile-card-subrow" (click)="$event.stopPropagation()">
-                        @if (acc.accountPicture) {
-                          <img class="user-bubble-img" [src]="acc.accountPicture" [alt]="acc.accountEmail">
+                        @if (hasUsableAccountPicture(acc)) {
+                          <img class="user-bubble-img" [src]="acc.accountPicture" [alt]="'Foto de ' + acc.accountEmail" referrerpolicy="no-referrer" decoding="async" loading="lazy" (error)="onAccountPictureError(acc.accountPicture!)">
                         } @else {
                           <span class="user-bubble {{ getBubbleColorClass(acc.accountEmail) }}">
                             {{ acc.accountEmail.charAt(0).toUpperCase() }}
@@ -133,8 +137,8 @@ import { firstValueFrom } from 'rxjs';
                     <span class="card-row-text">Mostrar contas vinculadas</span>
                     <div class="card-row-bubbles">
                       @for (acc of driveStore.linkedAccounts().slice(0, 3); track acc.id) {
-                        @if (acc.accountPicture) {
-                          <img class="user-bubble-img bubble-small" [src]="acc.accountPicture" [alt]="acc.accountEmail">
+                        @if (hasUsableAccountPicture(acc)) {
+                          <img class="user-bubble-img bubble-small" [src]="acc.accountPicture" [alt]="'Foto de ' + acc.accountEmail" referrerpolicy="no-referrer" decoding="async" loading="lazy" (error)="onAccountPictureError(acc.accountPicture!)">
                         } @else {
                           <span class="user-bubble {{ getBubbleColorClass(acc.accountEmail) }}">
                             {{ acc.accountEmail.charAt(0).toUpperCase() }}
@@ -239,8 +243,8 @@ import { firstValueFrom } from 'rxjs';
                         @for (acc of driveStore.linkedAccounts(); track acc.id) {
                           <div class="account-item">
                             <div class="account-info">
-                              @if (acc.accountPicture) {
-                                <img class="user-bubble-img account-avatar-icon" [src]="acc.accountPicture" [alt]="acc.accountEmail" style="margin-right: 12px; width: 24px; height: 24px;">
+                              @if (hasUsableAccountPicture(acc)) {
+                                <img class="user-bubble-img account-avatar-icon" [src]="acc.accountPicture" [alt]="'Foto de ' + acc.accountEmail" referrerpolicy="no-referrer" decoding="async" loading="lazy" (error)="onAccountPictureError(acc.accountPicture!)" style="margin-right: 12px; width: 24px; height: 24px;">
                               } @else {
                                 <span class="material-symbols-outlined account-avatar-icon">account_circle</span>
                               }
@@ -357,6 +361,7 @@ import { firstValueFrom } from 'rxjs';
                       type="password" 
                       [value]="oldPhrase()" 
                       (input)="oldPhrase.set($any($event.target).value)"
+                      [disabled]="isChangingPhrase()"
                       style="padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px;"
                       placeholder="Introduza a frase atual"
                     />
@@ -368,6 +373,7 @@ import { firstValueFrom } from 'rxjs';
                       type="password" 
                       [value]="newPhrase()" 
                       (input)="newPhrase.set($any($event.target).value)"
+                      [disabled]="isChangingPhrase()"
                       style="padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px;"
                       placeholder="Minimo 8 caracteres"
                     />
@@ -379,6 +385,7 @@ import { firstValueFrom } from 'rxjs';
                       type="password" 
                       [value]="confirmPhrase()" 
                       (input)="confirmPhrase.set($any($event.target).value)"
+                      [disabled]="isChangingPhrase()"
                       style="padding: 8px 12px; border: 1px solid #dadce0; border-radius: 4px; font-size: 13px;"
                       placeholder="Repita a nova frase"
                     />
@@ -393,6 +400,12 @@ import { firstValueFrom } from 'rxjs';
                   @if (changePhraseSuccess()) {
                     <div style="font-size: 12px; color: #137333; font-weight: 500; margin-top: 4px;">
                       {{ changePhraseSuccess() }}
+                    </div>
+                  }
+
+                  @if (changePhraseWarning()) {
+                    <div style="font-size: 12px; color: #9a6700; font-weight: 500; margin-top: 4px;">
+                      {{ changePhraseWarning() }}
                     </div>
                   }
 
@@ -1400,9 +1413,11 @@ import { firstValueFrom } from 'rxjs';
   ],
 })
 export class TopbarComponent {
+  readonly formatSize = (bytes: number) => formatBytes(bytes, 0);
   readonly compact = input(false);
   protected readonly appState = inject(AppStateService);
   protected readonly driveStore = inject(DriveStore);
+  private readonly injector = inject(Injector);
   private readonly authService = inject(AuthService);
   protected readonly cryptoService = inject(CryptoService);
   protected readonly dialogService = inject(DialogService);
@@ -1418,9 +1433,13 @@ export class TopbarComponent {
   confirmPhrase = signal('');
   changePhraseError = signal('');
   changePhraseSuccess = signal('');
+  changePhraseWarning = signal('');
   isChangingPhrase = signal(false);
+  readonly failedAccountPictures = signal<ReadonlySet<string>>(new Set());
+  readonly failedProfilePicture = signal<string | null>(null);
 
   @Output() unlockRequested = new EventEmitter<void>();
+  @Output() lockRequested = new EventEmitter<void>();
 
   toggleProfileMenu() {
     const nextState = !this.isProfileMenuOpen();
@@ -1435,6 +1454,26 @@ export class TopbarComponent {
     const parts = email.split('@');
     if (parts.length === 0) return 'Conta Vinculada';
     return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+  }
+
+  hasUsableAccountPicture(account: { accountPicture?: string }): boolean {
+    const picture = account.accountPicture?.trim();
+    return !!picture && !this.failedAccountPictures().has(picture);
+  }
+
+  onAccountPictureError(picture: string): void {
+    const value = picture.trim();
+    if (!value) return;
+    this.failedAccountPictures.update(current => new Set(current).add(value));
+  }
+
+  hasProfilePicture(): boolean {
+    const picture = this.appState.user()?.picture?.trim();
+    return !!picture && picture !== this.failedProfilePicture();
+  }
+
+  onProfilePictureError(): void {
+    this.failedProfilePicture.set(this.appState.user()?.picture?.trim() ?? null);
   }
 
   async changeProfileName() {
@@ -1464,9 +1503,6 @@ export class TopbarComponent {
     input.onchange = async (e: Event) => {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (!file) return;
-
-      // Mostra um loading rápido (opcional, pode ser via transfer ou só trocando no front dps)
-      const loadingMsg = 'Fazendo upload da imagem...';
 
       try {
         await this.uploadProfilePic(file);
@@ -1512,15 +1548,14 @@ export class TopbarComponent {
     this.unlockRequested.emit();
   }
 
-  lockVault() {
-    // Wipe the key from RAM first
-    this.cryptoService.lockVault();
-    // Clear decrypted file names so they are not visible while locked
-    this.driveStore.clearDecryptedNames();
-    // Reset folder navigation to root
-    this.driveStore.navigateTo(null);
-    // Update app state
-    this.appState.lock();
+  requestLock(): void {
+    this.oldPhrase.set('');
+    this.newPhrase.set('');
+    this.confirmPhrase.set('');
+    this.changePhraseError.set('');
+    this.changePhraseSuccess.set('');
+    this.changePhraseWarning.set('');
+    this.lockRequested.emit();
   }
 
   @HostListener('document:click', ['$event'])
@@ -1557,14 +1592,6 @@ export class TopbarComponent {
     return this.formatSize(totalMax);
   }
 
-  private formatSize(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(0)) + ' ' + sizes[i];
-  }
-
 
 
   openSettings() {
@@ -1583,45 +1610,78 @@ export class TopbarComponent {
       this.confirmPhrase.set('');
       this.changePhraseError.set('');
       this.changePhraseSuccess.set('');
+      this.changePhraseWarning.set('');
     }, 200);
   }
 
   async changeSecurityPhrase() {
+    if (this.isChangingPhrase()) return;
     this.changePhraseError.set('');
     this.changePhraseSuccess.set('');
+    this.changePhraseWarning.set('');
 
     const oldVal = this.oldPhrase();
     const newVal = this.newPhrase();
     const confVal = this.confirmPhrase();
 
-    if (!oldVal || !newVal || !confVal) {
-      this.changePhraseError.set('Todos os campos sao obrigatorios.');
+    if (!this.cryptoService.isVaultUnlocked()) {
+      this.changePhraseError.set('Desbloqueie o drive antes de alterar a frase de segurança.');
+      return;
+    }
+    if (!oldVal) {
+      this.changePhraseError.set('Digite sua frase de segurança atual.');
+      return;
+    }
+    if (!newVal) {
+      this.changePhraseError.set('Digite a nova frase de segurança.');
+      return;
+    }
+    if (!confVal) {
+      this.changePhraseError.set('Confirme a nova frase de segurança.');
       return;
     }
 
     if (newVal !== confVal) {
-      this.changePhraseError.set('A nova frase e a confirmacao nao coincidem.');
+      this.changePhraseError.set('A confirmação não corresponde à nova frase.');
       return;
     }
 
     if (newVal.length < 8) {
-      this.changePhraseError.set('A nova frase deve ter no minimo 8 caracteres.');
+      this.changePhraseError.set('A nova frase deve ter pelo menos 8 caracteres.');
+      return;
+    }
+    if (newVal === oldVal) {
+      this.changePhraseError.set('A nova frase deve ser diferente da frase atual.');
       return;
     }
 
     this.isChangingPhrase.set(true);
     try {
       await this.cryptoService.changeSecurityPhrase(oldVal, newVal);
-      this.changePhraseSuccess.set('Frase de seguranca alterada com sucesso! O arquivo nanika-recovery.txt foi baixado.');
+      this.changePhraseSuccess.set('Frase de segurança alterada com sucesso. O arquivo de recuperação anterior contém a frase antiga e não deve mais ser usado.');
       this.oldPhrase.set('');
       this.newPhrase.set('');
       this.confirmPhrase.set('');
-    } catch (e: any) {
-      if (e?.message === 'WRONG_PASSPHRASE') {
-        this.changePhraseError.set('A frase de seguranca atual esta incorreta.');
-      } else {
-        this.changePhraseError.set(e?.message || 'Erro ao alterar a frase de seguranca.');
+      try {
+        downloadSecurityPhraseRecoveryFile(newVal);
+        this.changePhraseSuccess.set('Frase de segurança alterada com sucesso. O arquivo de recuperação anterior contém a frase antiga e não deve mais ser usado. O novo arquivo de recuperação foi baixado; guarde-o em local seguro.');
+      } catch {
+        this.changePhraseWarning.set('O novo arquivo de recuperação não pôde ser baixado. O arquivo anterior contém a frase antiga e não deve mais ser usado.');
       }
+    } catch (error) {
+      const code = error instanceof SecurityPhraseChangeError ? error.code : 'VAULT_UPDATE_FAILED';
+      const messages: Record<string, string> = {
+        VAULT_LOCKED: 'Desbloqueie o drive antes de alterar a frase de segurança.',
+        USER_CONTEXT_MISSING: 'Não foi possível identificar sua conta. Entre novamente.',
+        VAULT_NOT_INITIALIZED: 'O cofre ainda não está inicializado.',
+        CURRENT_PHRASE_INCORRECT: 'A frase de segurança atual está incorreta.',
+        SESSION_EXPIRED: 'Sua sessão expirou. Entre novamente antes de alterar a frase.',
+        NETWORK_UNAVAILABLE: 'Não foi possível conectar ao Nanika. Verifique sua conexão e tente novamente.',
+        SERVER_UNAVAILABLE: 'O Nanika está temporariamente indisponível. Sua frase não foi alterada.',
+        CRYPTO_OPERATION_FAILED: 'Não foi possível preparar a nova proteção do cofre. Sua frase não foi alterada.',
+        VAULT_UPDATE_FAILED: 'Não foi possível salvar a nova frase. A frase anterior continua válida.',
+      };
+      this.changePhraseError.set(messages[code]);
     } finally {
       this.isChangingPhrase.set(false);
     }
@@ -1640,6 +1700,7 @@ export class TopbarComponent {
     );
     if (confirmed) {
       await this.driveStore.unlinkGoogleAccount(id);
+      await this.injector.get(ComputerStore, null, { optional: true })?.loadTargets({ force: true });
     }
   }
 }

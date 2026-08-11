@@ -5,9 +5,23 @@ import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.com
 import { VideoPlayerComponent } from '../video-player/video-player.component';
 import { AudioPlayerComponent } from '../audio-player/audio-player.component';
 import { DecryptedMediaLoaderService } from '../../services/decrypted-media-loader.service';
+import type { DecryptedMediaResource } from '../../services/decrypted-media-loader.service';
 import { resolveFilePreviewKind } from '../../services/file-preview-resolver';
 import { ShareModalComponent } from '../share-modal/share-modal.component';
 import { getPublicShareAvailability } from '../../policies/public-share-policy';
+
+const MAX_PREFETCH_SOURCE_BYTES = 32 * 1024 * 1024;
+
+interface CachedImage {
+  readonly url: string;
+  readonly sourceBytes: number;
+  readonly cleanup: () => void;
+}
+
+interface PrefetchReservation {
+  readonly generation: number;
+  readonly sourceBytes: number;
+}
 
 @Component({
   selector: 'app-image-player',
@@ -651,21 +665,13 @@ export class ImagePlayerComponent implements OnDestroy {
     return null;
   });
 
-  private imageCache = new Map<number, string>();
-  private fetchInFlight = new Set<number>();
+  private readonly imageCache = new Map<number, CachedImage>();
+  private readonly prefetchInFlight = new Map<number, PrefetchReservation>();
   private abortController: AbortController | null = null;
-  private prefetchAbortController = new AbortController();
+  private prefetchAbortController: AbortController | null = null;
+  private prefetchGeneration = 0;
 
   constructor() {
-    effect(() => {
-      console.log('[DEBUG ImagePlayer] State changed:', {
-        isVideoReady: this.isVideoReady(),
-        isVideoPlaying: this.isVideoPlaying(),
-        isVideoLoading: this.isVideoLoading(),
-        hasThumbnail: !!this.thumbnailData()
-      });
-    });
-
     effect(() => {
       if (!this.isVideoPlaying()) {
         untracked(() => {
@@ -683,15 +689,17 @@ export class ImagePlayerComponent implements OnDestroy {
           this.translateY.set(0);
           this.isVideoReady.set(false);
           this.isDragging = false;
+          this.cancelForegroundLoad();
+          this.cancelPrefetchSession();
           const kind = resolveFilePreviewKind(current);
+          this.pruneImageCache(kind === 'image' ? current : null);
+          this.imageUrl.set(null);
           if (kind === 'image') {
             this.loadImage(current);
           } else if (kind === 'video') {
             this.isLoading.set(false);
             this.error.set(null);
-            this.imageUrl.set(null);
             this.driveStore.loadThumbnail(current);
-            this.triggerPrefetch();
           } else {
             this.isLoading.set(false);
           }
@@ -701,103 +709,194 @@ export class ImagePlayerComponent implements OnDestroy {
   }
 
   ngOnDestroy() {
-    this.imageCache.forEach(url => URL.revokeObjectURL(url));
-    this.imageCache.clear();
-
-    if (this.abortController) {
-      this.abortController.abort();
-    }
-    this.prefetchAbortController.abort();
+    this.cancelForegroundLoad();
+    this.cancelPrefetchSession();
+    this.clearImageCache();
   }
 
   protected async loadImage(currentFile = this.file()) {
-    if (this.abortController) {
-      this.abortController.abort();
-    }
+    this.cancelForegroundLoad();
 
     this.imageUrl.set(null);
     this.isLoading.set(true);
     this.error.set(null);
-    this.abortController = new AbortController();
-
-    if (this.imageCache.has(currentFile.id)) {
-      this.imageUrl.set(this.imageCache.get(currentFile.id)!);
-      this.isLoading.set(false);
-      this.triggerPrefetch();
-      return;
-    }
-
-    const currentSignal = this.abortController.signal;
+    const controller = new AbortController();
+    this.abortController = controller;
+    const currentSignal = controller.signal;
 
     try {
-      const url = await this.downloadAndDecrypt(currentFile, currentSignal);
-      if (currentSignal.aborted) return;
+      const cached = this.imageCache.get(currentFile.id);
+      if (cached) {
+        this.imageUrl.set(cached.url);
+        this.isLoading.set(false);
+        this.prefetchAdjacentImages();
+        return;
+      }
 
-      this.imageCache.set(currentFile.id, url);
-      this.imageUrl.set(url);
+      const resource = await this.downloadAndDecrypt(currentFile, currentSignal);
+      if (currentSignal.aborted || this.file().id !== currentFile.id) {
+        resource.cleanup();
+        return;
+      }
+
+      this.storeCachedImage(currentFile, resource);
+      this.imageUrl.set(resource.url);
       this.isLoading.set(false);
 
-      this.triggerPrefetch();
+      this.prefetchAdjacentImages();
     } catch (e: any) {
       if (!currentSignal.aborted && e?.message !== 'Aborted' && e?.name !== 'AbortError') {
         console.error('[ImagePlayer] Falha ao carregar imagem', e);
         this.error.set(e?.message || 'Falha ao descriptografar imagem.');
         this.isLoading.set(false);
       }
+    } finally {
+      if (this.abortController === controller) this.abortController = null;
     }
   }
 
-  private triggerPrefetch() {
+  private prefetchAdjacentImages() {
     const pl = this.playlist();
     const idx = this.currentIndex();
-    if (idx === -1) return;
+    if (idx === -1 || resolveFilePreviewKind(this.file()) !== 'image') return;
 
-    const indicesToPrefetch: number[] = [];
-    for (let offset = 1; offset <= 6; offset++) {
-      indicesToPrefetch.push(idx - offset);
-      indicesToPrefetch.push(idx + offset);
+    this.pruneImageCache(this.file());
+    const { generation, signal } = this.beginPrefetchSession();
+    let reservedBytes = this.speculativeSourceBytes(generation);
+    for (const candidateIndex of [idx - 1, idx + 1]) {
+      if (candidateIndex < 0 || candidateIndex >= pl.length) continue;
+      const file = pl[candidateIndex];
+      if (
+        resolveFilePreviewKind(file) !== 'image' ||
+        this.imageCache.has(file.id) ||
+        this.prefetchInFlight.has(file.id)
+      ) continue;
+
+      const sourceBytes = file.sizeBytes;
+      if (
+        sourceBytes <= 0 ||
+        sourceBytes > MAX_PREFETCH_SOURCE_BYTES ||
+        reservedBytes + sourceBytes > MAX_PREFETCH_SOURCE_BYTES
+      ) continue;
+
+      reservedBytes += sourceBytes;
+      this.prefetchInFlight.set(file.id, { generation, sourceBytes });
+      void this.prefetchFile(file, generation, signal);
     }
+  }
 
-    for (const i of indicesToPrefetch) {
-      if (i >= 0 && i < pl.length) {
-        const file = pl[i];
-        if (!this.imageCache.has(file.id) && !this.fetchInFlight.has(file.id)) {
-          this.prefetchFile(file);
-        }
+  private async prefetchFile(file: DriveFile, generation: number, signal: AbortSignal) {
+    try {
+      const resource = await this.downloadAndDecrypt(file, signal);
+      if (
+        signal.aborted ||
+        generation !== this.prefetchGeneration ||
+        resolveFilePreviewKind(this.file()) !== 'image'
+      ) {
+        resource.cleanup();
+        return;
       }
+      this.prefetchInFlight.delete(file.id);
+      this.storeCachedImage(file, resource);
+    } catch (e) {
+      // Ignorar erros no prefetch
+    } finally {
+      const reservation = this.prefetchInFlight.get(file.id);
+      if (reservation?.generation === generation) this.prefetchInFlight.delete(file.id);
+    }
+  }
+
+  private async downloadAndDecrypt(file: DriveFile, signal: AbortSignal): Promise<DecryptedMediaResource> {
+    return this.mediaLoader.load(file, signal);
+  }
+
+  private beginPrefetchSession(): { generation: number; signal: AbortSignal } {
+    this.cancelPrefetchSession();
+    const controller = new AbortController();
+    this.prefetchAbortController = controller;
+    return { generation: this.prefetchGeneration, signal: controller.signal };
+  }
+
+  private cancelForegroundLoad(): void {
+    this.abortController?.abort();
+    this.abortController = null;
+  }
+
+  private cancelPrefetchSession(): void {
+    const oldGeneration = this.prefetchGeneration;
+    this.prefetchAbortController?.abort();
+    this.prefetchAbortController = null;
+    this.prefetchGeneration++;
+    for (const [id, reservation] of this.prefetchInFlight.entries()) {
+      if (reservation.generation === oldGeneration) this.prefetchInFlight.delete(id);
+    }
+  }
+
+  private storeCachedImage(file: DriveFile, resource: DecryptedMediaResource): void {
+    this.imageCache.get(file.id)?.cleanup();
+    this.imageCache.set(file.id, {
+      url: resource.url,
+      sourceBytes: file.sizeBytes,
+      cleanup: resource.cleanup,
+    });
+  }
+
+  private pruneImageCache(current: DriveFile | null): void {
+    if (!current) {
+      this.clearImageCache();
+      return;
+    }
+    const playlist = this.playlist();
+    const idx = playlist.findIndex(file => file.id === current.id);
+    const neighborIds: number[] = [];
+    if (idx > 0) neighborIds.push(playlist[idx - 1].id);
+    if (idx >= 0 && idx < playlist.length - 1) neighborIds.push(playlist[idx + 1].id);
+
+    const keep = new Set<number>([current.id]);
+    let retainedSpeculativeBytes = 0;
+    for (const id of neighborIds) {
+      const cached = this.imageCache.get(id);
+      if (
+        !cached ||
+        !Number.isFinite(cached.sourceBytes) ||
+        cached.sourceBytes <= 0 ||
+        cached.sourceBytes > MAX_PREFETCH_SOURCE_BYTES ||
+        retainedSpeculativeBytes + cached.sourceBytes > MAX_PREFETCH_SOURCE_BYTES
+      ) continue;
+
+      keep.add(id);
+      retainedSpeculativeBytes += cached.sourceBytes;
     }
 
-    const keepRadius = 7;
-    for (const [id, url] of this.imageCache.entries()) {
-      const fileIdx = pl.findIndex(f => f.id === id);
-      if (fileIdx === -1 || Math.abs(fileIdx - idx) > keepRadius) {
-        URL.revokeObjectURL(url);
+    for (const [id, cached] of this.imageCache.entries()) {
+      if (!keep.has(id)) {
+        cached.cleanup();
         this.imageCache.delete(id);
       }
     }
   }
 
-  private async prefetchFile(file: DriveFile) {
-    if (resolveFilePreviewKind(file) !== 'image') return;
-    this.fetchInFlight.add(file.id);
-    try {
-      const url = await this.downloadAndDecrypt(file, this.prefetchAbortController.signal);
-      if (!this.prefetchAbortController.signal.aborted) {
-        this.imageCache.set(file.id, url);
-      }
-    } catch (e) {
-      // Ignorar erros no prefetch
-    } finally {
-      this.fetchInFlight.delete(file.id);
-    }
+  private clearImageCache(): void {
+    for (const cached of this.imageCache.values()) cached.cleanup();
+    this.imageCache.clear();
   }
 
-  private async downloadAndDecrypt(file: DriveFile, signal: AbortSignal): Promise<string> {
-    const resource = await this.mediaLoader.load(file, signal);
-    return resource.url;
+  private speculativeSourceBytes(generation: number): number {
+    const currentId = this.file().id;
+    let bytes = 0;
+    for (const [id, cached] of this.imageCache.entries()) {
+      if (id !== currentId) bytes += cached.sourceBytes;
+    }
+    for (const reservation of this.prefetchInFlight.values()) {
+      if (reservation.generation === generation) bytes += reservation.sourceBytes;
+    }
+    return bytes;
   }
 
   protected onClose() {
+    this.cancelForegroundLoad();
+    this.cancelPrefetchSession();
+    this.clearImageCache();
     if (this.isVideoPlaying() || this.isVideoLoading()) {
       this.closeVideo.emit();
     } else {

@@ -1,6 +1,6 @@
 import { DriveFile } from '../state/drive.store';
 
-export const GOOGLE_DRIVE_SHARING_UNAVAILABLE =
+const GOOGLE_DRIVE_SHARING_UNAVAILABLE =
   'O compartilhamento público não está disponível para arquivos armazenados no Google Drive.';
 
 export type PublicShareAvailability =

@@ -1,6 +1,7 @@
 import { Component, computed, input, output, signal } from '@angular/core';
 import { DriveFile } from '../../state/drive.store';
 import { StorageTarget } from '../../state/drive.types';
+import { formatBytes } from '../../../../shared/utils/format-bytes';
 
 @Component({
   selector: 'app-storage-target-picker',
@@ -11,10 +12,12 @@ import { StorageTarget } from '../../state/drive.types';
         <h2 id="move-title">Mover para...</h2>
         <p><strong>{{ file().decryptedName || file().encryptedName }}</strong> · {{ file().sizeFormatted }}</p>
         <p class="route">{{ sourceLabel() }} → {{ selected()?.label || 'Escolha um destino' }}</p>
+        @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+        @if (loadingTargets()) { <p aria-live="polite">Atualizando destinos...</p> }
         <div class="targets" role="radiogroup" aria-label="Armazenamento de destino">
           @for (target of targets(); track target.key) {
             <button role="radio" [attr.aria-checked]="selected()?.key === target.key" [class.selected]="selected()?.key === target.key"
-                    [disabled]="disabled(target)" (click)="selected.set(target)">
+                    [disabled]="busy() || loadingTargets() || disabled(target)" (click)="selected.set(target)">
               <span class="material-symbols-outlined">{{ target.provider === 'local' ? 'hard_drive' : 'cloud' }}</span>
               <span>{{ target.label }}</span>
               <small>{{ reason(target) }}</small>
@@ -22,7 +25,7 @@ import { StorageTarget } from '../../state/drive.types';
           }
         </div>
         <p class="notice">O ciphertext será transferido em partes. O arquivo original permanece disponível até a validação do destino.</p>
-        <footer><button (click)="cancelled.emit()">Cancelar</button><button class="primary" [disabled]="!selected()" (click)="confirm()">Mover</button></footer>
+        <footer><button [disabled]="busy()" (click)="cancelled.emit()">Cancelar</button><button class="primary" [disabled]="busy() || loadingTargets() || !selected()" (click)="confirm()">{{ busy() ? 'Movendo...' : 'Mover' }}</button></footer>
       </section>
     </div>
   `,
@@ -35,14 +38,19 @@ import { StorageTarget } from '../../state/drive.types';
     .targets button:not(:disabled):hover, .targets button.selected { background: var(--default-hover); border-color: var(--default-accent); }
     .targets button:disabled { opacity: .5; } .targets small { grid-column: 2; color: var(--default-muted); }
     .notice { padding: 8px; background: var(--default-surface); border-radius: 4px; }
+    .error { color: var(--default-danger, #c42b1c); }
     footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; } footer button { padding: 7px 14px; border: 1px solid var(--default-border-strong); border-radius: 4px; background: var(--default-surface); color: inherit; } footer .primary { background: var(--default-accent); color: white; }
   `],
 })
 export class StorageTargetPickerComponent {
+  readonly formatSize = formatBytes;
   readonly file = input.required<DriveFile>();
   readonly targets = input.required<readonly StorageTarget[]>();
   readonly confirmed = output<StorageTarget>();
   readonly cancelled = output<void>();
+  readonly busy = input(false);
+  readonly loadingTargets = input(false);
+  readonly error = input<string | null>(null);
   readonly selected = signal<StorageTarget | null>(null);
   readonly sourceLabel = computed(() => this.file().storageProvider === 'local'
     ? 'Local'
@@ -60,7 +68,7 @@ export class StorageTargetPickerComponent {
     return target.availableBytes === null ? 'Espaço disponível desconhecido' : `${this.formatSize(target.availableBytes)} disponíveis`;
   }
 
-  confirm(): void { const target = this.selected(); if (target && !this.disabled(target)) this.confirmed.emit(target); }
+  confirm(): void { const target = this.selected(); if (!this.busy() && !this.loadingTargets() && target && !this.disabled(target)) this.confirmed.emit(target); }
 
   private isCurrent(target: StorageTarget): boolean {
     return target.provider === this.file().storageProvider && target.externalStorageId === this.file().externalStorageId;
@@ -68,10 +76,4 @@ export class StorageTargetPickerComponent {
 
   private requiredBytes(): number { return this.file().sizeBytes + (this.file().proxySizeBytes ?? 0); }
 
-  private formatSize(bytes: number): string {
-    if (!bytes) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-    return `${Number((bytes / 1024 ** index).toFixed(1))} ${units[index]}`;
-  }
 }

@@ -1,9 +1,29 @@
 import { Injectable, signal, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { lastValueFrom } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { KasumiCryptoService } from './kasumi-crypto.service';
 import { AppStateService } from '../state/app-state.service';
+
+export type SecurityPhraseErrorCode =
+  | 'VAULT_LOCKED'
+  | 'USER_CONTEXT_MISSING'
+  | 'VAULT_NOT_INITIALIZED'
+  | 'CURRENT_PHRASE_INCORRECT'
+  | 'SESSION_EXPIRED'
+  | 'NETWORK_UNAVAILABLE'
+  | 'SERVER_UNAVAILABLE'
+  | 'CRYPTO_OPERATION_FAILED'
+  | 'VAULT_UPDATE_FAILED';
+
+export class SecurityPhraseChangeError extends Error {
+  constructor(readonly code: SecurityPhraseErrorCode) {
+    super(code);
+  }
+}
+
+const VAULT_KEY_SIZE_BYTES = 32;
+type VaultVerificationResponse = { vault_verification?: unknown } | null;
 
 /**
  * Cryptographic service utilizing a two-layer key architecture (Nanika).
@@ -25,6 +45,7 @@ export class CryptoService {
    * Lives strictly in RAM. Wiped on lock/logout.
    */
   private vaultKey: Uint8Array | null = null;
+  private unlockGeneration = 0;
 
   private readonly http = inject(HttpClient);
   private readonly kasumi = inject(KasumiCryptoService);
@@ -45,44 +66,64 @@ export class CryptoService {
     const email = this.appState.user()?.email;
     if (!email) throw new Error('Email do utilizador nao encontrado no estado.');
     const salt = email.trim().toLowerCase();
+    const generation = ++this.unlockGeneration;
 
-    const candidateMasterKey = await this.kasumi.deriveVaultKey(passphrase, salt);
-
-    let vaultVerification: string | null = null;
+    let candidateMasterKey: Uint8Array | null = null;
+    let candidateVaultKey: Uint8Array | null = null;
     try {
-      const res: any = await lastValueFrom(
-        this.http.get(`${environment.apiUrl}/api/vault/verification`, { withCredentials: true })
+      candidateMasterKey = await this.kasumi.deriveVaultKey(passphrase, salt);
+      this.assertCurrentUnlock(generation);
+      const res = await lastValueFrom(
+        this.http.get<VaultVerificationResponse>(`${environment.apiUrl}/api/vault/verification`, { withCredentials: true })
       );
-      vaultVerification = res?.vault_verification ?? null;
-    } catch (e: any) {
-      throw e;
-    }
+      this.assertCurrentUnlock(generation);
+      const vaultVerification = res?.vault_verification;
+      if (typeof vaultVerification !== 'string' || !vaultVerification) {
+        throw new Error('Drive nao inicializado');
+      }
 
-    if (!vaultVerification) {
-      throw new Error('Drive nao inicializado');
-    }
+      let decrypted: string;
+      try {
+        // MAC Check: XChaCha20-Poly1305 verification fails and throws on wrong master key
+        decrypted = await this.kasumi.decryptName(vaultVerification, candidateMasterKey);
+      } catch {
+        throw new Error('WRONG_PASSPHRASE');
+      }
+      candidateMasterKey.fill(0);
+      candidateMasterKey = null;
+      this.assertCurrentUnlock(generation);
 
-    let decrypted: string;
+      // Two-layer architecture: decrypted value is the base64-encoded Vault Key
+      candidateVaultKey = this.decodeVaultKey(decrypted);
+      this.assertCurrentUnlock(generation);
+
+      const previousVaultKey = this.vaultKey;
+      this.vaultKey = candidateVaultKey;
+      candidateVaultKey = null;
+      previousVaultKey?.fill(0);
+      this._isUnlocked.set(true);
+    } finally {
+      candidateMasterKey?.fill(0);
+      candidateVaultKey?.fill(0);
+    }
+  }
+
+  private assertCurrentUnlock(generation: number): void {
+    if (generation !== this.unlockGeneration) throw new Error('UNLOCK_CANCELLED');
+  }
+
+  private decodeVaultKey(encodedKey: string): Uint8Array {
     try {
-      // MAC Check: XChaCha20-Poly1305 verification fails and throws on wrong master key
-      decrypted = await this.kasumi.decryptName(vaultVerification, candidateMasterKey);
-    } catch {
-      throw new Error('WRONG_PASSPHRASE');
-    }
-
-    // Two-layer architecture: decrypted value is the base64-encoded Vault Key
-    try {
-      const binaryString = atob(decrypted);
-      const key = new Uint8Array(binaryString.length);
+      const binaryString = atob(encodedKey);
+      if (binaryString.length !== VAULT_KEY_SIZE_BYTES) throw new Error('invalid vault key length');
+      const key = new Uint8Array(VAULT_KEY_SIZE_BYTES);
       for (let i = 0; i < binaryString.length; i++) {
         key[i] = binaryString.charCodeAt(i);
       }
-      this.vaultKey = key;
+      return key;
     } catch {
       throw new Error('WRONG_PASSPHRASE');
     }
-
-    this._isUnlocked.set(true);
   }
 
   /**
@@ -98,97 +139,115 @@ export class CryptoService {
     if (!email) throw new Error('Email do utilizador nao encontrado no estado.');
     const salt = email.trim().toLowerCase();
 
-    const masterKey = await this.kasumi.deriveVaultKey(passphrase, salt);
-
     // Generate a random 32-byte Vault Key
     const newVaultKey = window.crypto.getRandomValues(new Uint8Array(32));
-    this.vaultKey = newVaultKey;
+    let masterKey: Uint8Array | null = null;
+    try {
+      masterKey = await this.kasumi.deriveVaultKey(passphrase, salt);
 
-    // Encrypt the random Vault Key using the transient Master Key
-    const vaultKeyBase64 = btoa(String.fromCharCode(...newVaultKey));
-    const vaultVerification = await this.kasumi.encryptName(vaultKeyBase64, masterKey);
+      // Encrypt the random Vault Key using the transient Master Key
+      const vaultKeyBase64 = btoa(String.fromCharCode(...newVaultKey));
+      const vaultVerification = await this.kasumi.encryptName(vaultKeyBase64, masterKey);
 
-    // Store encrypted vault verification token on the backend
-    await lastValueFrom(this.http.post(
-      `${environment.apiUrl}/api/vault/init`,
-      { vault_verification: vaultVerification },
-      { withCredentials: true }
-    ));
+      // Store encrypted vault verification token on the backend
+      await lastValueFrom(this.http.post(
+        `${environment.apiUrl}/api/vault/init`,
+        { vault_verification: vaultVerification },
+        { withCredentials: true }
+      ));
 
-    this._isUnlocked.set(true);
+      this.vaultKey = newVaultKey;
+      this._isUnlocked.set(true);
+    } catch (error) {
+      newVaultKey.fill(0);
+      throw error;
+    } finally {
+      if (masterKey) masterKey.fill(0);
+    }
   }
 
-  /**
-   * Changes the user's security phrase.
-   * Derives the old Master Key to verify the phrase, decrypts the Vault Key,
-   * derives the new Master Key, re-encrypts the Vault Key, updates the backend,
-   * and forces the download of a recovery kit text file.
-   *
-   * @param oldPhrase - The user's current security phrase.
-   * @param newPhrase - The user's new security phrase.
-   */
+  /** Changes only the wrapping of the existing Vault Key. */
   async changeSecurityPhrase(oldPhrase: string, newPhrase: string): Promise<void> {
-    if (!this.vaultKey) throw new Error('Drive trancado');
+    if (!this.vaultKey) throw new SecurityPhraseChangeError('VAULT_LOCKED');
 
-    // SECURITY: Normalize email to lowercase and trim whitespace to ensure deterministic salt derivation
     const email = this.appState.user()?.email;
-    if (!email) throw new Error('Email do utilizador nao encontrado no estado.');
+    if (!email) throw new SecurityPhraseChangeError('USER_CONTEXT_MISSING');
     const salt = email.trim().toLowerCase();
+    await this.verifyCurrentSecurityPhrase(oldPhrase, salt);
+    const newVaultVerification = await this.buildVaultVerification(newPhrase, salt);
 
-    const oldMasterKey = await this.kasumi.deriveVaultKey(oldPhrase, salt);
-
-    let vaultVerification: string;
     try {
-      const res: any = await lastValueFrom(
-        this.http.get(`${environment.apiUrl}/api/vault/verification`, { withCredentials: true })
-      );
-      vaultVerification = res?.vault_verification;
-    } catch {
-      throw new Error('Erro ao buscar verificacao do drive');
+      await lastValueFrom(this.http.post(
+        `${environment.apiUrl}/api/vault/init`,
+        { vault_verification: newVaultVerification },
+        { withCredentials: true }
+      ));
+    } catch (error) {
+      if (error instanceof HttpErrorResponse) throw this.classifyPhraseHttpError(error, true);
+      throw new SecurityPhraseChangeError('CRYPTO_OPERATION_FAILED');
     }
+  }
 
-    if (!vaultVerification) throw new Error('Drive nao inicializado');
-
-    // Verify current security phrase using MAC authentication checks
+  private async verifyCurrentSecurityPhrase(phrase: string, salt: string): Promise<void> {
+    let masterKey: Uint8Array | null = null;
     try {
-      await this.kasumi.decryptName(vaultVerification, oldMasterKey);
-    } catch {
-      throw new Error('WRONG_PASSPHRASE');
+      try {
+        masterKey = await this.kasumi.deriveVaultKey(phrase, salt);
+      } catch {
+        throw new SecurityPhraseChangeError('CRYPTO_OPERATION_FAILED');
+      }
+
+      let response: { vault_verification?: unknown } | null;
+      try {
+        response = await lastValueFrom(this.http.get<{ vault_verification?: unknown } | null>(
+          `${environment.apiUrl}/api/vault/verification`, { withCredentials: true }));
+      } catch (error) {
+        throw this.classifyPhraseHttpError(error);
+      }
+
+      const vaultVerification = response?.vault_verification;
+      if (typeof vaultVerification !== 'string' || !vaultVerification) {
+        throw new SecurityPhraseChangeError('VAULT_NOT_INITIALIZED');
+      }
+
+      try {
+        await this.kasumi.decryptName(vaultVerification, masterKey);
+      } catch {
+        throw new SecurityPhraseChangeError('CURRENT_PHRASE_INCORRECT');
+      }
+    } finally {
+      if (masterKey && masterKey !== this.vaultKey) masterKey.fill(0);
     }
+  }
 
-    const newMasterKey = await this.kasumi.deriveVaultKey(newPhrase, salt);
-    const vaultKeyBase64 = btoa(String.fromCharCode(...this.vaultKey));
-    const newVaultVerification = await this.kasumi.encryptName(vaultKeyBase64, newMasterKey);
+  private async buildVaultVerification(phrase: string, salt: string): Promise<string> {
+    let masterKey: Uint8Array | null = null;
+    try {
+      masterKey = await this.kasumi.deriveVaultKey(phrase, salt);
+      const vaultKeyBase64 = btoa(String.fromCharCode(...this.vaultKey!));
+      return await this.kasumi.encryptName(vaultKeyBase64, masterKey);
+    } catch {
+      throw new SecurityPhraseChangeError('CRYPTO_OPERATION_FAILED');
+    } finally {
+      if (masterKey && masterKey !== this.vaultKey) masterKey.fill(0);
+    }
+  }
 
-    // Update backend verification token
-    await lastValueFrom(this.http.post(
-      `${environment.apiUrl}/api/vault/init`,
-      { vault_verification: newVaultVerification },
-      { withCredentials: true }
-    ));
-
-    // Force automatic download of recovery kit file
-    const recoveryText = `=== NANIKA RECOVERY KEY ===\r\n` +
-      `Guarde esta chave em um local seguro. Ela pode ser usada para recuperar seus arquivos.\r\n\r\n` +
-      `Chave do Drive (Vault Key - Base64): ${vaultKeyBase64}\r\n` +
-      `Chave do Drive (Vault Key - Hex): ${Array.from(this.vaultKey).map(b => b.toString(16).padStart(2, '0')).join('')}\r\n` +
-      `============================`;
-
-    const blob = new Blob([recoveryText], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'nanika-recovery.txt';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  private classifyPhraseHttpError(error: unknown, update = false): SecurityPhraseChangeError {
+    const status = error instanceof HttpErrorResponse ? error.status : 0;
+    if (status === 401) return new SecurityPhraseChangeError('SESSION_EXPIRED');
+    if (status === 0) return new SecurityPhraseChangeError('NETWORK_UNAVAILABLE');
+    if (status >= 500) return new SecurityPhraseChangeError('SERVER_UNAVAILABLE');
+    if (!update && status === 404) return new SecurityPhraseChangeError('VAULT_NOT_INITIALIZED');
+    return new SecurityPhraseChangeError('VAULT_UPDATE_FAILED');
   }
 
   /**
    * Locks the vault by wiping the decrypted Vault Key reference from RAM.
    */
   lockVault(): void {
+    this.unlockGeneration++;
+    this.vaultKey?.fill(0);
     this.vaultKey = null;
     this._isUnlocked.set(false);
   }

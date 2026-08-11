@@ -1,17 +1,14 @@
-import { Component, inject, OnInit, output, signal } from '@angular/core';
+import { Component, computed, inject, input, OnInit, output } from '@angular/core';
 import { ComputerStore } from '../../state/computer.store';
 import { StorageDriveCardComponent } from '../storage-drive-card/storage-drive-card.component';
-import { StorageProjectionBrowserComponent } from '../storage-projection-browser/storage-projection-browser.component';
+import { FileListComponent } from '../file-list/file-list.component';
 import { FilePreviewRequest } from '../../services/file-preview-resolver';
 import { DriveFile } from '../../state/drive.store';
-import { StorageTargetPickerComponent } from '../storage-target-picker/storage-target-picker.component';
-import { StorageMoveEngineService } from '../../storage-move/storage-move-engine.service';
-import { StorageTarget } from '../../state/drive.types';
 
 @Component({
   selector: 'app-computer-view',
   standalone: true,
-  imports: [StorageDriveCardComponent, StorageProjectionBrowserComponent, StorageTargetPickerComponent],
+  imports: [StorageDriveCardComponent, FileListComponent],
   template: `
     <div class="computer-view">
       @if (!computer.selectedTarget()) {
@@ -31,10 +28,26 @@ import { StorageTarget } from '../../state/drive.types';
           }
         </section>
       } @else {
-        <app-storage-projection-browser (previewRequested)="previewRequested.emit($event)" (moveRequested)="moveFile.set($event)" (shareRequested)="shareRequested.emit($event)" />
-      }
-      @if (moveFile(); as file) {
-        <app-storage-target-picker [file]="file" [targets]="computer.targets()" (cancelled)="moveFile.set(null)" (confirmed)="startMove(file,$event)" />
+        @if (computer.error() && computer.files().length === 0) {
+          <div class="state" role="alert">{{ computer.error() }} <button (click)="computer.refresh()">Tentar novamente</button></div>
+        } @else if (computer.loading() && computer.files().length === 0) {
+          <div class="state" aria-live="polite">Carregando...</div>
+        } @else {
+          <app-file-list
+            [files]="computer.files()"
+            [viewMode]="'computer'"
+            [movingFileIds]="movingFileIds()"
+            [folderPreviewFiles]="computer.folderPreviewFiles()"
+            [selectionResetKey]="selectionResetKey()"
+            [hasMore]="computer.hasMore()"
+            [loading]="computer.loading()"
+            [emptyMessage]="computer.currentFolderId() === null ? 'Esta unidade não possui arquivos Nanika.' : 'Esta pasta não possui arquivos Nanika.'"
+            (folderOpenRequested)="computer.openFolder($event)"
+            (loadMoreRequested)="computer.loadMore()"
+            (previewRequested)="previewRequested.emit($event)"
+            (storageMoveRequested)="storageMoveRequested.emit($event)"
+            (shareRequested)="shareRequested.emit($event)" />
+        }
       }
     </div>
   `,
@@ -53,17 +66,13 @@ import { StorageTarget } from '../../state/drive.types';
 })
 export class ComputerViewComponent implements OnInit {
   protected readonly computer = inject(ComputerStore);
-  private readonly moveEngine = inject(StorageMoveEngineService);
+  readonly movingFileIds = input<ReadonlySet<number>>(new Set<number>());
   readonly previewRequested = output<FilePreviewRequest>();
   readonly shareRequested = output<DriveFile>();
-  readonly moveFile = signal<DriveFile | null>(null);
+  readonly storageMoveRequested = output<DriveFile>();
+  readonly selectionResetKey = computed(() => this.computer.currentPath().map(segment => `${segment.id}:${segment.name}`).join('/'));
 
   ngOnInit(): void {
-    if (this.computer.targets().length === 0) void this.computer.loadTargets();
-  }
-
-  async startMove(file: DriveFile, target: StorageTarget): Promise<void> {
-    this.moveFile.set(null);
-    await this.moveEngine.start(file,target);
+    void this.computer.loadTargets();
   }
 }

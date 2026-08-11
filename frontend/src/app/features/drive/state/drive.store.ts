@@ -1,22 +1,44 @@
 import { Injectable, signal, computed, inject, untracked, effect } from '@angular/core';
 import { DriveService } from '../services/drive.service';
 import { CryptoService } from '../../../core/crypto/crypto.service';
-import { firstValueFrom, Subscription } from 'rxjs';
+import { firstValueFrom, from } from 'rxjs';
 import { KasumiCryptoService } from '../../../core/crypto/kasumi-crypto.service';
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { DialogService } from '../../../core/dialog/dialog.service';
 import { VideoTranscoderService } from '../services/video-transcoder.service';
 import { environment } from '../../../../environments/environment';
 import { AppStateService, AppStatus } from '../../../core/state/app-state.service';
-import { UploadEngineService } from '../upload/upload-engine.service';
+import { UploadEngineService, generateThumbnail } from '../upload/upload-engine.service';
 import { UploadBatchCoordinatorService } from '../upload/upload-batch-coordinator.service';
-import { PreparedUpload, UploadBatchCandidate, UploadBatchSummary, UploadProvider } from '../upload/upload.models';
+import { GoogleUploadPlan, GoogleUploadSession, LocalUploadPlan, UploadBatchCandidate, UploadBatchSummary, UploadProvider } from '../upload/upload.models';
 import { firstValueFromAbortable, isUploadAbortError } from '../upload/abortable-observable';
 import { FolderUploadCoordinatorService } from '../upload/folder-upload-coordinator.service';
 import { FolderUploadSourceFile } from '../upload/upload.models';
 import { resolveFilePreviewKind } from '../services/file-preview-resolver';
 import { LinkedGoogleAccount, StorageProvider } from './drive.types';
 import { StorageMoveEngineService } from '../storage-move/storage-move-engine.service';
+import { formatBytes } from '../../../shared/utils/format-bytes';
+import { DownloadEngineService } from '../services/download-engine.service';
+import type { DownloadState } from '../services/download-engine.service';
+import { ThumbnailLoaderService } from '../services/thumbnail-loader.service';
+import { DRIVE_TRANSFER_CHUNK_SIZE, DRIVE_CONTROL_REQUEST_DEADLINE_MS, DRIVE_CHUNK_REQUEST_DEADLINE_MS } from '../transfer-limits';
+import { KASUMI_KAS2_METADATA_PREFIX_SIZE, KASUMI_MAX_METADATA_SIZE } from '../../../core/crypto/kasumi-format';
+
+export function buildGoogleAuthorizationUrl(origin: string, state: string): string {
+  const params = new URLSearchParams({
+    client_id: environment.googleClientId,
+    redirect_uri: `${origin}/auth/callback`,
+    response_type: 'code',
+    scope: [
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+    ].join(' '),
+    state,
+    access_type: 'offline',
+    prompt: 'consent select_account',
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
 
 export interface TransferItem {
   id: string;
@@ -33,14 +55,14 @@ export interface TransferItem {
   speedBytesPerSecond?: number;
   groupId?: string;
   isRecovery?: boolean;
-  pendingData?: any;
+  pendingData?: PendingUpload;
   bytesTransferred?: number;
   totalBytes?: number;
   history?: { bytes: number, time: number }[];
 }
 
 export type TransferGroupSource = 'multiple-files' | 'folder-upload' | 'drop-files' | 'drop-folders' | 'mixed-drop';
-export type TransferGroupStatus = 'queued' | 'active' | 'paused' | 'cancelling' | 'success' | 'error' | 'partial' | 'cancelled';
+type TransferGroupStatus = 'queued' | 'active' | 'paused' | 'cancelling' | 'success' | 'error' | 'partial' | 'cancelled';
 
 export interface TransferGroup {
   id: string;
@@ -109,6 +131,20 @@ export interface DriveFile {
   shareFdk?: Uint8Array;
 }
 
+interface UploadRuntimeCommon {
+  transferId: string;
+  file: File;
+  fileId: number;
+  folderId: number | null;
+  provider: UploadProvider;
+  initRes?: any;
+  isHiddenProxy: boolean;
+}
+
+type ActiveUploadRuntime =
+  | (Omit<UploadRuntimeCommon, 'provider'> & { provider: 'local'; plan: LocalUploadPlan })
+  | (Omit<UploadRuntimeCommon, 'provider'> & { provider: 'google_drive'; plan: GoogleUploadPlan; session?: GoogleUploadSession });
+
 export interface QuotaState {
   usedBytes: number;
   maxBytes: number;
@@ -120,7 +156,6 @@ export interface QuotaState {
 export class DriveStore {
   private readonly driveService = inject(DriveService);
   private readonly cryptoService = inject(CryptoService);
-  private readonly http = inject(HttpClient);
   private readonly dialogService = inject(DialogService);
   private readonly videoTranscoder = inject(VideoTranscoderService);
   private readonly appState = inject(AppStateService);
@@ -128,12 +163,14 @@ export class DriveStore {
   private readonly uploadBatchCoordinator = inject(UploadBatchCoordinatorService);
   private readonly folderUploadCoordinator = inject(FolderUploadCoordinatorService);
   private readonly storageMoveEngine = inject(StorageMoveEngineService);
+  private readonly downloadEngine = inject(DownloadEngineService);
+  private readonly thumbnailLoader = inject(ThumbnailLoaderService);
 
   constructor() {
     effect(() => {
       if (this.appState.status() === AppStatus.Locked) {
         untracked(() => {
-          this.thumbnails.set({});
+          this.thumbnailLoader.clear();
         });
       }
     });
@@ -187,7 +224,7 @@ export class DriveStore {
   readonly transfers = signal<TransferItem[]>([]);
   readonly transferGroups = signal<TransferGroup[]>([]);
   readonly transferGroupViews = computed(() => this.transferGroups().map(group => this.toTransferGroupView(group)));
-  readonly thumbnails = signal<Record<number, string>>({});
+  readonly thumbnails = this.thumbnailLoader.thumbnails;
 
   readonly currentFolderId = signal<number | null>(null);
   private readonly backHistory = signal<Array<number | null>>([]);
@@ -197,35 +234,18 @@ export class DriveStore {
   readonly canGoUp = computed(() => this.currentFolderId() !== null);
 
   // States to persist active/paused uploads and downloads in RAM
-  private activeUploads = new Map<string, {
-    transferId: string;
-    file: File;
-    fileId: number;
-    prepared: PreparedUpload;
-    folderId: number | null;
-    provider: UploadProvider;
-    initRes?: any;
-    isHiddenProxy: boolean;
-  }>();
+  private activeUploads = new Map<string, ActiveUploadRuntime>();
 
   private readonly uploadControllers = new Map<string, AbortController>();
   private readonly uploadOperations = new Map<string, Promise<unknown>>();
   private readonly uploadInitializedFileIds = new Map<string, Set<number>>();
+  private readonly recoveringUploadFileIds = new Map<string, number>();
   private readonly uploadCleanupPromises = new Map<string, Promise<void>>();
+  private readonly googleCleanupPendingFileIds = new Map<string, number>();
+  private readonly googleCleanupBlockedTransfers = new Set<string>();
   private readonly uploadGroupControllers = new Map<string, AbortController>();
-
-  private activeDownloads = new Map<string, {
-    file: DriveFile;
-    isGoogleDrive?: boolean;
-    meta?: any;
-    fdk?: Uint8Array;
-    baseNonce?: Uint8Array;
-    expectedSize?: number;
-    decryptedBytes?: number;
-    currentOffset?: number;
-    chunkIndex?: number;
-    plaintextChunks?: Blob[];
-  }>();
+  private uploadRuntimeGeneration = 0;
+  private decryptedPresentationGeneration = 0;
 
   private pausedTransfers = new Set<string>();
   private cancelledTransfers = new Set<string>();
@@ -235,10 +255,6 @@ export class DriveStore {
   private treeReconciliationPromise: Promise<void> | null = null;
   private treeReconciliationRequested = false;
   private treeReconciliationSuccesses = 0;
-  private thumbnailLoadsInFlight = new Map<number, Promise<void>>();
-  private thumbnailRetryCounts = new Map<number, number>();
-  private thumbnailPermanentFailures = new Set<number>();
-
   readonly currentTrashFolderFiles = computed(() => {
     const currentId = this.currentFolderId();
     const trash = this.trashFiles();
@@ -367,9 +383,9 @@ export class DriveStore {
       this.linkedAccounts.set(res.accounts.map(account => ({
         id: account.id,
         accountEmail: account.account_email,
-        accountPicture: account.account_picture,
+        accountPicture: account.account_picture?.trim() || undefined,
         rootFolderId: account.root_folder_id,
-        status: 'ready',
+        status: account.status === 'unlinking' ? 'unlinking' : 'ready',
         usedBytes: 0,
         maxBytes: null,
         availableBytes: null,
@@ -384,18 +400,7 @@ export class DriveStore {
   async linkGoogleDrive(): Promise<void> {
     try {
       const res = await firstValueFrom(this.driveService.generateGoogleState());
-      const state = res.state;
-      
-      const params = new URLSearchParams({
-        client_id: '887718014727-2jnaobb94ff4imesa6iqiodrgivr9mvb.apps.googleusercontent.com',
-        redirect_uri: `${window.location.origin}/auth/callback`,
-        response_type: 'code',
-        scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email',
-        state: state,
-        access_type: 'offline',
-        prompt: 'consent select_account',
-      });
-      window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+      window.location.assign(buildGoogleAuthorizationUrl(window.location.origin, res.state));
     } catch (e) {
       console.error('Failed to generate Google Drive OAuth URL', e);
     }
@@ -413,22 +418,29 @@ export class DriveStore {
   }
 
   clearDecryptedNames(): void {
-    this.files.update(current =>
-      current.map(f => ({ ...f, decryptedName: null }))
-    );
+    this.files.update(current => current.map(f => ({ ...f, decryptedName: null })));
+    this.trashFiles.update(current => current.map(f => ({ ...f, decryptedName: null })));
   }
 
-  private formatSize(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  clearDecryptedPresentationData(): void {
+    this.decryptedPresentationGeneration++;
+    this.clearDecryptedNames();
+    this.transfers.update(list => list.map(transfer => {
+      const hasVaultDerivedRecoveryLabel = transfer.type === 'upload' && !!transfer.pendingData?.encrypted_name;
+      return !hasVaultDerivedRecoveryLabel || transfer.fileName === 'Arquivo Desconhecido'
+        ? transfer
+        : { ...transfer, fileName: 'Arquivo Desconhecido' };
+    }));
+    this.thumbnailLoader.clear();
+  }
+
+  private isCurrentDecryptedPresentation(generation: number): boolean {
+    return generation === this.decryptedPresentationGeneration;
   }
 
   async loadQuota(): Promise<void> {
     try {
-      const res = await firstValueFrom(this.driveService.getQuota());
+      const res = await firstValueFromAbortable(this.driveService.getQuota(), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
       this.quota.set({ 
         usedBytes: res.used_bytes, 
         maxBytes: res.max_bytes,
@@ -441,18 +453,22 @@ export class DriveStore {
   }
 
   async loadTree(): Promise<void> {
+    const generation = this.decryptedPresentationGeneration;
     this.isLoading.set(true);
     try {
       const pageSize = 100;
-      let page = await firstValueFrom(this.driveService.getTree(pageSize, 0));
+      let page = await firstValueFromAbortable(this.driveService.getTree(pageSize, 0), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+      if (!this.isCurrentDecryptedPresentation(generation)) return;
       const folders = page.folders;
       const files = [...page.files];
       let offset = files.length;
 
-      while (page.files.length === pageSize) {
-        page = await firstValueFrom(this.driveService.getTree(pageSize, offset));
+      while (page.has_more) {
+        page = await firstValueFromAbortable(this.driveService.getTree(pageSize, offset, false), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+        if (!this.isCurrentDecryptedPresentation(generation)) return;
         files.push(...page.files);
         offset += page.files.length;
+        if (page.files.length === 0) break;
       }
 
       const parsedFiles: DriveFile[] = [];
@@ -461,6 +477,7 @@ export class DriveStore {
         let decName = null;
         if (this.cryptoService.isVaultUnlocked()) {
           decName = await this.cryptoService.decryptName(folder.encrypted_name);
+          if (!this.isCurrentDecryptedPresentation(generation)) return;
         }
         parsedFiles.push({
           id: folder.id,
@@ -482,6 +499,7 @@ export class DriveStore {
         let decName = null;
         if (this.cryptoService.isVaultUnlocked()) {
           decName = await this.cryptoService.decryptName(file.encrypted_name);
+          if (!this.isCurrentDecryptedPresentation(generation)) return;
         }
         
         const type = decName ? this.fileTypeFromName(decName, file.mime_type) : 'unknown';
@@ -494,7 +512,7 @@ export class DriveStore {
           type: type,
           mimeType: file.mime_type,
           sizeBytes: file.size_bytes,
-          sizeFormatted: this.formatSize(file.size_bytes),
+          sizeFormatted: formatBytes(file.size_bytes),
           modifiedAt: '—',
           owner: 'eu',
           encryptedFdk: file.encrypted_fdk,
@@ -505,11 +523,11 @@ export class DriveStore {
         });
       }
 
+      if (!this.isCurrentDecryptedPresentation(generation)) return;
       this.files.set(parsedFiles);
-      const currentIds = new Set(parsedFiles.map(file => file.id));
-      for (const id of this.thumbnailLoadsInFlight.keys()) if (!currentIds.has(id)) this.thumbnailLoadsInFlight.delete(id);
-      for (const id of this.thumbnailRetryCounts.keys()) if (!currentIds.has(id)) this.thumbnailRetryCounts.delete(id);
-      for (const id of this.thumbnailPermanentFailures) if (!currentIds.has(id)) this.thumbnailPermanentFailures.delete(id);
+      const currentFileIds = new Set(parsedFiles.filter(file => !file.isFolder).map(file => file.id));
+      this.thumbnailLoader.prune(currentFileIds);
+      if (!this.isCurrentDecryptedPresentation(generation)) return;
       await this.loadPendingUploads();
     } catch (e) {
       console.error('Failed to load tree', e);
@@ -518,19 +536,41 @@ export class DriveStore {
     }
   }
 
-  async loadPendingUploads(): Promise<void> {
+  async loadPendingUploads(
+    uploadGeneration = this.uploadRuntimeGeneration,
+    presentationGeneration = this.decryptedPresentationGeneration,
+  ): Promise<void> {
+    if (!this.isCurrentUploadRuntime(uploadGeneration)) return;
     try {
-      const res = await firstValueFrom(this.driveService.getPendingUploads());
-      this.transfers.update(list => list.filter(t => !t.isRecovery));
+      const res = await firstValueFromAbortable(this.driveService.getPendingUploads(), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+      if (!this.isCurrentUploadRuntime(uploadGeneration)) return;
+      const runtimeTransferIds = this.liveUploadRuntimeTransferIds();
+      this.transfers.update(list => list.filter(t =>
+        !t.isRecovery || (this.isLiveUploadTransfer(t) && runtimeTransferIds.has(t.id))
+      ));
+      let liveFileIds = this.liveUploadFileIds();
+      let completedFileIds = this.completedFileIds();
 
-      for (const pending of res.pending_uploads ?? []) {
+      for (const pending of (res.pending_uploads ?? []) as PendingUpload[]) {
+        if (!this.isCurrentUploadRuntime(uploadGeneration)) return;
+        if (liveFileIds.has(pending.id) || completedFileIds.has(pending.id)) continue;
         const id = `pending_${pending.id}`;
-        const decryptedName = await this.cryptoService.decryptName(pending.encrypted_name);
+        let decryptedName: string | null = null;
+        if (this.isCurrentDecryptedPresentation(presentationGeneration) && this.cryptoService.isVaultUnlocked()) {
+          decryptedName = await this.cryptoService.decryptName(pending.encrypted_name);
+        }
+        if (!this.isCurrentUploadRuntime(uploadGeneration)) return;
+        liveFileIds = this.liveUploadFileIds();
+        completedFileIds = this.completedFileIds();
+        if (!this.isCurrentUploadRuntime(uploadGeneration)) return;
+        if (liveFileIds.has(pending.id) || completedFileIds.has(pending.id)) continue;
         const percent = pending.total_chunks > 0 ? Math.round((pending.uploaded_chunks_count / pending.total_chunks) * 100) : 0;
+        const canPublishDecryptedName = this.isCurrentDecryptedPresentation(presentationGeneration)
+          && this.cryptoService.isVaultUnlocked();
 
         this.addTransfer({
           id,
-          fileName: decryptedName || 'Arquivo Desconhecido',
+          fileName: canPublishDecryptedName && decryptedName ? decryptedName : 'Arquivo Desconhecido',
           type: 'upload',
           status: 'paused',
           statusMessage: 'Aguardando arquivo original...',
@@ -544,10 +584,74 @@ export class DriveStore {
     }
   }
 
-  private syncPendingUploads(): Promise<void> {
-    const next = this.pendingUploadsSync.then(() => this.loadPendingUploads());
+  private isLiveUploadTransfer(transfer: TransferItem): boolean {
+    return transfer.type === 'upload'
+      && (transfer.status === 'pending'
+        || transfer.status === 'processing'
+        || transfer.status === 'paused'
+        || transfer.status === 'cancelling');
+  }
+
+  private liveUploadRuntimeTransferIds(): Set<string> {
+    const transferIds = new Set<string>();
+    for (const transferId of this.uploadInitializedFileIds.keys()) transferIds.add(transferId);
+    for (const upload of this.activeUploads.values()) transferIds.add(upload.transferId);
+    for (const transferId of this.recoveringUploadFileIds.keys()) transferIds.add(transferId);
+    return transferIds;
+  }
+
+  private completedFileIds(): Set<number> {
+    return new Set(this.files().filter(file => !file.isFolder).map(file => file.id));
+  }
+
+  private liveUploadFileIds(): Set<number> {
+    const liveTransferIds = new Set(
+      this.transfers().filter(transfer => this.isLiveUploadTransfer(transfer))
+        .map(transfer => transfer.id)
+    );
+    const fileIds = new Set<number>();
+
+    for (const [transferId, ids] of this.uploadInitializedFileIds) {
+      if (liveTransferIds.has(transferId)) for (const fileId of ids) fileIds.add(fileId);
+    }
+    for (const upload of this.activeUploads.values()) {
+      if (liveTransferIds.has(upload.transferId)) fileIds.add(upload.fileId);
+    }
+    for (const [transferId, fileId] of this.recoveringUploadFileIds) {
+      if (liveTransferIds.has(transferId)) fileIds.add(fileId);
+    }
+    return fileIds;
+  }
+
+  private async ensureStorageProviderAvailable(): Promise<void> {
+    if (this.storageProvider() !== 'google_drive') return;
+
+    if (!this.linkedAccounts().some(account => account.status === 'ready')) {
+      await this.loadLinkedAccounts();
+    }
+
+    if (!this.linkedAccounts().some(account => account.status === 'ready')) {
+      throw new Error('Conta Google Drive não vinculada. Vincule uma conta nas configurações antes de enviar arquivos.');
+    }
+  }
+
+  private syncPendingUploads(generation = this.uploadRuntimeGeneration): Promise<void> {
+    const next = this.pendingUploadsSync.then(() => {
+      if (!this.isCurrentUploadRuntime(generation)) return;
+      return this.loadPendingUploads(generation);
+    });
     this.pendingUploadsSync = next.then(() => undefined, () => undefined);
     return next;
+  }
+
+  private isCurrentUploadRuntime(generation: number): boolean {
+    return generation === this.uploadRuntimeGeneration;
+  }
+
+  private throwIfUploadRuntimeStale(generation: number): void {
+    if (!this.isCurrentUploadRuntime(generation)) {
+      throw new DOMException('Upload session detached', 'AbortError');
+    }
   }
 
   private fileTypeFromName(name: string, mimeType?: string): string {
@@ -563,7 +667,8 @@ export class DriveStore {
   private appendCompletedUploadToTree(uploadId: string): void {
     const upload = this.activeUploads.get(uploadId);
     if (!upload || upload.isHiddenProxy) return;
-    const { file, prepared } = upload;
+    const prepared = upload.plan;
+    const { file } = upload;
     this.files.update(files => {
       if (files.some(existing => existing.id === upload.fileId)) return files;
       return [...files, {
@@ -574,7 +679,7 @@ export class DriveStore {
         type: this.fileTypeFromName(file.name, file.type),
         mimeType: file.type || undefined,
         sizeBytes: prepared.encryptedSize,
-        sizeFormatted: this.formatSize(prepared.encryptedSize),
+        sizeFormatted: formatBytes(prepared.encryptedSize),
         modifiedAt: '—',
         owner: 'eu',
         encryptedFdk: prepared.encryptedFdk,
@@ -584,11 +689,9 @@ export class DriveStore {
         isHidden: false
       }];
     });
-    if (prepared.thumbnail) {
-      this.thumbnails.update(thumbnails => ({ ...thumbnails, [upload.fileId]: prepared.thumbnail! }));
+    if (prepared.thumbnail && this.cryptoService.isVaultUnlocked()) {
+      this.thumbnailLoader.setThumbnail(upload.fileId, prepared.thumbnail);
     }
-    this.thumbnailRetryCounts.delete(upload.fileId);
-    this.thumbnailPermanentFailures.delete(upload.fileId);
     this.scheduleTreeReconciliation();
   }
 
@@ -633,12 +736,13 @@ export class DriveStore {
 
   async reDecryptAll(): Promise<void> {
     if (!this.cryptoService.isVaultUnlocked()) return;
-    
+    const generation = this.decryptedPresentationGeneration;
     const currentFiles = untracked(() => this.files());
     const updated = [];
     
     for (const f of currentFiles) {
       const decName = await this.cryptoService.decryptName(f.encryptedName);
+      if (!this.isCurrentDecryptedPresentation(generation)) return;
       
       const type = f.isFolder ? 'folder' : decName ? this.fileTypeFromName(decName, f.mimeType) : 'unknown';
       
@@ -648,12 +752,14 @@ export class DriveStore {
         type: type
       });
     }
+    if (!this.isCurrentDecryptedPresentation(generation)) return;
     this.files.set(updated);
 
     const currentTransfers = untracked(() => this.transfers());
     for (const t of currentTransfers) {
       if (t.isRecovery && t.pendingData?.encrypted_name) {
         const decName = await this.cryptoService.decryptName(t.pendingData.encrypted_name);
+        if (!this.isCurrentDecryptedPresentation(generation)) return;
         if (decName) {
           this.updateTransfer(t.id, { fileName: decName });
         }
@@ -721,38 +827,104 @@ export class DriveStore {
     this.uploadInitializedFileIds.set(transferId, ids);
   }
 
+  private releaseTerminalUploadRuntime(transferId: string): void {
+    this.uploadInitializedFileIds.delete(transferId);
+    this.recoveringUploadFileIds.delete(transferId);
+    for (const [uploadId, upload] of this.activeUploads) {
+      if (upload.transferId !== transferId) continue;
+      this.runtimeFdk(upload).fill(0);
+      this.activeUploads.delete(uploadId);
+    }
+  }
+
+  private runtimeFdk(upload: ActiveUploadRuntime): Uint8Array {
+    return upload.plan.fdk;
+  }
+
+  private async parkPausedUpload(uploadId: string, transferId: string): Promise<void> {
+    if (this.activeUploads.get(uploadId)?.provider !== 'google_drive') return;
+    if (this.cancelledTransfers.has(transferId) || this.uploadControllers.get(transferId)?.signal.aborted) {
+      await this.cleanupCancelledUpload(transferId);
+    }
+  }
+
   private throwIfUploadCancelled(transferId: string): void {
     if (this.cancelledTransfers.has(transferId) || this.uploadControllers.get(transferId)?.signal.aborted) {
       throw new DOMException('Upload cancelled', 'AbortError');
     }
   }
 
-  private cleanupCancelledUpload(transferId: string): Promise<void> {
+  private cleanupCancelledUpload(transferId: string, googleCleanupPendingFileId?: number): Promise<void> {
     const existing = this.uploadCleanupPromises.get(transferId);
     if (existing) return existing;
+    const generation = this.uploadRuntimeGeneration;
+
+    const retainedGoogleFileId = this.googleCleanupPendingFileIds.get(transferId);
+    if (this.googleCleanupBlockedTransfers.has(transferId)
+      && googleCleanupPendingFileId === undefined && retainedGoogleFileId === undefined) {
+      return Promise.reject(new Error('Cleanup Google pendente sem arquivo associado'));
+    }
+    if (retainedGoogleFileId !== undefined && googleCleanupPendingFileId !== undefined
+      && retainedGoogleFileId !== googleCleanupPendingFileId) {
+      return Promise.reject(new Error('Cleanup Google pendente associado a outro arquivo'));
+    }
+    const pendingGoogleFileId = googleCleanupPendingFileId ?? retainedGoogleFileId;
+    if (googleCleanupPendingFileId !== undefined) {
+      this.googleCleanupPendingFileIds.set(transferId, googleCleanupPendingFileId);
+    }
 
     const cleanup = (async () => {
       const fileIds = new Set(this.uploadInitializedFileIds.get(transferId) ?? []);
-      this.uploadInitializedFileIds.delete(transferId);
+      const recoveringFileId = this.recoveringUploadFileIds.get(transferId);
+      if (recoveringFileId !== undefined) fileIds.add(recoveringFileId);
       for (const [uploadId, upload] of this.activeUploads) {
         if (upload.transferId !== transferId && uploadId !== transferId) continue;
         fileIds.add(upload.fileId);
-        upload.prepared.fdk.fill(0);
+        this.runtimeFdk(upload).fill(0);
         this.activeUploads.delete(uploadId);
+      }
+      if (pendingGoogleFileId !== undefined && !fileIds.has(pendingGoogleFileId)) {
+        throw new Error('Arquivo Google pendente nao pertence ao upload cancelado');
       }
       for (const fileId of fileIds) {
         try {
-          await firstValueFrom(this.driveService.trashFile(fileId));
-          await firstValueFrom(this.driveService.hardDeleteFile(fileId));
+          if (fileId === pendingGoogleFileId) {
+            await firstValueFromAbortable(this.driveService.cancelExternalUpload(fileId), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+          } else {
+            await firstValueFromAbortable(this.driveService.trashFile(fileId), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+            await firstValueFromAbortable(this.driveService.hardDeleteFile(fileId), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+          }
         } catch (error: any) {
+          if (fileId === pendingGoogleFileId) {
+            console.error('Falha ao transferir cleanup Google cancelado', error);
+            throw error;
+          }
           if (error?.status !== 404) console.error('Falha ao limpar arquivo cancelado', error);
         }
       }
-      await this.syncPendingUploads();
+      if (this.isCurrentUploadRuntime(generation)) {
+        this.uploadInitializedFileIds.delete(transferId);
+        this.recoveringUploadFileIds.delete(transferId);
+        this.googleCleanupPendingFileIds.delete(transferId);
+        this.googleCleanupBlockedTransfers.delete(transferId);
+        await this.syncPendingUploads(generation);
+      }
     })();
     this.uploadCleanupPromises.set(transferId, cleanup);
-    void cleanup.finally(() => this.uploadCleanupPromises.delete(transferId));
+    const release = () => {
+      if (this.uploadCleanupPromises.get(transferId) === cleanup) {
+        this.uploadCleanupPromises.delete(transferId);
+      }
+    };
+    void cleanup.then(release, release);
     return cleanup;
+  }
+
+  private googleRuntimeFileId(transferId: string): number | undefined {
+    for (const upload of this.activeUploads.values()) {
+      if (upload.transferId === transferId && upload.provider === 'google_drive') return upload.fileId;
+    }
+    return undefined;
   }
 
   private recordCancelledTransfer(transfer: TransferItem): void {
@@ -926,15 +1098,19 @@ export class DriveStore {
   }
 
   async uploadFile(file: File, folderId: number | null = this.currentFolderId(), refresh = true, groupId?: string, transferId?: string): Promise<void> {
+    const generation = this.uploadRuntimeGeneration;
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
+    await this.ensureStorageProviderAvailable();
+    if (!this.isCurrentUploadRuntime(generation)) return;
     const activeTransferId = transferId ?? this.newTransferId();
-    this.ensureUploadController(activeTransferId);
-    const operation = this._doUpload(file, folderId, refresh, groupId, activeTransferId);
+    const controller = this.ensureUploadController(activeTransferId);
+    let operation = this._doUpload(file, folderId, refresh, groupId, activeTransferId, false, generation);
     this.uploadOperations.set(activeTransferId, operation);
 
     try {
       await operation;
     } catch (e: any) {
+      if (!this.isCurrentUploadRuntime(generation)) return;
       if (isUploadAbortError(e) || this.cancelledTransfers.has(activeTransferId)) {
         await this.cleanupCancelledUpload(activeTransferId);
         return;
@@ -951,14 +1127,50 @@ export class DriveStore {
           return;
         }
         if (this.cancelledTransfers.has(activeTransferId) || this.uploadControllers.get(activeTransferId)?.signal.aborted) return;
+        if (!this.isCurrentUploadRuntime(generation)) return;
         const existing = this.files().find(f =>
           !f.isFolder && (f.folderId === folderId) && (f.decryptedName === file.name)
         );
+        const replacedFileId = existing?.id;
         if (existing) {
-          await firstValueFrom(this.driveService.trashFile(existing.id));
-          await firstValueFrom(this.driveService.hardDeleteFile(existing.id));
+          await firstValueFromAbortable(this.driveService.trashFile(replacedFileId!), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+          if (!this.isCurrentUploadRuntime(generation)) return;
         }
-        await this._doUpload(file, folderId, refresh, groupId, activeTransferId);
+        const replacementOperation = this._doUpload(file, folderId, refresh, groupId, activeTransferId, true, generation);
+        operation = replacementOperation;
+        this.uploadOperations.set(activeTransferId, replacementOperation);
+        try {
+          await replacementOperation;
+          if (!this.isCurrentUploadRuntime(generation)) return;
+          const replacementStatus = this.transfers().find(item => item.id === activeTransferId)?.status;
+          if (replacedFileId === undefined || replacementStatus === 'paused') return;
+
+          if (replacementStatus === 'success') {
+            try {
+              if (!this.isCurrentUploadRuntime(generation)) return;
+              await firstValueFromAbortable(this.driveService.hardDeleteFile(replacedFileId), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+            } catch (cleanupError: any) {
+              if (cleanupError?.status !== 404) console.error('Falha ao limpar arquivo substituído', cleanupError?.status ?? 'unknown');
+            }
+          } else if (replacementStatus === 'cancelled') {
+            try {
+              if (!this.isCurrentUploadRuntime(generation)) return;
+              await firstValueFromAbortable(this.driveService.restoreFile(replacedFileId), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+            } catch (restoreError: any) {
+              if (restoreError?.status !== 404) console.error('Falha ao restaurar arquivo substituído', restoreError?.status ?? 'unknown');
+            }
+          }
+        } catch (replacementError) {
+          if (!this.isCurrentUploadRuntime(generation)) return;
+          if (replacedFileId !== undefined) {
+            try {
+              await firstValueFromAbortable(this.driveService.restoreFile(replacedFileId), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+            } catch (restoreError: any) {
+              if (restoreError?.status !== 404) console.error('Falha ao restaurar arquivo substituído', restoreError?.status ?? 'unknown');
+            }
+          }
+          throw replacementError;
+        }
       } else {
         console.error('Falha no upload', e);
         throw e;
@@ -966,7 +1178,10 @@ export class DriveStore {
     } finally {
       await new Promise(r => setTimeout(r, 1500));
       if (this.uploadOperations.get(activeTransferId) === operation) this.uploadOperations.delete(activeTransferId);
-      if (!this.cancelledTransfers.has(activeTransferId)) this.uploadControllers.delete(activeTransferId);
+      if (!this.cancelledTransfers.has(activeTransferId)
+        && this.uploadControllers.get(activeTransferId) === controller) {
+        this.uploadControllers.delete(activeTransferId);
+      }
     }
   }
 
@@ -980,19 +1195,23 @@ export class DriveStore {
       await this.uploadFile(files[0], folderId);
       return;
     }
+    const generation = this.uploadRuntimeGeneration;
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
+    await this.ensureStorageProviderAvailable();
+    if (!this.isCurrentUploadRuntime(generation)) return;
 
     const transferIds = files.map(() => this.newTransferId());
     const transferIdByFile = new Map(files.map((file, index) => [file, transferIds[index]]));
     const groupId = files.length >= 2 ? this.createTransferGroup(source, transferIds) : undefined;
 
-    const individualVideoFiles = environment.logs.ffmpeg === undefined ? [] : files.filter(file =>
-      this.videoTranscoder.isVideo(file) && !this.videoTranscoder.isFormatNativelySupported(file)
+    const individualVideoFiles = files.filter(file =>
+      this.videoTranscoder.isVideo(file) && !this.videoTranscoder.isStreamingFormatSupported(file)
     );
     const batchFiles = files.filter(file => !individualVideoFiles.includes(file));
     if (individualVideoFiles.length > 0) {
       await Promise.all(individualVideoFiles.map(file => this.uploadFile(file, folderId, true, groupId, transferIdByFile.get(file))));
     }
+    if (!this.isCurrentUploadRuntime(generation)) return;
     if (batchFiles.length === 0) return;
     if (batchFiles.length === 1) {
       await this.uploadFile(batchFiles[0], folderId, true, groupId, transferIdByFile.get(batchFiles[0]));
@@ -1008,7 +1227,10 @@ export class DriveStore {
     source: TransferGroupSource = 'folder-upload'
   ): Promise<void> {
     if (!files.length) return;
+    const generation = this.uploadRuntimeGeneration;
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
+    await this.ensureStorageProviderAvailable();
+    if (!this.isCurrentUploadRuntime(generation)) return;
     const transferIds = files.map(() => this.newTransferId());
     const groupId = files.length >= 2 ? this.createTransferGroup(source, transferIds) : undefined;
     transferIds.forEach((id, index) => {
@@ -1018,7 +1240,8 @@ export class DriveStore {
     const signal = groupId ? this.uploadGroupControllers.get(groupId)!.signal : this.uploadSignal(transferIds[0]);
     try {
       const mapped = await this.folderUploadCoordinator.prepare(files, rootParentId, signal);
-      await this.uploadFolderCandidates(mapped, source, transferIds, groupId);
+      if (!this.isCurrentUploadRuntime(generation)) return;
+      await this.uploadFolderCandidates(mapped, source, transferIds, groupId, generation);
     } catch (error) {
       if (!isUploadAbortError(error)) throw error;
     }
@@ -1030,7 +1253,10 @@ export class DriveStore {
     source: TransferGroupSource = 'drop-folders'
   ): Promise<void> {
     if (!sources.length) return;
+    const generation = this.uploadRuntimeGeneration;
     if (!this.cryptoService.isVaultUnlocked()) throw new Error('Drive trancado');
+    await this.ensureStorageProviderAvailable();
+    if (!this.isCurrentUploadRuntime(generation)) return;
     const transferIds = sources.map(() => this.newTransferId());
     const groupId = sources.length >= 2 ? this.createTransferGroup(source, transferIds) : undefined;
     transferIds.forEach((id, index) => {
@@ -1040,27 +1266,38 @@ export class DriveStore {
     const signal = groupId ? this.uploadGroupControllers.get(groupId)!.signal : this.uploadSignal(transferIds[0]);
     try {
       const mapped = await this.folderUploadCoordinator.prepareSources(sources, rootParentId, signal);
-      await this.uploadFolderCandidates(mapped, source, transferIds, groupId);
+      if (!this.isCurrentUploadRuntime(generation)) return;
+      await this.uploadFolderCandidates(mapped, source, transferIds, groupId, generation);
     } catch (error) {
       if (!isUploadAbortError(error)) throw error;
     }
   }
 
-  private async uploadFolderCandidates(mapped: readonly { file: File; folderId: number | null }[], source: TransferGroupSource, transferIds?: readonly string[], groupId?: string): Promise<void> {
+  private async uploadFolderCandidates(
+    mapped: readonly { file: File; folderId: number | null }[],
+    source: TransferGroupSource,
+    transferIds?: readonly string[],
+    groupId?: string,
+    generation = this.uploadRuntimeGeneration,
+  ): Promise<void> {
+    if (!this.isCurrentUploadRuntime(generation)) return;
     const effectiveTransferIds = transferIds ?? mapped.map(() => this.newTransferId());
     const activeMapped = mapped.filter((_, index) => !this.cancelledTransfers.has(effectiveTransferIds[index]));
-    const individualVideoFiles = environment.logs.ffmpeg === undefined ? [] : activeMapped.filter(item =>
-      this.videoTranscoder.isVideo(item.file) && !this.videoTranscoder.isFormatNativelySupported(item.file)
+    const individualVideoFiles = activeMapped.filter(item =>
+      this.videoTranscoder.isVideo(item.file) && !this.videoTranscoder.isStreamingFormatSupported(item.file)
     );
     const batchFiles = activeMapped.filter(item => !individualVideoFiles.includes(item));
     const effectiveGroupId = groupId ?? (mapped.length >= 2 ? this.createTransferGroup(source, effectiveTransferIds) : undefined);
     const transferIdByFile = new Map(mapped.map((item, index) => [item.file, effectiveTransferIds[index]]));
     try {
       await Promise.all(individualVideoFiles.map(item => this.uploadFile(item.file, item.folderId, false, effectiveGroupId, transferIdByFile.get(item.file))));
+      if (!this.isCurrentUploadRuntime(generation)) return;
       if (batchFiles.length > 0) await this.uploadBatchFiles(batchFiles.map(item => ({ ...item, groupId: effectiveGroupId, transferId: transferIdByFile.get(item.file) })), false);
     } finally {
-      await this.flushTreeReconciliation();
-      await this.loadQuota();
+      if (this.isCurrentUploadRuntime(generation)) {
+        await this.flushTreeReconciliation();
+        if (this.isCurrentUploadRuntime(generation)) await this.loadQuota();
+      }
     }
   }
 
@@ -1068,6 +1305,10 @@ export class DriveStore {
     items: readonly { file: File; folderId: number | null; groupId?: string; transferId?: string }[],
     refresh = true
   ): Promise<UploadBatchSummary> {
+    const generation = this.uploadRuntimeGeneration;
+    if (!this.isCurrentUploadRuntime(generation)) {
+      return { total: 0, succeeded: 0, paused: 0, cancelled: 0, failed: 0 };
+    }
     const candidates: UploadBatchCandidate[] = items.map(item => {
       const { file, folderId } = item;
       const transferId = item.transferId ?? this.newTransferId();
@@ -1090,45 +1331,95 @@ export class DriveStore {
         control: {
           shouldPause: () => this.pausedTransfers.has(transferId),
           shouldCancel: () => this.cancelledTransfers.has(transferId),
+          shouldDetach: () => !this.isCurrentUploadRuntime(generation),
           signal: controller.signal,
         }
       };
     });
 
     const operation = this.uploadBatchCoordinator.upload(candidates, {
-      onInitialized: (candidate, prepared, response) => {
+      onInitialized: (candidate, initialized, response) => {
+        if (!this.isCurrentUploadRuntime(generation)) {
+          this.uploadEngine.discardUploadPlan(initialized.plan);
+          return;
+        }
+        this.updateTransfer(candidate.transferId, {
+          statusMessage: 'Preparado para envio...'
+        });
+        this.activeUploads.set(candidate.transferId + '_batch', initialized.provider === 'local'
+          ? {
+            provider: 'local',
+            transferId: candidate.transferId,
+            file: candidate.file,
+            fileId: response.file_id,
+            plan: initialized.plan,
+            folderId: candidate.folderId,
+            initRes: response,
+            isHiddenProxy: false,
+          }
+          : {
+            provider: 'google_drive',
+            transferId: candidate.transferId,
+            file: candidate.file,
+            fileId: response.file_id,
+            plan: initialized.plan,
+            folderId: candidate.folderId,
+            initRes: response,
+            isHiddenProxy: false,
+          });
+        this.markInitialized(candidate.transferId, response.file_id);
+      },
+      onStarted: candidate => {
+        if (!this.isCurrentUploadRuntime(generation)) return;
         this.updateTransfer(candidate.transferId, {
           status: 'processing',
           phase: 'uploading',
           statusMessage: 'Enviando...'
         });
-        this.activeUploads.set(candidate.transferId + '_batch', {
-          transferId: candidate.transferId,
-          file: candidate.file,
-          fileId: response.file_id,
-          prepared,
-          folderId: candidate.folderId,
-          provider: response.storage_provider,
-          initRes: response,
-          isHiddenProxy: false
-        });
-        this.markInitialized(candidate.transferId, response.file_id);
       },
       onProgress: (candidate, progress, transferredBytes, totalBytes) =>
-        this.updateTransferProgress(candidate.transferId, progress, transferredBytes, totalBytes),
-      onResult: result => {
+        this.isCurrentUploadRuntime(generation)
+          ? this.updateTransferProgress(candidate.transferId, progress, transferredBytes, totalBytes)
+          : undefined,
+      onResult: async result => {
+        if (!this.isCurrentUploadRuntime(generation)) return;
         if (result.status === 'success') {
           this.appendCompletedUploadToTree(result.transferId + '_batch');
-          this.activeUploads.delete(result.transferId + '_batch');
+          this.releaseTerminalUploadRuntime(result.transferId);
           this.updateTransfer(result.transferId, { status: 'success', phase: undefined, progress: 100, statusMessage: 'Concluído!' });
         } else if (result.status === 'paused') {
+          const runtime = this.activeUploads.get(result.transferId + '_batch');
+          if (runtime?.provider === 'google_drive' && result.googleSession
+            && runtime.transferId === result.transferId) {
+            runtime.session = result.googleSession;
+          }
+          await this.parkPausedUpload(result.transferId + '_batch', result.transferId);
           this.updateTransfer(result.transferId, { status: 'paused', phase: undefined });
         } else if (result.status === 'cancelled') {
-          this.updateTransfer(result.transferId, { status: 'cancelled', phase: undefined, statusMessage: 'Cancelado' });
-          void this.cleanupCancelledUpload(result.transferId);
+          try {
+            const pendingFileId = result.googleCleanupPending
+              ? this.googleRuntimeFileId(result.transferId)
+              : undefined;
+            if (result.googleCleanupPending && pendingFileId === undefined) {
+              this.googleCleanupBlockedTransfers.add(result.transferId);
+              throw new Error('Arquivo Google pendente nao encontrado para cleanup');
+            }
+            await this.cleanupCancelledUpload(
+              result.transferId,
+              pendingFileId,
+            );
+            this.updateTransfer(result.transferId, { status: 'cancelled', phase: undefined, statusMessage: 'Cancelado' });
+          } catch (error: any) {
+            this.updateTransfer(result.transferId, {
+              status: 'error', phase: undefined,
+              errorMsg: error?.message || 'Falha ao assumir cleanup do upload Google',
+            });
+            await this.syncPendingUploads();
+          }
         } else {
           const error = result.error as { message?: string } | undefined;
           this.updateTransfer(result.transferId, { status: 'error', phase: undefined, errorMsg: error?.message || 'Falha no upload' });
+          this.releaseTerminalUploadRuntime(result.transferId);
           void this.syncPendingUploads();
         }
       }
@@ -1149,9 +1440,9 @@ export class DriveStore {
       }
     }
 
-    if (summary.succeeded > 0) {
+    if (summary.succeeded > 0 && this.isCurrentUploadRuntime(generation)) {
       await this.flushTreeReconciliation();
-      if (refresh) await this.loadQuota();
+      if (refresh && this.isCurrentUploadRuntime(generation)) await this.loadQuota();
     }
     return summary;
   }
@@ -1161,8 +1452,11 @@ export class DriveStore {
     folderId: number | null = null,
     refresh = true,
     groupId?: string,
-    transferId?: string
+    transferId?: string,
+    rollbackFailedReplacement = false,
+    generation = this.uploadRuntimeGeneration,
   ): Promise<void> {
+    this.throwIfUploadRuntimeStale(generation);
     const isVideo = this.videoTranscoder.isVideo(originalFile);
     
     const filesToUpload: { file: File, isHiddenProxy: boolean }[] = [];
@@ -1193,18 +1487,21 @@ export class DriveStore {
 
     let fileToEncrypt = originalFile;
 
-    if (isVideo && environment.logs.ffmpeg !== undefined) {
-       const isSupported = this.videoTranscoder.isFormatNativelySupported(originalFile);
+    if (isVideo) {
+       const isSupported = this.videoTranscoder.isStreamingFormatSupported(originalFile);
        if (!isSupported) {
           const conversionMode = 'pure';
           try {
             this.updateTransfer(activeTransferId, { statusMessage: 'Convertendo vídeo incompatível...' });
+            const signal = this.uploadSignal(activeTransferId);
             const proxyFile = await this.videoTranscoder.transcodeToProxy(originalFile, conversionMode, (p: number, statusMessage: string) => {
+              this.throwIfUploadRuntimeStale(generation);
               this.updateTransfer(activeTransferId, { statusMessage: statusMessage });
               this.updateTransferProgress(activeTransferId, Math.round(p * 100), 0, 100);
               this.throwIfUploadCancelled(activeTransferId);
-            });
+            }, signal);
             fileToEncrypt = new File([proxyFile], originalFile.name, { type: proxyFile.type });
+            this.throwIfUploadRuntimeStale(generation);
             this.throwIfUploadCancelled(activeTransferId);
           } catch (e: any) {
             if (isUploadAbortError(e) || this.cancelledTransfers.has(activeTransferId)) throw e;
@@ -1217,11 +1514,20 @@ export class DriveStore {
     filesToUpload.push({ file: fileToEncrypt, isHiddenProxy: false });
 
     for (const item of filesToUpload) {
-      await this._uploadSingleFile(item.file, folderId, item.isHiddenProxy, activeTransferId, refresh);
+      await this._uploadSingleFile(item.file, folderId, item.isHiddenProxy, activeTransferId, refresh, rollbackFailedReplacement, generation);
     }
   }
 
-  private async _uploadSingleFile(file: File, folderId: number | null, isHiddenProxy: boolean, transferId: string, refresh = true): Promise<void> {
+  private async _uploadSingleFile(
+    file: File,
+    folderId: number | null,
+    isHiddenProxy: boolean,
+    transferId: string,
+    refresh = true,
+    rollbackFailedReplacement = false,
+    generation = this.uploadRuntimeGeneration,
+  ): Promise<void> {
+    if (!this.isCurrentUploadRuntime(generation)) return;
     const uploadId = transferId + (isHiddenProxy ? '_proxy' : '_original');
     
     this.updateTransfer(transferId, {
@@ -1230,46 +1536,77 @@ export class DriveStore {
       statusMessage: isHiddenProxy ? 'Enviando versão otimizada...' : 'Enviando original...',
       progress: 0
     });
+    let upload: LocalUploadPlan | GoogleUploadPlan | undefined;
+    let runtimeHandedOff = false;
     try {
-      const prepared = await this.uploadEngine.prepareUpload(file, this.uploadSignal(transferId));
+      const plan = await this.uploadEngine.planUpload(file, this.uploadSignal(transferId));
+      if (!this.isCurrentUploadRuntime(generation)) {
+        this.uploadEngine.discardUploadPlan(plan);
+        return;
+      }
       this.throwIfUploadCancelled(transferId);
       const activeProvider = this.storageProvider();
+      upload = activeProvider === 'local'
+        ? this.uploadEngine.createLocalUploadPlan(plan)
+        : this.uploadEngine.createGoogleUploadPlan(plan);
+      if (!this.isCurrentUploadRuntime(generation)) {
+        this.uploadEngine.discardUploadPlan(upload);
+        return;
+      }
 
       const initRes = await firstValueFromAbortable(this.driveService.initFileUpload(
         folderId,
-        prepared.encryptedName,
-        prepared.nameHash,
-        prepared.encryptedFdk,
-        prepared.encryptedSize,
-        prepared.totalChunks,
+        upload.encryptedName,
+        upload.nameHash,
+        upload.encryptedFdk,
+        upload.encryptedSize,
+        upload.totalChunks,
         activeProvider,
         undefined,
         undefined,
         undefined,
         isHiddenProxy
-      ), this.uploadSignal(transferId));
+      ), this.uploadSignal(transferId), DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+      if (!this.isCurrentUploadRuntime(generation)) {
+        this.uploadEngine.discardUploadPlan(upload);
+        return;
+      }
       const fileId = initRes.file_id;
       this.markInitialized(transferId, fileId);
       this.throwIfUploadCancelled(transferId);
 
-      this.activeUploads.set(uploadId, {
-        transferId,
-        file,
-        fileId,
-        prepared,
-        folderId,
-        provider: activeProvider,
-        initRes,
-        isHiddenProxy
-      });
+      if (activeProvider === 'local') {
+        this.activeUploads.set(uploadId, {
+          provider: 'local', transferId, file, fileId,
+          plan: upload as LocalUploadPlan, folderId, initRes, isHiddenProxy,
+        });
+      } else {
+        this.activeUploads.set(uploadId, {
+          provider: 'google_drive', transferId, file, fileId,
+          plan: upload as GoogleUploadPlan, folderId, initRes, isHiddenProxy,
+        });
+      }
+      runtimeHandedOff = true;
 
-      await this.runUploadLoop(uploadId, transferId, fileId, prepared, activeProvider, initRes, isHiddenProxy, refresh);
+      await this.runUploadLoop(uploadId, transferId, fileId, isHiddenProxy, refresh, generation);
     } catch (e: any) {
+      if (!this.isCurrentUploadRuntime(generation)) {
+        if (!runtimeHandedOff && upload) this.uploadEngine.discardUploadPlan(upload);
+        return;
+      }
+      if (!runtimeHandedOff && upload) this.uploadEngine.discardUploadPlan(upload);
       if (isUploadAbortError(e) || this.cancelledTransfers.has(transferId)) {
         await this.cleanupCancelledUpload(transferId);
+      } else if (rollbackFailedReplacement && e?.message !== 'PAUSED') {
+        this.updateTransfer(transferId, { status: 'error', phase: undefined, errorMsg: e?.message || 'Falha no upload' });
+        try {
+          await this.cleanupCancelledUpload(transferId);
+        } catch (cleanupError: any) {
+          console.error('Falha ao limpar replacement incompleto', cleanupError?.status ?? 'unknown');
+        }
       } else if (e?.message !== 'PAUSED') {
         this.updateTransfer(transferId, { status: 'error', phase: undefined, errorMsg: e?.message || 'Falha no upload' });
-        this.activeUploads.delete(uploadId);
+        this.releaseTerminalUploadRuntime(transferId);
         await this.syncPendingUploads();
       }
       throw e;
@@ -1280,41 +1617,53 @@ export class DriveStore {
     uploadId: string,
     transferId: string,
     fileId: number,
-    prepared: PreparedUpload,
-    activeProvider: UploadProvider,
-    initRes: any,
     isHiddenProxy: boolean,
-    refresh = true
+    refresh = true,
+    generation = this.uploadRuntimeGeneration,
   ): Promise<void> {
-    const result = await this.uploadEngine.execute(
-      prepared,
-      fileId,
-      activeProvider,
-      initRes,
-      {
-        shouldPause: () => this.pausedTransfers.has(transferId),
-        shouldCancel: () => this.cancelledTransfers.has(transferId),
-        signal: this.uploadSignal(transferId),
-      },
-      {
-        onProgress: ({ progress, transferredBytes, totalBytes }) =>
-          this.updateTransferProgress(transferId, progress, transferredBytes, totalBytes),
+    if (!this.isCurrentUploadRuntime(generation)) return;
+    const runtime = this.activeUploads.get(uploadId);
+    if (!runtime) throw new Error('Upload runtime ausente');
+    const control = {
+      shouldPause: () => this.pausedTransfers.has(transferId),
+      shouldCancel: () => this.cancelledTransfers.has(transferId),
+      shouldDetach: () => !this.isCurrentUploadRuntime(generation),
+      signal: this.uploadSignal(transferId),
+    };
+    const callbacks = {
+      onProgress: ({ progress, transferredBytes, totalBytes }: { progress: number; transferredBytes: number; totalBytes: number }) =>
+        this.isCurrentUploadRuntime(generation)
+          ? this.updateTransferProgress(transferId, progress, transferredBytes, totalBytes)
+          : undefined,
+    };
+    let result;
+    if (runtime.provider === 'local') {
+      result = await this.uploadEngine.executeLocal(runtime.plan, fileId, control, callbacks);
+    } else {
+      result = await this.uploadEngine.executeGoogle(runtime.plan, fileId, runtime.session, control, callbacks);
+      if (!this.isCurrentUploadRuntime(generation)) return;
+      if (result.googleSession) {
+        const current = this.activeUploads.get(uploadId);
+        if (current === runtime && current.provider === 'google_drive') current.session = result.googleSession;
       }
-    );
+    }
 
+    if (!this.isCurrentUploadRuntime(generation)) return;
     if (result.cancelled || this.cancelledTransfers.has(transferId)) {
       this.updateTransfer(transferId, { status: 'cancelled', phase: undefined, statusMessage: 'Cancelado' });
-      await this.cleanupCancelledUpload(transferId);
+      await this.cleanupCancelledUpload(transferId, result.googleCleanupPending ? fileId : undefined);
       return;
     }
     if (result.paused) {
+      await this.parkPausedUpload(uploadId, transferId);
+      if (this.cancelledTransfers.has(transferId)) return;
       this.updateTransfer(transferId, { status: 'paused', phase: undefined });
       return;
     }
     
     // Deleta do activeUploads e apenas marca concluído na UI se não for um proxy escondido ou se for o único arquivo
     this.appendCompletedUploadToTree(uploadId);
-    this.activeUploads.delete(uploadId);
+    this.releaseTerminalUploadRuntime(transferId);
     
     // Se isHiddenProxy é true, apenas removemos e não atualizamos a UI (o arquivo principal vai atualizar a UI quando acabar)
     // Contudo, se só havia o proxy (ex: erro no principal), a UI ficaria travada. Mas o fluxo atual não permite isso.
@@ -1324,6 +1673,7 @@ export class DriveStore {
     
     if (refresh) {
       await this.flushTreeReconciliation();
+      if (!this.isCurrentUploadRuntime(generation)) return;
       await this.loadQuota();
     }
   }
@@ -1340,16 +1690,17 @@ export class DriveStore {
       status: 'processing',
       progress: 0
     });
+    const signal = this.downloadEngine.begin(transferId);
 
     const setProgress = (prog: number, bytes: number, total: number) => {
       this.updateTransferProgress(transferId, prog, bytes, total);
     };
 
+    let fdk: Uint8Array | undefined;
     try {
       setProgress(5, 0, file.sizeBytes);
-      let fdk: Uint8Array;
       if (file.shareFdk) {
-        fdk = file.shareFdk;
+        fdk = new Uint8Array(file.shareFdk);
       } else {
         if (!file.encryptedFdk) throw new Error('FDK ausente nos metadados');
         const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
@@ -1360,25 +1711,53 @@ export class DriveStore {
         }
       }
 
+      if (signal.aborted) {
+        return;
+      }
       setProgress(10, 0, file.sizeBytes);
 
       if (file.storageProvider === 'google_drive') {
-        const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
+        const meta = await firstValueFromAbortable(this.driveService.downloadExternalMetadata(file.id), signal, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+        if (signal.aborted) {
+          return;
+        }
         setProgress(30, 0, file.sizeBytes);
-        
-        const state = { file, isGoogleDrive: true, meta, fdk };
-        this.activeDownloads.set(transferId, state);
-        await this.runGoogleDriveDownload(transferId, state);
+
+        const state: DownloadState = { kind: 'google', file, meta, fdk };
+        const accepted = this.downloadEngine.setState(transferId, state);
+        fdk = undefined;
+        if (!accepted) return;
+        await this.downloadEngine.run(transferId, state, this.downloadCallbacks(transferId));
       } else {
         // Local file chunked download
         setProgress(15, 0, file.sizeBytes);
-        const initialHeaderSize = 1024 * 128;
-        const headerBlob = await firstValueFrom(this.driveService.downloadFileRange(file.id, 0, initialHeaderSize - 1));
-        const { dataOffset, expectedSize } = await this.kasumi.extractMetadata(headerBlob, fdk);
+        const maxHeaderSize = KASUMI_MAX_METADATA_SIZE + KASUMI_KAS2_METADATA_PREFIX_SIZE;
+        const maxRequestedSize = Math.min(Math.max(file.sizeBytes, 1), maxHeaderSize);
+        let requestedSize = Math.min(128 * 1024, maxRequestedSize);
+        let headerBlob: Blob;
+        let dataOffset: number;
+        let expectedSize: number;
+        while (true) {
+          headerBlob = await firstValueFromAbortable(
+            this.driveService.downloadFileRange(file.id, 0, requestedSize - 1),
+            signal, DRIVE_CHUNK_REQUEST_DEADLINE_MS);
+          if (signal.aborted) return;
+          try {
+            ({ dataOffset, expectedSize } = await this.kasumi.extractMetadata(headerBlob, fdk, file.sizeBytes));
+            if (signal.aborted) return;
+            break;
+          } catch (error) {
+            const nextSize = this.nextMetadataFetchSize(error, requestedSize, maxRequestedSize);
+            if (nextSize === undefined) throw error;
+            requestedSize = nextSize;
+          }
+        }
         const baseNonce = new Uint8Array(await headerBlob.slice(0, 24).arrayBuffer());
+        if (signal.aborted) return;
 
         const plaintextChunks: Blob[] = [];
-        const state = {
+        const state: DownloadState = {
+          kind: 'local',
           file,
           fdk,
           baseNonce,
@@ -1388,123 +1767,32 @@ export class DriveStore {
           currentOffset: dataOffset,
           chunkIndex: 0
         };
-        this.activeDownloads.set(transferId, state);
-
-        await this.runDownloadLoop(transferId, state);
+        const accepted = this.downloadEngine.setState(transferId, state);
+        fdk = undefined;
+        if (!accepted) return;
+        await this.downloadEngine.run(transferId, state, this.downloadCallbacks(transferId));
       }
     } catch (e: any) {
+      if (signal.aborted || isUploadAbortError(e)) {
+        return;
+      }
       if (e?.message !== 'PAUSED') {
         console.error('Falha no download', e);
         this.updateTransfer(transferId, { status: 'error', errorMsg: e?.message || 'Falha no download' });
-        this.activeDownloads.delete(transferId);
+        this.downloadEngine.deleteState(transferId);
       }
       throw e;
+    } finally {
+      fdk?.fill(0);
     }
   }
 
-  private async runGoogleDriveDownload(transferId: string, state: any): Promise<void> {
-    const { file, meta, fdk } = state;
-
-    const setProgress = (prog: number, bytes: number, total: number) => {
-      this.updateTransferProgress(transferId, prog, bytes, total);
+  private downloadCallbacks(id: string) {
+    return {
+      setProgress: (progress: number, bytes: number, total: number) => this.updateTransferProgress(id, progress, bytes, total),
+      updateTransfer: (transferId: string, changes: Partial<TransferItem>) => this.updateTransfer(transferId, changes),
+      isPaused: (transferId: string) => this.pausedTransfers.has(transferId),
     };
-
-    let encryptedBlob;
-    try {
-      encryptedBlob = await firstValueFrom(
-        this.driveService.downloadExternalFile(
-          `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`,
-          meta.access_token
-        )
-      );
-    } catch (e: any) {
-      if (e.message === 'PAUSED') {
-        return;
-      }
-      throw e;
-    }
-
-    if (this.pausedTransfers.has(transferId)) {
-      this.updateTransfer(transferId, { status: 'paused' });
-      return;
-    }
-
-    setProgress(70, encryptedBlob.size / 2, encryptedBlob.size);
-    const decryptedBlob = await this.kasumi.decryptFile(encryptedBlob, fdk);
-    setProgress(95, encryptedBlob.size, encryptedBlob.size);
-
-    const url = URL.createObjectURL(decryptedBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.decryptedName || 'arquivo_desconhecido';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    this.updateTransfer(transferId, { status: 'success', progress: 100, statusMessage: 'Concluído!' });
-    this.activeDownloads.delete(transferId);
-  }
-
-  private async runDownloadLoop(transferId: string, state: any): Promise<void> {
-    const CHUNK_SIZE = 4 * 1024 * 1024;
-    const { file, fdk, baseNonce, expectedSize, plaintextChunks } = state;
-
-    while (state.decryptedBytes < expectedSize) {
-      if (this.pausedTransfers.has(transferId)) {
-        this.updateTransfer(transferId, { status: 'paused' });
-        return;
-      }
-
-      const plaintextSize = Math.min(CHUNK_SIZE, expectedSize - state.decryptedBytes);
-      const encryptedSize = 16 + plaintextSize;
-
-      const start = state.currentOffset;
-      const end = state.currentOffset + encryptedSize - 1;
-
-      const percent = Math.round((state.decryptedBytes / expectedSize) * 100);
-      this.updateTransferProgress(transferId, percent, state.decryptedBytes, expectedSize);
-
-      const chunkBlob = await firstValueFrom(this.driveService.downloadFileRange(file.id, start, end));
-      const chunkBuffer = await chunkBlob.arrayBuffer();
-      const chunkUint8 = new Uint8Array(chunkBuffer);
-
-      if (chunkUint8.length < encryptedSize) {
-        throw new Error('File corrupted or truncated');
-      }
-
-      const mac = chunkUint8.slice(0, 16);
-      const ciphertext = chunkUint8.slice(16);
-
-      const plaintext = await this.kasumi.decryptFileChunk(
-        ciphertext,
-        mac,
-        baseNonce,
-        state.chunkIndex,
-        fdk
-      );
-
-      plaintextChunks.push(new Blob([plaintext as any]));
-
-      state.decryptedBytes += plaintextSize;
-      state.currentOffset += encryptedSize;
-      state.chunkIndex++;
-    }
-
-    const decryptedBlob = new Blob(plaintextChunks, { type: 'application/octet-stream' });
-    this.updateTransferProgress(transferId, 95, expectedSize, expectedSize);
-
-    const url = URL.createObjectURL(decryptedBlob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file.decryptedName || 'arquivo_desconhecido';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    this.updateTransfer(transferId, { status: 'success', progress: 100, statusMessage: 'Concluído!' });
-    this.activeDownloads.delete(transferId);
   }
 
   pauseTransfer(id: string) {
@@ -1516,6 +1804,17 @@ export class DriveStore {
   }
 
   async resumeUpload(id: string) {
+    const generation = this.uploadRuntimeGeneration;
+    const operation = this.uploadOperations.get(id);
+    if (operation) {
+      try {
+        await operation;
+      } catch {
+        if (this.cancelledTransfers.has(id)) return;
+      }
+    }
+    if (!this.isCurrentUploadRuntime(generation)) return;
+
     const uploadsToResume = [];
     for (const [uploadId, data] of this.activeUploads.entries()) {
       if (data.transferId === id) {
@@ -1525,29 +1824,60 @@ export class DriveStore {
 
     if (uploadsToResume.length === 0) return;
 
+    const controller = new AbortController();
+    this.uploadControllers.set(id, controller);
+    const resumeOperation = this.resumeUploadRuntime(id, uploadsToResume, controller, generation);
+    this.uploadOperations.set(id, resumeOperation);
+
+    try {
+      await resumeOperation;
+    } finally {
+      if (this.uploadOperations.get(id) === resumeOperation) this.uploadOperations.delete(id);
+      if (this.uploadControllers.get(id) === controller) this.uploadControllers.delete(id);
+    }
+  }
+
+  private async resumeUploadRuntime(
+    id: string,
+    uploadsToResume: Array<{ uploadId: string; data: ActiveUploadRuntime }>,
+    controller: AbortController,
+    generation = this.uploadRuntimeGeneration,
+  ): Promise<void> {
+    if (!this.isCurrentUploadRuntime(generation)) return;
     this.pausedTransfers.delete(id);
     this.updateTransfer(id, { status: 'processing', speed: 'Calculando...', eta: '--:--' });
 
     try {
       for (const { uploadId, data } of uploadsToResume) {
-        if (this.pausedTransfers.has(id)) return; // Se pausou novamente entre uploads
-        
+        if (!this.isCurrentUploadRuntime(generation)) return;
+        if (this.pausedTransfers.has(id)) return;
+
         this.updateTransfer(id, {
           statusMessage: data.isHiddenProxy ? 'Retomando versão otimizada...' : 'Retomando original...'
         });
-        
-        const activeProvider = data.provider;
-        const initRes = data.initRes || { access_token: '', root_folder_id: '' };
-        await this.runUploadLoop(uploadId, id, data.fileId, data.prepared, activeProvider, initRes, data.isHiddenProxy);
+
+        if (data.provider === 'local') {
+          await this.runUploadLoop(uploadId, id, data.fileId, data.isHiddenProxy, true, generation);
+          continue;
+        }
+        await this.runUploadLoop(uploadId, id, data.fileId, data.isHiddenProxy, true, generation);
       }
     } catch (e: any) {
+      if (!this.isCurrentUploadRuntime(generation)) return;
+      if (isUploadAbortError(e) || this.cancelledTransfers.has(id) || controller.signal.aborted) {
+        await this.cleanupCancelledUpload(id);
+        return;
+      }
       if (e?.message !== 'PAUSED') {
+        this.releaseTerminalUploadRuntime(id);
         this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha no upload' });
+        await this.syncPendingUploads();
       }
     }
   }
 
   async cancelTransfer(id: string) {
+    const generation = this.uploadRuntimeGeneration;
     const transfer = this.transfers().find(t => t.id === id);
     if (!transfer || transfer.status === 'success' || transfer.status === 'error' || transfer.status === 'cancelled') return;
     const wasRecovery = !!transfer.isRecovery;
@@ -1555,22 +1885,60 @@ export class DriveStore {
     this.cancelledTransfers.add(id);
     this.updateTransfer(id, { status: 'cancelling', phase: transfer.phase, statusMessage: 'Cancelando...' });
     this.recordCancelledTransfer(transfer);
-    this.uploadControllers.get(id)?.abort();
     this.pausedTransfers.delete(id);
 
-    const operation = this.uploadOperations.get(id);
-    if (operation) await operation.catch(() => undefined);
-    await this.cleanupCancelledUpload(id);
+    if (transfer.type === 'download') {
+      this.downloadEngine.cancel(id);
+      this.updateTransfer(id, { status: 'cancelled', phase: undefined, statusMessage: 'Cancelado' });
+      this.cancelledTransfers.delete(id);
+      return;
+    }
 
-    if (transfer.isRecovery && transfer.pendingData) {
+    const recoveryRuntimeOwnedBeforeJoin = wasRecovery
+      && [...this.activeUploads.values()].some(upload => upload.transferId === id);
+    const recoveryCleanupBeforeJoin = wasRecovery ? this.uploadCleanupPromises.get(id) : undefined;
+    this.uploadControllers.get(id)?.abort();
+
+    const operation = this.uploadOperations.get(id);
+    let operationRejected = false;
+    let operationError: unknown;
+    if (operation) {
       try {
-        await firstValueFrom(this.driveService.trashFile(transfer.pendingData.id));
-        await firstValueFrom(this.driveService.hardDeleteFile(transfer.pendingData.id));
+        await operation;
+      } catch (error) {
+        operationRejected = true;
+        operationError = error;
+      }
+    }
+    if (!this.isCurrentUploadRuntime(generation)) return;
+    const recoveryOwnedByCleanup = wasRecovery && (
+      recoveryRuntimeOwnedBeforeJoin
+      || !!recoveryCleanupBeforeJoin
+      || this.recoveringUploadFileIds.has(id)
+      || this.uploadInitializedFileIds.has(id)
+      || [...this.activeUploads.values()].some(upload => upload.transferId === id)
+      || this.uploadCleanupPromises.has(id)
+    );
+    if (recoveryCleanupBeforeJoin) {
+      await recoveryCleanupBeforeJoin;
+    } else if (!(operation && recoveryRuntimeOwnedBeforeJoin)) {
+      await this.cleanupCancelledUpload(id);
+    }
+    if (!this.isCurrentUploadRuntime(generation)) return;
+    if (operation && recoveryRuntimeOwnedBeforeJoin && operationRejected) {
+      throw operationError;
+    }
+
+    if (transfer.isRecovery && transfer.pendingData && !recoveryOwnedByCleanup) {
+      try {
+        await firstValueFromAbortable(this.driveService.trashFile(transfer.pendingData.id), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+        await firstValueFromAbortable(this.driveService.hardDeleteFile(transfer.pendingData.id), undefined, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
       } catch (e: any) {
         if (e?.status !== 404) console.error('Falha ao limpar arquivo pendente', e);
       }
     }
 
+    if (!this.isCurrentUploadRuntime(generation)) return;
     const current = this.transfers().find(item => item.id === id);
     if (!current && wasRecovery) {
       this.addTransfer({
@@ -1586,99 +1954,321 @@ export class DriveStore {
     this.cancelledTransfers.delete(id);
   }
 
-  async recoverUpload(id: string, pendingData: PendingUpload, file: File) {
-    // 1. Decriptar a chave FDK do arquivo
-    const fdkBase64 = await this.cryptoService.decryptName(pendingData.encrypted_fdk);
-    if (!fdkBase64) throw new Error('Não foi possível decifrar a chave do arquivo pendente.');
-    const fdkChars = atob(fdkBase64);
-    const fdk = new Uint8Array(fdkChars.length);
-    for (let i = 0; i < fdkChars.length; i++) fdk[i] = fdkChars.charCodeAt(i);
-
-    // 2. Tentar recuperar o baseNonce do servidor se o upload já tiver chunks
-    let baseNonce: Uint8Array | undefined = undefined;
-    if (pendingData.uploaded_chunks_count > 0) {
-      this.updateTransfer(id, { statusMessage: 'Recuperando contexto de criptografia...' });
-      try {
-        const res = await firstValueFrom(this.http.get(`${environment.apiUrl}/files/${pendingData.id}/download`, {
-          responseType: 'arraybuffer',
-          headers: { 'Range': 'bytes=0-23' }
-        }));
-        if (res && res.byteLength === 24) {
-          baseNonce = new Uint8Array(res);
-        }
-      } catch (e) {
-        console.warn('Falha ao obter baseNonce do servidor. Gerando um novo.', e);
-      }
+  private throwIfRecoveryCancelled(transferId: string, signal: AbortSignal, generation = this.uploadRuntimeGeneration): void {
+    if (!this.isCurrentUploadRuntime(generation) || signal.aborted || this.cancelledTransfers.has(transferId)) {
+      throw new DOMException('Upload cancelled', 'AbortError');
     }
+  }
 
-    // 3. Recriptografar o arquivo localmente com a mesma FDK e mesmo baseNonce
-    this.updateTransfer(id, { status: 'processing', statusMessage: 'Recriptografando arquivo local...', speed: 'Calculando...', eta: '--:--' });
-    const encryptedBlob = await this.kasumi.encryptFile(file, fdk, baseNonce);
+  private validateRecoveryGeometry(pending: PendingUpload, encryptedSize: number): void {
+    if (encryptedSize !== pending.size_bytes) {
+      throw new Error('O arquivo selecionado não reproduz o upload pendente.');
+    }
+    const expectedChunks = Math.ceil(encryptedSize / DRIVE_TRANSFER_CHUNK_SIZE);
+    if (expectedChunks !== pending.total_chunks) {
+      throw new Error('Geometria de chunks incompatível com o upload pendente.');
+    }
+  }
 
-    // 3. Checar se o tamanho gerado bate com o servidor
-    // A tolerância de tamanho aqui não é estrita porque o proxy pode ter mudado, mas proxies são ocultos.
-    // Para original, o tamanho criptografado é sempre o mesmo se o arquivo for o mesmo.
-    const fileId = pendingData.id;
-    const activeProvider = pendingData.storage_provider;
-    const totalChunks = pendingData.total_chunks;
-    
-    // Preparar initRes dummy (necessário apenas para google_drive, mas google_drive recomeça do zero)
-    const initRes = { access_token: '', root_folder_id: '' };
-
-    this.pausedTransfers.delete(id);
-    
-    // Adicionar no activeUploads
-    const uploadId = id + '_recovery';
-    this.activeUploads.set(uploadId, {
-      transferId: id,
+  private async prepareFreshLocalRecovery(
+    transferId: string,
+    pending: PendingUpload,
+    file: File,
+    fdk: Uint8Array,
+    signal: AbortSignal,
+    nameHash = '',
+    generation = this.uploadRuntimeGeneration,
+  ): Promise<LocalUploadPlan> {
+    const thumbnail = await generateThumbnail(file, signal);
+    this.throwIfRecoveryCancelled(transferId, signal, generation);
+    const metadata = thumbnail ? JSON.stringify({ thumb: thumbnail }) : undefined;
+    const encryptedSize = this.kasumi.calculateEncryptedSize(file.size, metadata);
+    this.validateRecoveryGeometry(pending, encryptedSize);
+    return this.uploadEngine.createLocalUploadPlan({
       file,
-      fileId,
-      prepared: {
-        file,
-        encryptedBlob,
-        encryptedName: pendingData.encrypted_name,
-        nameHash: '',
-        encryptedFdk: pendingData.encrypted_fdk,
-        fdk,
-        totalChunks,
-        encryptedSize: encryptedBlob.size,
-      },
-      folderId: pendingData.folder_id,
-      provider: activeProvider,
-      initRes,
-      isHiddenProxy: false
+      encryptedName: pending.encrypted_name,
+      nameHash,
+      encryptedFdk: pending.encrypted_fdk,
+      fdk,
+      totalChunks: pending.total_chunks,
+      encryptedSize,
+      thumbnail: thumbnail ?? undefined,
     });
+  }
 
-    this.updateTransfer(id, { statusMessage: 'Retomando upload...' });
-
-    // Retomar upload do original via chunking
+  private async prepareFreshGoogleRecovery(
+    transferId: string,
+    pending: PendingUpload,
+    file: File,
+    fdk: Uint8Array,
+    signal: AbortSignal,
+    nameHash = '',
+    generation = this.uploadRuntimeGeneration,
+  ): Promise<GoogleUploadPlan> {
+    const thumbnail = await generateThumbnail(file, signal);
+    this.throwIfRecoveryCancelled(transferId, signal, generation);
+    const metadata = thumbnail ? JSON.stringify({ thumb: thumbnail }) : undefined;
+    const encryptedSize = this.kasumi.calculateEncryptedSize(file.size, metadata);
+    this.validateRecoveryGeometry(pending, encryptedSize);
+    const baseNonce = this.kasumi.generateBaseNonce();
     try {
-      await this.runUploadLoop(uploadId, id, fileId, this.activeUploads.get(uploadId)!.prepared, activeProvider, initRes, false);
-      
-      // Quando concluir
-      this.transfers.update(list => list.map(t => t.id === id ? { ...t, isRecovery: false } : t));
-    } catch (e: any) {
-      if (e?.message !== 'PAUSED') {
-        this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha na recuperação' });
+      return this.uploadEngine.createGoogleUploadPlan({
+        file,
+        encryptedName: pending.encrypted_name,
+        nameHash,
+        encryptedFdk: pending.encrypted_fdk,
+        fdk,
+        totalChunks: pending.total_chunks,
+        encryptedSize,
+        thumbnail: thumbnail ?? undefined,
+      }, baseNonce, metadata);
+    } catch (error) {
+      baseNonce.fill(0);
+      throw error;
+    }
+  }
+
+  private async readPendingKasumiContext(
+    transferId: string,
+    pending: PendingUpload,
+    fdk: Uint8Array,
+    signal: AbortSignal,
+    generation = this.uploadRuntimeGeneration,
+  ): Promise<{ baseNonce: Uint8Array; metadata: string | null; expectedSize: number }> {
+    const maxRequestedSize = Math.min(pending.size_bytes, DRIVE_TRANSFER_CHUNK_SIZE);
+    if (maxRequestedSize < 24) throw new Error('Contexto criptográfico incompleto.');
+    let requestedSize = Math.min(128 * 1024, maxRequestedSize);
+
+    while (true) {
+      const blob = await firstValueFromAbortable(
+        this.driveService.downloadPendingUploadRecoveryPrefix(pending.id, requestedSize - 1),
+        signal, DRIVE_CHUNK_REQUEST_DEADLINE_MS);
+      this.throwIfRecoveryCancelled(transferId, signal, generation);
+      if (blob.size < 24) throw new Error('Contexto criptográfico incompleto.');
+
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      this.throwIfRecoveryCancelled(transferId, signal, generation);
+      const baseNonce = bytes.slice(0, 24);
+      bytes.fill(0);
+      try {
+        const extracted = await this.kasumi.extractMetadata(blob, fdk, pending.size_bytes);
+        this.throwIfRecoveryCancelled(transferId, signal, generation);
+        return { baseNonce, metadata: extracted.metadata, expectedSize: extracted.expectedSize };
+      } catch (error) {
+        baseNonce.fill(0);
+        const message = error instanceof Error ? error.message : String(error);
+        const partial = /partial blob|full metadata|metadata block/i.test(message);
+        if (!partial || requestedSize >= maxRequestedSize) throw error;
+        requestedSize = Math.min(maxRequestedSize, Math.max(requestedSize * 4, 1024 * 1024));
       }
     }
   }
 
+  private nextMetadataFetchSize(error: unknown, requestedSize: number, maxRequestedSize: number): number | undefined {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/partial blob|full metadata|metadata block/i.test(message) || requestedSize >= maxRequestedSize) return;
+    return Math.min(maxRequestedSize, Math.max(requestedSize * 4, 1024 * 1024));
+  }
+
+  private async prepareLocalRecovery(
+    transferId: string,
+    pending: PendingUpload,
+    file: File,
+    fdk: Uint8Array,
+    signal: AbortSignal,
+    generation = this.uploadRuntimeGeneration,
+  ): Promise<LocalUploadPlan> {
+    const response = await firstValueFromAbortable(this.driveService.getUploadedChunks(pending.id), signal, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+    this.throwIfRecoveryCancelled(transferId, signal, generation);
+    const uploadedChunks = new Set(response.uploaded_chunks ?? []);
+    if ([...uploadedChunks].some(index => !Number.isInteger(index) || index < 0 || index >= pending.total_chunks)) {
+      throw new Error('Índice de chunk incompatível com o upload pendente.');
+    }
+
+    if (uploadedChunks.size === 0) {
+      return this.prepareFreshLocalRecovery(transferId, pending, file, fdk, signal, '', generation);
+    }
+    if (!uploadedChunks.has(0)) throw new Error('Contexto criptográfico incompleto.');
+
+    this.updateTransfer(transferId, { statusMessage: 'Recuperando contexto de criptografia...' });
+    const context = await this.readPendingKasumiContext(transferId, pending, fdk, signal, generation);
+    let nonceTransferred = false;
+    try {
+      this.throwIfRecoveryCancelled(transferId, signal, generation);
+      if (context.expectedSize !== file.size) {
+        throw new Error('O arquivo selecionado não corresponde ao upload pendente.');
+      }
+      this.updateTransfer(transferId, {
+        status: 'processing',
+        statusMessage: 'Preparando retomada local...',
+        speed: 'Calculando...',
+        eta: '--:--',
+      });
+      const encryptedSize = this.kasumi.calculateEncryptedSize(file.size, context.metadata ?? undefined);
+      this.validateRecoveryGeometry(pending, encryptedSize);
+      const plan = this.uploadEngine.createLocalUploadPlan({
+        file,
+        encryptedName: pending.encrypted_name,
+        nameHash: '',
+        encryptedFdk: pending.encrypted_fdk,
+        fdk,
+        totalChunks: pending.total_chunks,
+        encryptedSize,
+      }, context.baseNonce, context.metadata ?? undefined);
+      nonceTransferred = true;
+      return plan;
+    } finally {
+      if (!nonceTransferred) context.baseNonce.fill(0);
+    }
+  }
+
+  recoverUpload(id: string, pendingData: PendingUpload, file: File): Promise<void> {
+    const generation = this.uploadRuntimeGeneration;
+    const existing = this.uploadOperations.get(id);
+    if (existing) return existing as Promise<void>;
+
+    const controller = this.ensureUploadController(id);
+    const operation = this.executeRecovery(id, pendingData, file, controller, generation);
+    this.uploadOperations.set(id, operation);
+    const release = () => {
+      if (this.uploadOperations.get(id) !== operation) return;
+      this.uploadOperations.delete(id);
+      if (this.uploadControllers.get(id) === controller) {
+        this.uploadControllers.delete(id);
+      }
+    };
+    void operation.then(release, release);
+    return operation;
+  }
+
+  private async executeRecovery(
+    id: string,
+    pendingData: PendingUpload,
+    file: File,
+    controller: AbortController,
+    generation = this.uploadRuntimeGeneration,
+  ): Promise<void> {
+    if (!this.isCurrentUploadRuntime(generation)) return;
+    this.recoveringUploadFileIds.set(id, pendingData.id);
+    let fdk: Uint8Array | undefined;
+    let runtimeOwnsFdk = false;
+
+    try {
+      const throwIfCancelled = () => this.throwIfRecoveryCancelled(id, controller.signal, generation);
+      throwIfCancelled();
+      const fdkBase64 = await firstValueFromAbortable(
+        from(this.cryptoService.decryptName(pendingData.encrypted_fdk)),
+        controller.signal,
+      );
+      throwIfCancelled();
+      if (!fdkBase64) throw new Error('Não foi possível decifrar a chave do arquivo pendente.');
+      const fdkChars = atob(fdkBase64);
+      fdk = new Uint8Array(fdkChars.length);
+      for (let i = 0; i < fdkChars.length; i++) fdk[i] = fdkChars.charCodeAt(i);
+      throwIfCancelled();
+
+      let upload: LocalUploadPlan | GoogleUploadPlan;
+      let initRes: any;
+      if (pendingData.storage_provider === 'google_drive') {
+        const context = await firstValueFromAbortable(
+          this.driveService.getExternalUploadRecoveryContext(pendingData.id),
+          controller.signal, DRIVE_CONTROL_REQUEST_DEADLINE_MS);
+        throwIfCancelled();
+        if (
+          pendingData.external_storage_id === null
+          || context.external_storage_id !== pendingData.external_storage_id
+          || !context.name_hash
+        ) {
+          throw new Error('Contexto do Google Drive indisponível para o upload pendente.');
+        }
+        upload = await this.prepareFreshGoogleRecovery(id, pendingData, file, fdk, controller.signal, context.name_hash, generation);
+        throwIfCancelled();
+        initRes = {
+          name_hash: context.name_hash,
+        };
+      } else {
+        upload = await this.prepareLocalRecovery(id, pendingData, file, fdk, controller.signal, generation);
+        throwIfCancelled();
+        initRes = {};
+      }
+
+      throwIfCancelled();
+      this.pausedTransfers.delete(id);
+      const uploadId = id + '_recovery';
+      this.activeUploads.set(uploadId, pendingData.storage_provider === 'local'
+        ? {
+          provider: 'local',
+          transferId: id,
+          file,
+          fileId: pendingData.id,
+          plan: upload as LocalUploadPlan,
+          folderId: pendingData.folder_id,
+          initRes,
+          isHiddenProxy: false,
+        }
+        : {
+          provider: 'google_drive',
+          transferId: id,
+          file,
+          fileId: pendingData.id,
+          plan: upload as GoogleUploadPlan,
+          folderId: pendingData.folder_id,
+          initRes,
+          isHiddenProxy: false,
+        });
+      runtimeOwnsFdk = true;
+      fdk = undefined;
+      this.recoveringUploadFileIds.delete(id);
+      throwIfCancelled();
+      this.updateTransfer(id, { statusMessage: 'Retomando upload...' });
+
+      try {
+        const runtime = this.activeUploads.get(uploadId);
+        if (!runtime) {
+          throw new Error('Recovery runtime was paused before execution');
+        }
+        await this.runUploadLoop(uploadId, id, pendingData.id, false, true, generation);
+        throwIfCancelled();
+        this.transfers.update(list => list.map(t => t.id === id ? { ...t, isRecovery: false } : t));
+      } catch (error: any) {
+        const cancellationActive = controller.signal.aborted || this.cancelledTransfers.has(id);
+        if (cancellationActive && runtimeOwnsFdk && !isUploadAbortError(error) && error?.message !== 'PAUSED') {
+          throw error;
+        }
+        if (error?.message !== 'PAUSED' && !cancellationActive) {
+          this.releaseTerminalUploadRuntime(id);
+          this.updateTransfer(id, { status: 'error', errorMsg: error?.message || 'Falha na recuperação' });
+        }
+      }
+    } catch (error) {
+      if (!runtimeOwnsFdk) fdk?.fill(0);
+      if (!this.isCurrentUploadRuntime(generation)) return;
+      this.releaseTerminalUploadRuntime(id);
+      const cancellationActive = controller.signal.aborted || this.cancelledTransfers.has(id);
+      if (cancellationActive) {
+        if (!runtimeOwnsFdk || isUploadAbortError(error)) return;
+        throw error;
+      }
+      if (isUploadAbortError(error)) return;
+      this.updateTransfer(id, {
+        status: 'error',
+        errorMsg: error instanceof Error ? error.message : 'Falha na recuperação',
+      });
+      throw error;
+    }
+  }
+
   async resumeDownload(id: string) {
-    const state = this.activeDownloads.get(id);
+    const state = this.downloadEngine.getState(id);
     if (!state) return;
 
     this.pausedTransfers.delete(id);
     this.updateTransfer(id, { status: 'processing', speed: 'Calculando...', eta: '--:--' });
 
     try {
-      if (state.isGoogleDrive) {
-        await this.runGoogleDriveDownload(id, state);
-      } else {
-        await this.runDownloadLoop(id, state);
-      }
+      await this.downloadEngine.run(id, state, this.downloadCallbacks(id));
     } catch (e: any) {
-      if (e?.message !== 'PAUSED') {
+      if (!isUploadAbortError(e) && e?.message !== 'PAUSED') {
         this.updateTransfer(id, { status: 'error', errorMsg: e?.message || 'Falha no download' });
       }
     } finally {
@@ -1742,15 +2332,18 @@ export class DriveStore {
   }
 
   async loadTrash(): Promise<void> {
+    const generation = this.decryptedPresentationGeneration;
     this.isLoading.set(true);
     try {
       const res = await firstValueFrom(this.driveService.getTrash());
+      if (!this.isCurrentDecryptedPresentation(generation)) return;
       const parsedFiles: DriveFile[] = [];
       
       for (const folder of res.folders) {
         let decName = null;
         if (this.cryptoService.isVaultUnlocked()) {
           decName = await this.cryptoService.decryptName(folder.encrypted_name);
+          if (!this.isCurrentDecryptedPresentation(generation)) return;
         }
         parsedFiles.push({
           id: folder.id,
@@ -1772,6 +2365,7 @@ export class DriveStore {
         let decName = null;
         if (this.cryptoService.isVaultUnlocked()) {
           decName = await this.cryptoService.decryptName(file.encrypted_name);
+          if (!this.isCurrentDecryptedPresentation(generation)) return;
         }
         const type = decName ? this.fileTypeFromName(decName, file.mime_type) : 'unknown';
         parsedFiles.push({
@@ -1782,7 +2376,7 @@ export class DriveStore {
           type: type,
           mimeType: file.mime_type,
           sizeBytes: file.size_bytes,
-          sizeFormatted: this.formatSize(file.size_bytes),
+          sizeFormatted: formatBytes(file.size_bytes),
           modifiedAt: '—',
           owner: 'eu',
           storageProvider: file.storage_provider,
@@ -1791,6 +2385,7 @@ export class DriveStore {
         });
       }
 
+      if (!this.isCurrentDecryptedPresentation(generation)) return;
       this.trashFiles.set(parsedFiles);
     } catch (e) {
       console.error('Failed to load trash', e);
@@ -1799,102 +2394,70 @@ export class DriveStore {
     }
   }
 
-  private async thumbnailErrorMessage(error: unknown): Promise<string> {
-    if (error instanceof HttpErrorResponse) {
-      if (error.error instanceof Blob) return await error.error.text();
-      if (typeof error.error === 'string') return error.error;
-      if (error.error && typeof error.error === 'object') return JSON.stringify(error.error);
-      return error.message;
-    }
-    if (error instanceof Error) return error.message;
-    if (typeof error === 'string') return error;
-    return '';
-  }
-
   async loadThumbnail(file: DriveFile): Promise<void> {
-    if (untracked(() => this.thumbnails())[file.id] || !file.encryptedFdk || this.thumbnailPermanentFailures.has(file.id)) return;
-    const inFlight = this.thumbnailLoadsInFlight.get(file.id);
-    if (inFlight) return inFlight;
-
-    const request = this.loadThumbnailOnce(file);
-    this.thumbnailLoadsInFlight.set(file.id, request);
-    try {
-      await request;
-    } finally {
-      if (this.thumbnailLoadsInFlight.get(file.id) === request) this.thumbnailLoadsInFlight.delete(file.id);
-    }
+    await this.thumbnailLoader.load(file);
   }
 
-  private async loadThumbnailOnce(file: DriveFile): Promise<void> {
-    if (!file.encryptedFdk) return;
-    try {
-      const fdkBase64 = await this.cryptoService.decryptName(file.encryptedFdk);
-      const fdkString = atob(fdkBase64);
-      const fdk = new Uint8Array(fdkString.length);
-      for (let i = 0; i < fdkString.length; i++) fdk[i] = fdkString.charCodeAt(i);
+  resetUploadRuntimeState(): void {
+    this.uploadRuntimeGeneration++;
 
-      let gdriveUrl: string | null = null;
-      let gdriveToken: string | null = null;
-      if (file.storageProvider === 'google_drive') {
-        const meta = await firstValueFrom(this.driveService.downloadExternalMetadata(file.id));
-        gdriveUrl = `https://www.googleapis.com/drive/v3/files/${meta.external_file_id}?alt=media`;
-        gdriveToken = meta.access_token;
-      }
+    const uploadIds = new Set(
+      this.transfers().filter(transfer => transfer.type === 'upload').map(transfer => transfer.id),
+    );
+    for (const transferId of this.uploadInitializedFileIds.keys()) uploadIds.add(transferId);
+    for (const transferId of this.recoveringUploadFileIds.keys()) uploadIds.add(transferId);
+    for (const transferId of this.uploadControllers.keys()) uploadIds.add(transferId);
+    for (const transferId of this.uploadOperations.keys()) uploadIds.add(transferId);
+    for (const transferId of this.uploadCleanupPromises.keys()) uploadIds.add(transferId);
+    for (const transferId of this.googleCleanupPendingFileIds.keys()) uploadIds.add(transferId);
+    for (const transferId of this.googleCleanupBlockedTransfers) uploadIds.add(transferId);
+    for (const upload of this.activeUploads.values()) uploadIds.add(upload.transferId);
 
-      const initialFetchSize = 1024 * 128;
-      const maxMetadataFetchSize = 4 * 1024 * 1024;
-      let requestedSize = Math.max(1, Math.min(initialFetchSize, file.sizeBytes > 0 ? file.sizeBytes : initialFetchSize));
-      const maxRequestedSize = Math.min(file.sizeBytes > 0 ? file.sizeBytes : maxMetadataFetchSize, maxMetadataFetchSize);
-      const fetchRange = async (size: number): Promise<Blob> => {
-        if (gdriveUrl && gdriveToken) {
-          return firstValueFrom(this.http.get(gdriveUrl, {
-            headers: { 'Range': `bytes=0-${size - 1}`, 'Authorization': `Bearer ${gdriveToken}` },
-            responseType: 'blob'
-          }));
-        }
-        return firstValueFrom(this.driveService.downloadFileRange(file.id, 0, size - 1));
-      };
+    for (const controller of this.uploadControllers.values()) controller.abort();
+    for (const controller of this.uploadGroupControllers.values()) controller.abort();
+    for (const upload of this.activeUploads.values()) this.runtimeFdk(upload).fill(0);
 
-      let metadata: string | null = null;
-      while (true) {
-        const blob = await fetchRange(requestedSize);
-        try {
-          metadata = (await this.kasumi.extractMetadata(blob, fdk)).metadata;
-          break;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          const incompleteMetadata = /partial blob|full metadata|metadata block/i.test(message);
-          if (!incompleteMetadata || requestedSize >= maxRequestedSize) throw error;
-          requestedSize = Math.min(maxRequestedSize, Math.max(requestedSize * 4, 1024 * 1024));
-        }
-      }
-      if (metadata) {
-        const parsed = JSON.parse(metadata);
-        if (parsed.thumb) {
-          this.thumbnails.update(t => ({ ...t, [file.id]: parsed.thumb }));
-          this.thumbnailRetryCounts.delete(file.id);
-        }
-      }
-    } catch (e) {
-      const message = (await this.thumbnailErrorMessage(e)).toLowerCase();
-      const status = e instanceof HttpErrorResponse ? e.status : 0;
-      const incomplete = status === 400 && /(incomplete|pending|upload|chunk)/i.test(message);
-      const networkFailure = e instanceof HttpErrorResponse && status === 0;
-      const transient = incomplete || networkFailure;
-      const permanent = status === 404 || status === 416 || !transient;
-      if (permanent) {
-        this.thumbnailPermanentFailures.add(file.id);
-      } else {
-        const retries = this.thumbnailRetryCounts.get(file.id) ?? 0;
-        if (retries < 2) {
-          this.thumbnailRetryCounts.set(file.id, retries + 1);
-          setTimeout(() => void this.loadThumbnail(file), 300 * (retries + 1));
-        } else {
-          this.thumbnailPermanentFailures.add(file.id);
-        }
-      }
-      console.warn('Could not load thumbnail for file ' + file.id);
+    this.activeUploads.clear();
+    this.uploadControllers.clear();
+    this.uploadGroupControllers.clear();
+    this.uploadOperations.clear();
+    this.uploadInitializedFileIds.clear();
+    this.recoveringUploadFileIds.clear();
+    this.uploadCleanupPromises.clear();
+    this.googleCleanupPendingFileIds.clear();
+    this.googleCleanupBlockedTransfers.clear();
+
+    for (const id of uploadIds) {
+      this.pausedTransfers.delete(id);
+      this.cancelledTransfers.delete(id);
     }
+    this.transfers.update(list => list.filter(transfer => transfer.type !== 'upload'));
+    this.transferGroups.update(groups => groups
+      .map(group => ({
+        ...group,
+        transferIds: group.transferIds.filter(id => !uploadIds.has(id)),
+        cancelledTransferIds: group.cancelledTransferIds.filter(id => !uploadIds.has(id)),
+        cancelledBytes: Object.fromEntries(Object.entries(group.cancelledBytes).filter(([id]) => !uploadIds.has(id))),
+      }))
+      .filter(group => group.transferIds.length > 0));
+  }
+
+  resetDownloadRuntimeState(): void {
+    const downloadIds = new Set(this.transfers().filter(transfer => transfer.type === 'download').map(transfer => transfer.id));
+    this.downloadEngine.resetRuntimeState();
+    for (const id of downloadIds) {
+      this.pausedTransfers.delete(id);
+      this.cancelledTransfers.delete(id);
+    }
+    this.transfers.update(list => list.filter(transfer => transfer.type !== 'download'));
+    this.transferGroups.update(groups => groups
+      .map(group => ({
+        ...group,
+        transferIds: group.transferIds.filter(id => !downloadIds.has(id)),
+        cancelledTransferIds: group.cancelledTransferIds.filter(id => !downloadIds.has(id)),
+        cancelledBytes: Object.fromEntries(Object.entries(group.cancelledBytes).filter(([id]) => !downloadIds.has(id))),
+      }))
+      .filter(group => group.transferIds.length > 0));
   }
 
   async restoreItem(file: DriveFile): Promise<void> {

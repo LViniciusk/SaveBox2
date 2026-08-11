@@ -67,13 +67,6 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
         return res[0][0].as<uint64_t>();
     };
 
-    auto get_max_quota = [&]() -> uint64_t {
-        auto conn = pool.acquire_connection();
-        pqxx::work txn(*conn);
-        auto res = txn.exec("SELECT max_storage_bytes FROM users WHERE id = " + std::to_string(user_id));
-        return res[0][0].as<uint64_t>();
-    };
-
     SECTION("1. Inicializacao e Endpoint de Quota") {
         crow::request req;
         req.url = "/users/me/quota";
@@ -224,13 +217,11 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
     SECTION("4. Hard Delete e Liberacao de Cota") {
         set_used_quota(1024 * 1024 * 1024);
 
-        int file_id = 0;
         {
             auto conn = pool.acquire_connection();
             pqxx::work txn(*conn);
             std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, physical_path, size_bytes, total_chunks, is_upload_complete, deleted_at) VALUES ($1, $2, 'f', 'h', 'mock_fdk', 'p_test1', $3, 1, TRUE, NOW()) RETURNING id";
             auto res = txn.exec(q, pqxx::params{user_id, folder_id, 500 * 1024 * 1024});
-            file_id = res[0][0].as<int>();
             txn.commit();
         }
 
@@ -247,7 +238,6 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
             set_used_quota(1024 * 1024 * 1024);
 
             int sub_folder = 0;
-            int file2 = 0;
             {
                 auto conn = pool.acquire_connection();
                 pqxx::work txn(*conn);
@@ -256,7 +246,6 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
 
                 std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, physical_path, size_bytes, total_chunks, is_upload_complete) VALUES ($1, $2, 'f2', 'h2', 'mock_fdk', 'p_test2', $3, 1, TRUE) RETURNING id";
                 auto res_f2 = txn.exec(q, pqxx::params{user_id, sub_folder, 100 * 1024 * 1024});
-                file2 = res_f2[0][0].as<int>();
                 txn.commit();
             }
 
@@ -277,13 +266,11 @@ TEST_CASE("REST API - Storage Quotas", "[api][quotas]") {
     SECTION("5. Garbage Collector Integrado") {
         set_used_quota(1000000ULL); 
 
-        int file_id = 0;
         {
             auto conn = pool.acquire_connection();
             pqxx::work txn(*conn);
             std::string q = "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, physical_path, size_bytes, total_chunks, is_upload_complete, deleted_at) VALUES ($1, $2, 'f', 'h', 'mock_fdk', 'p_testgc', $3, 1, TRUE, NOW() - INTERVAL '31 days') RETURNING id";
             auto res = txn.exec(q, pqxx::params{user_id, folder_id, 200000ULL});
-            file_id = res[0][0].as<int>();
             txn.commit();
         }
 

@@ -6,7 +6,61 @@ import { VideoStreamService } from '../drive/services/video-stream.service';
 import { DriveFile } from '../drive/state/drive.store';
 import { VideoPlayerComponent } from '../drive/components/video-player/video-player.component';
 import { FileIconComponent } from '../../shared/ui/file-icon/file-icon.component';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFromAbortable } from '../drive/upload/abortable-observable';
+import { formatBytes } from '../../shared/utils/format-bytes';
+import { KASUMI_MAX_METADATA_SIZE } from '../../core/crypto/kasumi-format';
+
+const PUBLIC_THUMBNAIL_PREFIX = 'data:image/webp;base64,';
+
+function hasCanonicalBase64Payload(value: string, start: number): boolean {
+  const payloadLength = value.length - start;
+  if (!payloadLength || payloadLength % 4 !== 0) return false;
+
+  const paddingStart = value.endsWith('==')
+    ? value.length - 2
+    : value.endsWith('=')
+      ? value.length - 1
+      : value.length;
+
+  for (let index = start; index < paddingStart; index++) {
+    const code = value.charCodeAt(index);
+    if (!(
+      (code >= 0x41 && code <= 0x5a)
+      || (code >= 0x61 && code <= 0x7a)
+      || (code >= 0x30 && code <= 0x39)
+      || code === 0x2b
+      || code === 0x2f
+    )) return false;
+  }
+
+  for (let index = paddingStart; index < value.length; index++) {
+    if (value.charCodeAt(index) !== 0x3d) return false;
+  }
+  return true;
+}
+
+function acceptedPublicThumbnail(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > KASUMI_MAX_METADATA_SIZE) return null;
+  if (!value.startsWith(PUBLIC_THUMBNAIL_PREFIX)) return null;
+
+  return hasCanonicalBase64Payload(value, PUBLIC_THUMBNAIL_PREFIX.length) ? value : null;
+}
+
+function publicThumbnailFromMetadata(metadata: string): string | null {
+  if (metadata.length > KASUMI_MAX_METADATA_SIZE) return null;
+
+  let candidate: unknown;
+  try {
+    const parsed: unknown = JSON.parse(metadata);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    candidate = (parsed as { thumb?: unknown }).thumb;
+  } catch {
+    candidate = metadata;
+  }
+
+  return acceptedPublicThumbnail(candidate);
+}
+
 @Component({
   selector: 'app-public-media-player',
   standalone: true,
@@ -603,7 +657,6 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
   readonly isDownloading = signal(false);
   readonly downloadProgress = signal<number | null>(null);
 
-  private abortController: AbortController | null = null;
   readonly publicDriveFile = signal<DriveFile>({
     id: 0,
     isFolder: false,
@@ -622,8 +675,12 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
   private dragStartX = 0;
   private dragStartY = 0;
   private decryptedBlob: Blob | null = null;
+  private readonly lifecycleController = new AbortController();
+  private ownedWorkCancelled = false;
+  private ownedFdk: Uint8Array | null = null;
 
   ngOnInit() {
+    const ownedFdk = this.ensureOwnedFdk();
     if (this.isVideo()) {
       this.publicDriveFile.set({
         id: 0,
@@ -636,7 +693,7 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
         modifiedAt: new Date().toISOString(),
         owner: 'Nanika',
         shareUuid: this.shareId(),
-        shareFdk: this.fdk(),
+        shareFdk: ownedFdk,
         storageProvider: 'local',
         externalStorageId: null,
       });
@@ -649,6 +706,7 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
   }
 
   async loadHeaderThumbnail() {
+    const signal = this.lifecycleController.signal;
     this.isLoading.set(true);
     this.error.set(null);
     const knownSize = this.sizeBytes() || this.publicDriveFile().sizeBytes;
@@ -657,27 +715,28 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     const tryFetchSize = async (requestedSize: number): Promise<boolean> => {
       const sizeBytes = Math.max(1, Math.min(requestedSize, maxHeaderFetchSize));
       try {
-        const headerBlob = await firstValueFrom(
-          this.shareService.downloadSharedFileRange(this.shareId(), 0, sizeBytes - 1)
+        this.throwIfAborted();
+        const headerBlob = await firstValueFromAbortable(
+          this.shareService.downloadSharedFileRange(this.shareId(), 0, sizeBytes - 1),
+          signal,
         );
-        const res = await this.kasumi.extractMetadata(headerBlob, this.fdk());
+        this.throwIfAborted();
+        const res = await this.withFdkCopy(fdk =>
+          this.kasumi.extractMetadata(headerBlob, fdk, this.sizeBytes())
+        );
+        this.throwIfAborted();
         if (res.metadata) {
-          try {
-            const parsed = JSON.parse(res.metadata);
-            if (parsed.thumb) {
-              this.thumbnailUrl.set(parsed.thumb);
-              return true;
-            }
-          } catch (e) {
-            if (typeof res.metadata === 'string' && res.metadata.startsWith('data:image')) {
-              this.thumbnailUrl.set(res.metadata);
-              return true;
-            }
+          const thumbnail = publicThumbnailFromMetadata(res.metadata);
+          if (thumbnail) {
+            this.thumbnailUrl.set(thumbnail);
+            return true;
           }
         }
         return true;
       } catch (e: any) {
+        if (this.isLifecycleAbort(e)) return false;
         if (e?.message?.includes('too small') && sizeBytes < maxHeaderFetchSize) {
+          this.throwIfAborted();
           return await tryFetchSize(maxHeaderFetchSize);
         }
         console.warn('[PublicMediaPlayer] Erro ao extrair miniatura do cabecalho Kasumi', e);
@@ -685,8 +744,11 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
       }
     };
 
-    await tryFetchSize(512 * 1024);
-    this.isLoading.set(false);
+    try {
+      await tryFetchSize(512 * 1024);
+    } finally {
+      if (!signal.aborted) this.isLoading.set(false);
+    }
   }
 
   protected onThumbnailError() {
@@ -699,30 +761,38 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
-    this.videoStreamService.destroyStream();
-    if (this.mediaUrl()) {
-      URL.revokeObjectURL(this.mediaUrl()!);
-    }
+    this.cancelOwnedWork();
   }
 
   protected async loadImage() {
+    const signal = this.lifecycleController.signal;
     this.isLoading.set(true);
     this.error.set(null);
 
     try {
-      const encryptedBlob = await this.downloadEncryptedFile();
-      const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdk());
+      const encryptedBlob = await this.downloadEncryptedFile(undefined, signal);
+      this.throwIfAborted();
+      const rawDecrypted = await this.withFdkCopy(fdk =>
+        this.kasumi.decryptFile(encryptedBlob, fdk, this.sizeBytes())
+      );
+      this.throwIfAborted();
       const mimeType = this.getMimeType(this.filename());
-      this.decryptedBlob = new Blob([rawDecrypted], { type: mimeType });
+      const decryptedBlob = new Blob([rawDecrypted], { type: mimeType });
+      const url = URL.createObjectURL(decryptedBlob);
+      if (signal.aborted) {
+        URL.revokeObjectURL(url);
+        return;
+      }
 
       if (this.mediaUrl()) {
         URL.revokeObjectURL(this.mediaUrl()!);
       }
 
-      const url = URL.createObjectURL(this.decryptedBlob);
+      this.decryptedBlob = decryptedBlob;
       this.mediaUrl.set(url);
       this.isLoading.set(false);
     } catch (err: any) {
+      if (this.isLifecycleAbort(err)) return;
       console.error('[PublicMediaPlayer] Erro ao carregar imagem', err);
       const msg = err?.error?.error || 'Falha ao descarregar ou descriptografar a imagem.';
       this.error.set(msg);
@@ -731,6 +801,8 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
   }
 
   protected async downloadFile() {
+    const signal = this.lifecycleController.signal;
+    if (signal.aborted) return;
     console.log('[PublicMediaPlayer] Iniciando download...', {
       shareId: this.shareId(),
       sizeBytes: this.sizeBytes(),
@@ -741,13 +813,17 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     if (this.decryptedBlob) {
       console.log('[PublicMediaPlayer] Usando blob em memoria ja descriptografado.');
       const url = URL.createObjectURL(this.decryptedBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = this.filename();
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      try {
+        if (signal.aborted) return;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = this.filename();
+        document.body.appendChild(a);
+        if (!signal.aborted) a.click();
+        document.body.removeChild(a);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
       return;
     }
 
@@ -756,36 +832,98 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
     
     try {
       const encryptedBlob = await this.downloadEncryptedFile((loaded, size) => {
+        if (signal.aborted) return;
         this.downloadProgress.set(Math.min(99, Math.round((100 * loaded) / size)));
         this.cdr.detectChanges();
-      });
+      }, signal);
 
+      this.throwIfAborted();
       this.downloadProgress.set(null);
-      const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdk());
+      const rawDecrypted = await this.withFdkCopy(fdk =>
+        this.kasumi.decryptFile(encryptedBlob, fdk, this.sizeBytes())
+      );
+      this.throwIfAborted();
       const url = URL.createObjectURL(rawDecrypted);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = this.filename();
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      try {
+        if (signal.aborted) return;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = this.filename();
+        document.body.appendChild(a);
+        if (!signal.aborted) a.click();
+        document.body.removeChild(a);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
     } catch (e) {
+      if (this.isLifecycleAbort(e)) return;
       console.error('[PublicMediaPlayer] Erro no download', e);
     } finally {
+      if (signal.aborted) return;
       this.isDownloading.set(false);
       this.downloadProgress.set(null);
       this.cdr.detectChanges();
     }
   }
 
-  private downloadEncryptedFile(onProgress?: (loaded: number, total: number) => void): Promise<Blob> {
+  private downloadEncryptedFile(
+    onProgress?: (loaded: number, total: number) => void,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
     const total = this.sizeBytes() || this.publicDriveFile().sizeBytes;
-    return this.shareService.downloadSharedFileInRanges(this.shareId(), total, onProgress);
+    return this.shareService.downloadSharedFileInRanges(this.shareId(), total, onProgress, signal);
   }
 
   protected onClose() {
+    this.cancelOwnedWork();
     this.close.emit();
+  }
+
+  private throwIfAborted(): void {
+    if (this.lifecycleController.signal.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+  }
+
+  private ensureOwnedFdk(): Uint8Array {
+    if (this.ownedFdk) return this.ownedFdk;
+    this.throwIfAborted();
+    this.ownedFdk = this.fdk().slice();
+    return this.ownedFdk;
+  }
+
+  private async withFdkCopy<T>(operation: (fdk: Uint8Array) => Promise<T>): Promise<T> {
+    const operationFdk = this.ensureOwnedFdk().slice();
+    try {
+      return await operation(operationFdk);
+    } finally {
+      operationFdk.fill(0);
+    }
+  }
+
+  private isLifecycleAbort(error: unknown): boolean {
+    return this.lifecycleController.signal.aborted ||
+      (error instanceof DOMException && error.name === 'AbortError') ||
+      (typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError');
+  }
+
+  private cancelOwnedWork(): void {
+    if (this.ownedWorkCancelled) return;
+    this.ownedWorkCancelled = true;
+    this.lifecycleController.abort();
+    this.videoStreamService.destroyStream();
+    this.isDownloading.set(false);
+    this.downloadProgress.set(null);
+    const url = this.mediaUrl();
+    if (url) {
+      URL.revokeObjectURL(url);
+      this.mediaUrl.set(null);
+    }
+    this.thumbnailUrl.set(null);
+    this.decryptedBlob = null;
+    const ownedFdk = this.ownedFdk;
+    this.ownedFdk = null;
+    ownedFdk?.fill(0);
   }
 
   protected zoomIn() {
@@ -850,11 +988,7 @@ export class PublicMediaPlayerComponent implements OnInit, OnDestroy {
 
   getFormattedSize(): string {
     const bytes = this.sizeBytes();
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    return formatBytes(bytes, 2, 'Bytes');
   }
 
   @HostListener('window:keydown', ['$event'])

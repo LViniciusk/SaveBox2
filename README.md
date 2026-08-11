@@ -1,10 +1,14 @@
-# SaveBox 2.0
+# Nanika
 
-Um backend de armazenamento em nuvem de alta performance.
+Aplicação de armazenamento com frontend Angular e backend C++/Crow, armazenamento local e múltiplas contas Google Drive.
+
+## Documentação técnica
+
+A documentação técnica arquitetural e seus índices estão em [docs/README.md](docs/README.md).
 
 ## Arquitetura e Recursos Principais
 
-O SaveBox 2.0 foi construído com a filosofia de Zero-Knowledge, atuando como um gerenciador cego que armazena, divide e distribui os bytes físicos e metadados criptografados, enquanto a descriptografia ocorre exclusivamente no lado do cliente.
+O Nanika foi construído com a filosofia de Zero-Knowledge, atuando como um gerenciador cego que armazena, divide e distribui bytes físicos e metadados criptografados, enquanto a descriptografia ocorre exclusivamente no lado do cliente.
 
 * **Upload e Download em Chunks:** Suporte nativo para arquivos massivos. Os arquivos são divididos em chunks para upload seguro e resumível. O download suporta *Partial Content* (Header HTTP `Range`) para streaming de vídeos e pausas em downloads.
 * **Hierarquia de Arquivos Lógica:** Estrutura de árvore com pastas, subpastas, suporte a navegação recursiva e paginação.
@@ -12,7 +16,7 @@ O SaveBox 2.0 foi construído com a filosofia de Zero-Knowledge, atuando como um
 * **Segurança Anti-IDOR:** Todas as rotas validadas com JWT verificam a propriedade do arquivo no Banco de Dados antes de qualquer manipulação de disco.
 * **Exclusão em Cascata:** Exclusão recursiva de árvores de diretórios com limpeza automática de arquivos no disco rígido.
 * **Integração Google Drive:** Permite vincular contas e operar arquivos privados diretamente entre o navegador e o Google Drive. Compartilhamento público não é suportado para esse provedor.
-* **Este Computador:** O tema Default apresenta o armazenamento local e cada conta Google como unidades independentes, com árvore lógica projetada e movimentação física retomável entre provedores. Consulte [a arquitetura de movimentação](docs/storage-moves.md).
+* **Este Computador:** O tema Default apresenta o armazenamento local e cada conta Google como unidades independentes, com árvore lógica projetada e movimentação física retomável entre provedores.
 
 ## Tecnologias Utilizadas
 
@@ -65,6 +69,7 @@ As pastas fixadas persistem somente a associação entre usuário e pasta e sua 
 | `POST` | `/files/batch-init` | Inicializa uploads de múltiplos arquivos de uma só vez. |
 | `POST` | `/files/<id>/chunks` | Envia um pedaço binário. Exige Header `X-Chunk-Index`. |
 | `GET` | `/files/<id>/uploaded-chunks` | Retorna array com índices de chunks já salvos. |
+| `GET` | `/files/<id>/pending-upload-recovery-prefix` | Recupera somente um prefixo de ciphertext de upload Local pendente; exige `Range: bytes=0-N` e nunca libera upload concluído. |
 | `GET` | `/files/<id>/download` | Baixa o arquivo. Suporta cabeçalho HTTP `Range`. |
 | `PUT` | `/files/<id>` | Renomeia ou move o arquivo de pasta. |
 | `DELETE` | `/files/batch-delete` | Envia múltiplos arquivos para a lixeira (Soft Delete em lote). |
@@ -87,8 +92,8 @@ As pastas fixadas persistem somente a associação entre usuário e pasta e sua 
 | Método | Endpoint | Descrição |
 | :--- | :--- | :--- |
 | `POST` | `/files/<id>/share` | Gera um código público para um arquivo no armazenamento local. Arquivos do Google Drive retornam `422`. |
-| `GET` | `/share/<codigo>` | Retorna metadados criptografados de um compartilhamento local, sem JWT. Links antigos do Google Drive retornam `410`. |
-| `GET` | `/share/<codigo>/download` | Baixa bytes criptografados de um compartilhamento local, com suporte a `Range`. Links antigos do Google Drive retornam `410`. |
+| `GET` | `/share/<codigo>` | Retorna metadados criptografados de um compartilhamento local, sem JWT. |
+| `GET` | `/share/<codigo>/download` | Baixa bytes criptografados de um compartilhamento local, com suporte a `Range`. |
 
 ### Armazenamento Externo (Google Drive)
 
@@ -100,6 +105,7 @@ O Google Drive é um provedor privado: upload, pré-visualização, download e d
 | `POST` | `/api/storage/google/link` | Finaliza a vinculação de uma conta Google através de um Authorization Code. |
 | `GET` | `/api/storage/google/accounts` | Lista todas as contas Google Drive vinculadas. |
 | `DELETE`| `/api/storage/google/accounts/<id>` | Desvincula e remove credenciais da conta Google Drive associada. |
+| `GET` | `/files/<id>/external-upload-recovery-context` | Retorna contexto efêmero mínimo para recuperar upload Google pendente; não retorna `refresh_token` nem é proxy de mídia. |
 | `POST` | `/files/<id>/finalize-external` | Registra no banco de dados um arquivo concluído direto no Drive pelo frontend. |
 | `GET` | `/api/storage/google/accounts/<id>/sync-map` | Retorna o mapa de sincronização dos External IDs para o Client-Side Sync. |
 | `POST` | `/api/storage/google/accounts/<id>/sync-cleanup` | Recebe fantasmas locais da Nuvem e efetua limpeza Soft Delete em massa. |

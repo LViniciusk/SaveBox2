@@ -4,6 +4,8 @@ import { DriveStore, TransferItem } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
 import { StorageMoveEngineService } from '../../storage-move/storage-move-engine.service';
 import { StorageMoveView } from '../../storage-move/storage-move.models';
+import { formatBytes } from '../../../../shared/utils/format-bytes';
+import { isUploadAbortError } from '../../upload/abortable-observable';
 
 @Component({
   selector: 'app-transfer-panel',
@@ -31,7 +33,7 @@ import { StorageMoveView } from '../../storage-move/storage-move.models';
           <div class="storage-move-card" [class.error]="move.status === 'failed'" [class.success]="move.status === 'completed'" [class.paused]="move.status === 'paused'">
             <span class="material-symbols-outlined">drive_file_move</span>
             <div class="storage-move-details">
-              <strong>Transferindo “{{ move.fileName }}”</strong>
+              <strong>Movendo “{{ move.fileName }}”</strong>
               <span>{{ move.sourceLabel }} → {{ move.targetLabel }}</span>
               <span>{{ moveStatusLabel(move) }} · {{ movePercent(move) }}% · {{ formatBytes(move.transferred_bytes) }} / {{ formatBytes(move.total_bytes) }}</span>
               @if (!isMoveTerminal(move)) { <div class="transfer-progress-bar-container"><div class="transfer-progress-bar-fill" [style.width.%]="movePercent(move)"></div></div> }
@@ -39,7 +41,7 @@ import { StorageMoveView } from '../../storage-move/storage-move.models';
             </div>
             <div class="transfer-group-actions">
               @if (move.status === 'transferring' || move.status === 'prepared') { <button class="transfer-control-btn" (click)="moveEngine.pause(move.id)" title="Pausar"><span class="material-symbols-outlined">pause</span></button> }
-              @if (move.status === 'paused' || move.status === 'failed') { <button class="transfer-control-btn" (click)="moveEngine.resume(move.id)" title="Continuar"><span class="material-symbols-outlined">play_arrow</span></button> }
+              @if (move.status === 'paused') { <button class="transfer-control-btn" (click)="moveEngine.resume(move.id)" title="Continuar"><span class="material-symbols-outlined">play_arrow</span></button> }
               @if (!isMoveTerminal(move) && move.status !== 'cleanup_pending') { <button class="transfer-control-btn cancel" (click)="moveEngine.cancel(move.id)" title="Cancelar"><span class="material-symbols-outlined">close</span></button> }
               @if (isMoveTerminal(move)) { <button class="transfer-control-btn" (click)="moveEngine.clear(move.id)" title="Limpar"><span class="material-symbols-outlined">delete</span></button> }
             </div>
@@ -179,7 +181,7 @@ import { StorageMoveView } from '../../storage-move/storage-move.models';
                       <button class="transfer-control-btn resume" (click)="recoveryInput.click()" title="Selecionar arquivo para retomar">
                         <span class="material-symbols-outlined">folder_open</span>
                       </button>
-                      <input type="file" #recoveryInput class="recovery-file-input" (change)="onRecoverFileSelected($event, t)" />
+                      <input type="file" #recoveryInput data-testid="recovery-file-input" class="recovery-file-input" (change)="onRecoverFileSelected($event, t)" />
                     } @else {
                       <button class="transfer-control-btn resume" (click)="t.type === 'upload' ? driveStore.resumeUpload(t.id) : driveStore.resumeDownload(t.id)" title="Retomar">
                         <span class="material-symbols-outlined">play_arrow</span>
@@ -233,7 +235,7 @@ import { StorageMoveView } from '../../storage-move/storage-move.models';
                 <span class="material-symbols-outlined">drive_file_move</span>
                 <div class="mini-transfer-details"><strong>{{ move.fileName }}</strong><span>{{ move.sourceLabel }} → {{ move.targetLabel }}</span><span>{{ moveStatusLabel(move) }} · {{ movePercent(move) }}%</span></div>
                 @if (move.status === 'paused') { <button class="transfer-control-btn" (click)="moveEngine.resume(move.id)"><span class="material-symbols-outlined">play_arrow</span></button> }
-                @else if (!isMoveTerminal(move) && move.status !== 'cleanup_pending') { <button class="transfer-control-btn" (click)="moveEngine.pause(move.id)"><span class="material-symbols-outlined">pause</span></button> }
+                @else if (move.status === 'transferring' || move.status === 'prepared') { <button class="transfer-control-btn" (click)="moveEngine.pause(move.id)"><span class="material-symbols-outlined">pause</span></button> }
               </div>
             }
             @for (group of driveStore.transferGroupViews(); track group.id) {
@@ -462,6 +464,7 @@ import { StorageMoveView } from '../../storage-move/storage-move.models';
   `],
 })
 export class TransferPanelComponent {
+  readonly formatBytes = formatBytes;
   readonly currentView = input.required<DriveView>();
   readonly driveStore = inject(DriveStore);
   readonly moveEngine = inject(StorageMoveEngineService);
@@ -485,9 +488,11 @@ export class TransferPanelComponent {
   }
 
   moveStatusLabel(move: StorageMoveView): string {
+    if (move.stateSyncError) return 'Sincronização indisponível';
+    if (move.validationPending) return 'Validando destino';
     return ({
-      prepared: 'Preparando', transferring: 'Transferindo', paused: 'Pausado', target_uploaded: 'Validando destino',
-      committing: 'Concluindo', cleanup_pending: 'Limpando origem', completed: 'Concluído', cancelled: 'Cancelado', failed: 'Erro',
+      prepared: 'Preparando', transferring: 'Transferindo', paused: move.is_retryable ? 'Erro recuperável / Pausado' : 'Pausado', target_uploaded: 'Validando destino',
+      committing: 'Concluindo', cleanup_pending: 'Limpando origem', completed: 'Concluído', cancelled: 'Cancelado', failed: 'Erro terminal',
     } as Record<StorageMoveView['status'], string>)[move.status];
   }
 
@@ -583,13 +588,6 @@ export class TransferPanelComponent {
     });
   }
 
-  formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-    return `${parseFloat((bytes / 1024 ** unit).toFixed(1))} ${units[unit]}`;
-  }
-
   groupSourceLabel(source: string): string {
     return {
       'multiple-files': 'Múltiplos arquivos',
@@ -616,7 +614,9 @@ export class TransferPanelComponent {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files.length > 0) {
       const file = input.files[0];
+      if (!transfer.pendingData) return;
       this.driveStore.recoverUpload(transfer.id, transfer.pendingData, file).catch((err: unknown) => {
+        if (isUploadAbortError(err)) return;
         const message = err instanceof Error ? err.message : String(err);
         alert('Falha ao recuperar upload: ' + message);
       });

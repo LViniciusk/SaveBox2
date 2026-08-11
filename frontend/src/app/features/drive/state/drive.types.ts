@@ -2,7 +2,7 @@ export type DriveView = 'drive' | 'storage' | 'computer' | 'trash' | 'transfers'
 
 export type StorageProvider = 'local' | 'google_drive';
 
-export type StorageTargetStatus = 'ready' | 'unavailable' | 'unlinking';
+type StorageTargetStatus = 'ready' | 'unavailable' | 'unlinking';
 
 export interface StorageTarget {
   key: string;
@@ -11,7 +11,7 @@ export interface StorageTarget {
   externalStorageId: number | null;
   accountEmail?: string;
   accountPicture?: string;
-  usedBytes: number;
+  usedBytes: number | null;
   maxBytes: number | null;
   availableBytes: number | null;
   nanikaUsedBytes: number;
@@ -24,7 +24,7 @@ export interface LinkedGoogleAccount {
   accountPicture?: string;
   rootFolderId?: string;
   status: StorageTargetStatus;
-  usedBytes: number;
+  usedBytes: number | null;
   maxBytes: number | null;
   availableBytes: number | null;
   nanikaUsedBytes: number;

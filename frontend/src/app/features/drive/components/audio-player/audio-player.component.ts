@@ -3,6 +3,36 @@ import { Component, ElementRef, OnDestroy, effect, inject, input, output, signal
 import { DriveFile } from '../../state/drive.store';
 import { DecryptedMediaLoaderService, DecryptedMediaResource } from '../../services/decrypted-media-loader.service';
 
+const DEFAULT_MEDIA_ERROR_MESSAGE = 'Não foi possível reproduzir este áudio.';
+const MEDIA_ERROR_MESSAGES: Readonly<Partial<Record<number, string>>> = {
+  1: 'A reprodução foi interrompida.',
+  2: 'O áudio não pôde ser carregado pela rede.',
+  3: 'O navegador não conseguiu decodificar este áudio.',
+  4: 'O formato ou codec deste áudio não é suportado pelo navegador.',
+};
+
+interface AudioMediaDiagnostics {
+  readonly code: number;
+  readonly networkState: number;
+  readonly readyState: number;
+  readonly mimeType: string;
+  readonly canPlayType: string;
+}
+
+function buildMediaDiagnostics(element: HTMLMediaElement | null, mimeType: string): AudioMediaDiagnostics {
+  if (!element) {
+    return { code: 0, networkState: 0, readyState: 0, mimeType, canPlayType: '' };
+  }
+
+  let code = 0;
+  if (element.error) code = element.error.code;
+
+  let canPlayType = '';
+  if (mimeType) canPlayType = element.canPlayType(mimeType);
+
+  return { code, networkState: element.networkState, readyState: element.readyState, mimeType, canPlayType };
+}
+
 @Component({
   selector: 'app-audio-player',
   standalone: true,
@@ -69,15 +99,16 @@ export class AudioPlayerComponent implements OnDestroy {
   readonly audioMimeType = signal<string | null>(null);
   readonly isLoading = signal(false);
   readonly error = signal<string | null>(null);
-  readonly diagnostics = signal<{ code: number; networkState: number; readyState: number; mimeType: string; canPlayType: string } | null>(null);
+  readonly diagnostics = signal<AudioMediaDiagnostics | null>(null);
 
   @ViewChild('audio') set audioRef(ref: ElementRef<HTMLAudioElement> | undefined) {
     this.audio = ref;
     if (!ref || !this.audioUrl()) return;
     const element = ref.nativeElement;
+    const mimeType = this.audioMimeType();
     element.load();
-    if (this.audioMimeType() && !element.canPlayType(this.audioMimeType()!)) {
-      this.error.set(`Seu navegador não declara suporte para ${this.audioMimeType()}.`);
+    if (mimeType && !element.canPlayType(mimeType)) {
+      this.error.set(`Seu navegador não declara suporte para ${mimeType}.`);
     }
   }
   private audio?: ElementRef<HTMLAudioElement>;
@@ -107,22 +138,9 @@ export class AudioPlayerComponent implements OnDestroy {
 
   onMediaError(event: Event): void {
     const element = event.target as HTMLMediaElement | null;
-    const mediaError = element?.error;
-    const mimeType = this.audioMimeType() ?? '';
-    this.diagnostics.set({
-      code: mediaError?.code ?? 0,
-      networkState: element?.networkState ?? 0,
-      readyState: element?.readyState ?? 0,
-      mimeType,
-      canPlayType: mimeType && element ? element.canPlayType(mimeType) : '',
-    });
-    const messages: Record<number, string> = {
-      1: 'A reprodução foi interrompida.',
-      2: 'O áudio não pôde ser carregado pela rede.',
-      3: 'O navegador não conseguiu decodificar este áudio.',
-      4: 'O formato ou codec deste áudio não é suportado pelo navegador.',
-    };
-    this.error.set(messages[mediaError?.code ?? 0] ?? 'Não foi possível reproduzir este áudio.');
+    const diagnostics = buildMediaDiagnostics(element, this.audioMimeType() ?? '');
+    this.diagnostics.set(diagnostics);
+    this.error.set(MEDIA_ERROR_MESSAGES[diagnostics.code] ?? DEFAULT_MEDIA_ERROR_MESSAGE);
   }
 
   private async load(file: DriveFile): Promise<void> {
@@ -138,7 +156,7 @@ export class AudioPlayerComponent implements OnDestroy {
     this.isLoading.set(true);
     try {
       const resource = await this.mediaLoader.load(file, this.loadController.signal);
-      if (generation !== this.loadGeneration) {
+      if (generation !== this.loadGeneration || this.loadController.signal.aborted) {
         resource.cleanup();
         return;
       }

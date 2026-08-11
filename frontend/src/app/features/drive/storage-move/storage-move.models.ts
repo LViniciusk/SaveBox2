@@ -1,6 +1,6 @@
 import { StorageProvider } from '../state/drive.types';
 
-export type StorageMoveStatus = 'prepared' | 'transferring' | 'paused' | 'target_uploaded' |
+type StorageMoveStatus = 'prepared' | 'transferring' | 'paused' | 'target_uploaded' |
   'committing' | 'cleanup_pending' | 'completed' | 'cancelled' | 'failed';
 
 export interface StorageMoveItem {
@@ -26,6 +26,8 @@ export interface StorageMoveJob {
   transferred_bytes: number;
   error_code?: string;
   error_detail?: string;
+  is_retryable: boolean;
+  failure_stage?: 'prepare' | 'source_metadata' | 'source_read' | 'target_session' | 'target_write' | 'target_ack' | 'commit' | 'cleanup';
   items: StorageMoveItem[];
 }
 
@@ -35,4 +37,6 @@ export interface StorageMoveView extends StorageMoveJob {
   targetLabel: string;
   speedBytesPerSecond: number;
   etaSeconds: number | null;
+  validationPending?: boolean;
+  stateSyncError?: boolean;
 }

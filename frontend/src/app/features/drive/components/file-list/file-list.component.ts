@@ -1,4 +1,5 @@
-import { Component, input, inject, signal, computed, Output, EventEmitter, OnInit, OnDestroy, NgZone, Renderer2, effect, HostListener, ViewChildren, QueryList, ElementRef } from '@angular/core';
+import { Component, input, inject, signal, computed, Output, EventEmitter, OnInit, OnDestroy, AfterViewInit, NgZone, Renderer2, effect, ElementRef, QueryList, ViewChildren } from '@angular/core';
+import { Subscription } from 'rxjs';
 import { DriveFile, QuotaState, DriveStore } from '../../state/drive.store';
 import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.component';
 import { AppStateService } from '../../../../core/state/app-state.service';
@@ -8,11 +9,17 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 import { DefaultLockedPreviewComponent } from '../../../../shared/ui/default-locked-preview/default-locked-preview.component';
 import { FilePreviewRequest } from '../../services/file-preview-resolver';
 import { getPublicShareAvailability } from '../../policies/public-share-policy';
+import { formatBytes as formatBytesValue } from '../../../../shared/utils/format-bytes';
+import { sortFiles } from './file-list-sort';
+import type { FileSortColumn } from './file-list-sort';
+import { FileContextMenuComponent, type FileContextMenuAction } from './file-context-menu.component';
+import { FileSortMenuComponent } from './file-sort-menu.component';
+import { ThumbnailViewportTargetDirective } from './thumbnail-viewport-target.directive';
 
 @Component({
   selector: 'app-file-list',
   standalone: true,
-  imports: [FileIconComponent, DefaultLockedPreviewComponent, CommonModule],
+  imports: [FileIconComponent, DefaultLockedPreviewComponent, FileContextMenuComponent, FileSortMenuComponent, ThumbnailViewportTargetDirective, CommonModule],
   host: {
     style: 'display: flex; flex-direction: column; flex: 1 1 auto; height: 100%; min-height: 0; min-width: 0; width: 100%; overflow: hidden;'
   },
@@ -26,90 +33,12 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
              [style.height.px]="selectionBox().h">
         </div>
       }
-      <ng-template #ctxMenu let-file="file">
-        <div class="action-menu"
-             [style.position]="contextMenuPosition() ? 'fixed' : 'absolute'"
-             [style.top]="contextMenuPosition() ? (contextMenuPosition()?.y + 'px') : '40px'"
-             [style.left]="contextMenuPosition() ? (contextMenuPosition()?.x + 'px') : 'auto'"
-             [style.right]="contextMenuPosition() ? 'auto' : '20px'"
-             [style.margin]="'0'">
-          @if (viewMode() === 'trash') {
-            <button class="menu-item" (click)="onRestore(file, $event)">
-              <span class="material-symbols-outlined">restore</span>
-              Restaurar
-            </button>
-            <div class="menu-divider"></div>
-            <button class="menu-item" (click)="onPermanentDelete(file, $event)" style="color: #d93025;">
-              <span class="material-symbols-outlined" style="color: #d93025;">delete_forever</span>
-              Excluir permanentemente
-            </button>
-          } @else {
-            @if (!file.isFolder) {
-              @if (file.type === 'video' && hasProxy(file)) {
-                <div class="menu-item-wrapper" (mouseenter)="checkSubmenuBounds($event)">
-                  <button class="menu-item" style="justify-content: space-between;">
-                    <div style="display: flex; align-items: center; gap: 12px;">
-                      <span class="material-symbols-outlined">visibility</span>
-                      Preview
-                    </div>
-                    <span class="material-symbols-outlined" style="font-size: 16px;">chevron_right</span>
-                  </button>
-                  <div class="submenu">
-                    <button class="menu-item" (click)="onPlayOriginal(file, $event)">Original</button>
-                    <button class="menu-item" (click)="onPlayProxy(file, $event)">Compacta</button>
-                  </div>
-                </div>
-              } @else {
-                <button class="menu-item" (click)="onPlayOriginal(file, $event)">
-                  <span class="material-symbols-outlined">visibility</span>
-                  Preview
-                </button>
-              }
-            }
-            @if (!file.isFolder) {
-              <button class="menu-item" (click)="onDownload(file, $event)">
-                <span class="material-symbols-outlined">download</span>
-                Baixar
-              </button>
-              @if (getShareAvailability(file); as availability) {
-                @if (availability.allowed) {
-                  <button class="menu-item" (click)="onShare(file, $event)">
-                    <span class="material-symbols-outlined">share</span>
-                    Compartilhar
-                  </button>
-                } @else if (availability.reason === 'google_drive') {
-                  <button class="menu-item" disabled aria-disabled="true" [title]="availability.message">
-                    <span class="material-symbols-outlined">share_off</span>
-                    Compartilhamento indisponível
-                  </button>
-                }
-              }
-            }
-            <button class="menu-item" (click)="onRename(file, $event)">
-              <span class="material-symbols-outlined">edit</span>
-              Renomear
-            </button>
-            @if (viewMode() === 'drive' && file.isFolder && file.id !== -9999) {
-              <button class="menu-item" [disabled]="pinnedFoldersStore.isPending(file.id)" (click)="togglePinned(file, $event)">
-                <span class="material-symbols-outlined">{{ pinnedFoldersStore.isPending(file.id) ? 'hourglass_top' : 'push_pin' }}</span>
-                {{ pinnedFoldersStore.isPinned(file.id) ? 'Desafixar do acesso rápido' : 'Fixar no acesso rápido' }}
-              </button>
-            }
-            <div class="menu-divider"></div>
-            <button class="menu-item" (click)="onDelete(file, $event)" style="color: #d93025;">
-              <span class="material-symbols-outlined" style="color: #d93025;">delete</span>
-              Mover para a lixeira
-            </button>
-          }
-        </div>
-      </ng-template>
-
       <ng-template #folderCardTpl let-file="file">
-        <div class="grid-card folder-card selectable-item" [class.file-card]="isLocked() && !isDefaultTheme()" [class.locked-folder]="isLocked()" [attr.data-id]="file.id"
-             [class.selected]="driveStore.selectedFileIds().has(file.id)"
+        <div class="grid-card folder-card selectable-item" [class.file-card]="isLocked() && !isDefaultTheme()" [class.locked-folder]="isLocked()" [attr.data-item-key]="itemKey(file)"
+             [class.selected]="isFileSelected(file)"
              [class.dragging]="isDragged(file)"
-             [class.drag-over]="dragOverFolderId() === file.id"
-             [attr.draggable]="(!isLocked() && file.id !== -9999) ? 'true' : null"
+             [class.drag-over]="dragOverItemKey() === itemKey(file)"
+             [attr.draggable]="canDrag(file) ? 'true' : null"
              (dragstart)="onDragStart($event, file, dragPreview)"
              (dragover)="onDragOver($event, file)"
              (dragleave)="onDragLeave($event, file)"
@@ -119,7 +48,8 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
              (dblclick)="onFileDblClick(file, $event)"
              (contextmenu)="onContextMenu(file, $event)">
             @if (isDefaultTheme()) {
-              <div class="default-preview-viewport folder-preview-viewport" aria-hidden="true">
+              <div class="default-preview-viewport folder-preview-viewport" aria-hidden="true"
+                   appThumbnailViewport [appThumbnailViewportTarget]="isLocked() ? null : getFolderPreviewCandidate(file)">
                 @if (isLocked()) {
                   <app-default-locked-preview />
                 } @else {
@@ -148,14 +78,14 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
       </ng-template>
 
       <ng-template #fileCardTpl let-file="file">
-        <div class="grid-card file-card selectable-item" [attr.data-id]="file.id"
+        <div class="grid-card file-card selectable-item" [attr.data-item-key]="itemKey(file)"
              [class.video-card]="file.type === 'video'"
              [class.image-card]="file.type === 'image'"
              [class.mixed-folder-card]="file.isFolder"
              [class.locked-folder]="file.isFolder && isLocked()"
-             [class.selected]="driveStore.selectedFileIds().has(file.id)"
+             [class.selected]="isFileSelected(file)"
              [class.dragging]="isDragged(file)"
-             [attr.draggable]="(!isLocked() && file.id !== -9999) ? 'true' : null"
+             [attr.draggable]="canDrag(file) ? 'true' : null"
              (dragstart)="onDragStart($event, file, dragPreview)"
              (dragover)="onDragOver($event, file)"
              (dragleave)="onDragLeave($event, file)"
@@ -165,7 +95,8 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
              (dblclick)="onFileDblClick(file, $event)"
              (contextmenu)="onContextMenu(file, $event)">
           @if (file.isFolder && isDefaultTheme()) {
-            <div class="default-preview-viewport folder-preview-viewport" aria-hidden="true">
+            <div class="default-preview-viewport folder-preview-viewport" aria-hidden="true"
+                 appThumbnailViewport [appThumbnailViewportTarget]="isLocked() ? null : getFolderPreviewCandidate(file)">
               @if (isLocked()) {
                 <app-default-locked-preview />
               } @else {
@@ -194,6 +125,7 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
           </div>
           @if (!file.isFolder) {
             <div class="default-preview-viewport file-card-thumbnail"
+                 appThumbnailViewport [appThumbnailViewportTarget]="isLocked() ? null : thumbnailCandidate(file)"
                  [class.locked-preview-viewport]="isLocked() && isDefaultTheme()"
                  [style.background-image]="!isLocked() && driveStore.thumbnails()[file.id] ? 'url(' + driveStore.thumbnails()[file.id] + ')' : ''">
               @if (isLocked() && isDefaultTheme()) {
@@ -206,60 +138,13 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
         </div>
       </ng-template>
 
-      <ng-template #sortMenu>
-        <div class="sort-menu-dropdown"
-             [style.position]="'fixed'"
-             [style.top.px]="sortMenuPosition()?.y"
-             [style.left.px]="sortMenuPosition()?.x"
-             [style.right]="'auto'"
-             [style.margin]="'0'"
-             [style.z-index]="9999"
-             (click)="$event.stopPropagation()">
-          <div class="sort-section-title">Ordenar por</div>
-          <button class="menu-item" (click)="setSort('name'); isSortMenuOpen.set(false)">
-            <span class="material-symbols-outlined check-icon">{{ sortColumn() === 'name' ? 'check' : '' }}</span>
-            Nome
-          </button>
-          <button class="menu-item" (click)="setSort('modified'); isSortMenuOpen.set(false)">
-            <span class="material-symbols-outlined check-icon">{{ sortColumn() === 'modified' ? 'check' : '' }}</span>
-            Data de modificação
-          </button>
-          <button class="menu-item" (click)="setSort('size'); isSortMenuOpen.set(false)">
-            <span class="material-symbols-outlined check-icon">{{ sortColumn() === 'size' ? 'check' : '' }}</span>
-            Tamanho
-          </button>
-          
-          <div class="sort-divider"></div>
-          <div class="sort-section-title">Ordem</div>
-          <button class="menu-item" (click)="setSortDirection('asc'); isSortMenuOpen.set(false)">
-            <span class="material-symbols-outlined check-icon">{{ sortDirection() === 'asc' ? 'check' : '' }}</span>
-            {{ getSortDirectionLabel('asc') }}
-          </button>
-          <button class="menu-item" (click)="setSortDirection('desc'); isSortMenuOpen.set(false)">
-            <span class="material-symbols-outlined check-icon">{{ sortDirection() === 'desc' ? 'check' : '' }}</span>
-            {{ getSortDirectionLabel('desc') }}
-          </button>
-
-          <div class="sort-divider"></div>
-          <div class="sort-section-title">Pastas</div>
-          <button class="menu-item" (click)="setSortFoldersMode('top'); isSortMenuOpen.set(false)">
-            <span class="material-symbols-outlined check-icon">{{ sortFoldersMode() === 'top' ? 'check' : '' }}</span>
-            No topo
-          </button>
-          <button class="menu-item" (click)="setSortFoldersMode('mixed'); isSortMenuOpen.set(false)">
-            <span class="material-symbols-outlined check-icon">{{ sortFoldersMode() === 'mixed' ? 'check' : '' }}</span>
-            Misturado com arquivos
-          </button>
-        </div>
-      </ng-template>
-
-      @if (driveStore.selectedFileIds().size > 0) {
+      @if (selectedCount() > 0 && viewMode() !== 'computer') {
         <div class="bulk-action-bar" (click)="$event.stopPropagation()">
           <div class="bulk-selection-count">
             <button class="bulk-close-btn" (click)="clearSelection()" title="Limpar seleção">
               <span class="material-symbols-outlined">close</span>
             </button>
-            {{ driveStore.selectedFileIds().size }} {{ driveStore.selectedFileIds().size === 1 ? 'item selecionado' : 'itens selecionados' }}
+            {{ selectedCount() }} {{ selectedCount() === 1 ? 'item selecionado' : 'itens selecionados' }}
           </div>
           <div class="bulk-actions-group">
             @if (viewMode() === 'trash') {
@@ -281,7 +166,7 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
         </div>
       }
 
-      @if (driveStore.displayMode() === 'grid' && viewMode() !== 'storage') {
+      @if (driveStore.displayMode() === 'grid' && viewMode() !== 'storage' && files().length > 0) {
         <ng-template #gridRendererTpl>
         <div class="grid-layout" [attr.data-renderer]="isDefaultTheme() ? 'default' : 'gdrive'">
           <!-- Sort Header for Grid Mode -->
@@ -298,7 +183,7 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
             @if (sortedFolders().length > 0) {
               <div class="grid-section">
                 <div class="grid-container folders-grid">
-                  @for (file of sortedFolders(); track file.id) {
+                  @for (file of sortedFolders(); track itemKey(file)) {
                     <ng-container *ngTemplateOutlet="folderCardTpl; context: { file: file }"></ng-container>
                   }
                 </div>
@@ -307,7 +192,7 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
             @if (sortedFilesOnly().length > 0) {
               <div class="grid-section">
                 <div class="grid-container files-grid">
-                  @for (file of sortedFilesOnly(); track file.id) {
+                  @for (file of sortedFilesOnly(); track itemKey(file)) {
                     <ng-container *ngTemplateOutlet="fileCardTpl; context: { file: file }"></ng-container>
                   }
                 </div>
@@ -316,7 +201,7 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
           } @else {
             <div class="grid-section">
               <div class="grid-container mixed-grid">
-                @for (file of sortedFiles(); track file.id) {
+                @for (file of sortedFiles(); track itemKey(file)) {
                   <ng-container *ngTemplateOutlet="fileCardTpl; context: { file: file }"></ng-container>
                 }
               </div>
@@ -364,16 +249,16 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
           </div>
         </div>
         <div class="file-list-body">
-          @for (file of sortedFiles(); track file.id) {
-            <div class="file-row selectable-item" [attr.data-id]="file.id"
+          @for (file of sortedFiles(); track itemKey(file)) {
+            <div class="file-row selectable-item" [attr.data-item-key]="itemKey(file)"
                  tabindex="0"
                  role="row"
                  [class.storage-view]="viewMode() === 'storage'"
                  [class.unlocked]="!isLocked()"
-                 [class.selected]="driveStore.selectedFileIds().has(file.id)"
+                 [class.selected]="isFileSelected(file)"
                  [class.dragging]="isDragged(file)"
-                 [class.drag-over]="dragOverFolderId() === file.id"
-                 [attr.draggable]="(!isLocked() && file.id !== -9999) ? 'true' : null"
+                 [class.drag-over]="dragOverItemKey() === itemKey(file)"
+                 [attr.draggable]="canDrag(file) ? 'true' : null"
                  (dragstart)="onDragStart($event, file, dragPreview)"
                  (dragover)="onDragOver($event, file)"
                  (dragleave)="onDragLeave($event, file)"
@@ -415,6 +300,13 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
         </div>
       }
 
+      @if (viewMode() === 'computer' && files().length === 0 && !loading()) {
+        <div class="computer-empty-state" role="status">{{ emptyMessage() }}</div>
+      }
+      @if (viewMode() === 'computer' && hasMore()) {
+        <button class="computer-load-more" (click)="loadMoreRequested.emit()" [disabled]="loading()">Carregar mais</button>
+      }
+
       @if (isContainerMenuOpen() && contextMenuPosition()) {
         <div class="action-menu"
              [style.position]="'fixed'"
@@ -436,11 +328,30 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
       }
 
       @if (activeMenuFile()) {
-        <ng-container *ngTemplateOutlet="ctxMenu; context: { file: activeMenuFile() }"></ng-container>
+        <app-file-context-menu
+          [file]="activeMenuFile()!"
+          [viewMode]="viewMode()"
+          [position]="contextMenuPosition()"
+          [hasProxy]="hasProxy(activeMenuFile()!)"
+          [canMove]="canRequestStorageMove(activeMenuFile()!)"
+          [shareDisabled]="!getShareAvailability(activeMenuFile()!).allowed"
+          [shareDisabledReason]="getShareReason(activeMenuFile()!)"
+          [shareDisabledMessage]="getShareMessage(activeMenuFile()!)"
+          [showPin]="viewMode() === 'drive' && activeMenuFile()!.isFolder && activeMenuFile()!.id !== -9999"
+          [pinPending]="pinnedFoldersStore.isPending(activeMenuFile()!.id)"
+          [pinLabel]="pinnedFoldersStore.isPinned(activeMenuFile()!.id) ? 'Desafixar do acesso rápido' : 'Fixar no acesso rápido'"
+          (action)="onContextMenuAction(activeMenuFile()!, $event)" />
       }
 
       @if (isSortMenuOpen()) {
-        <ng-container *ngTemplateOutlet="sortMenu"></ng-container>
+        <app-file-sort-menu
+          [position]="sortMenuPosition()"
+          [column]="sortColumn()"
+          [direction]="sortDirection()"
+          [foldersMode]="sortFoldersMode()"
+          (columnChange)="setSort($event); isSortMenuOpen.set(false)"
+          (directionChange)="setSortDirection($event); isSortMenuOpen.set(false)"
+          (foldersModeChange)="setSortFoldersMode($event); isSortMenuOpen.set(false)" />
       }
 
       <!-- Drag Image Custom Preview (hidden offscreen) -->
@@ -498,45 +409,8 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
       .sort-icon-small {
         font-size: 16px;
       }
-      .sort-menu-dropdown {
-        position: absolute;
-        top: 40px;
-        left: 16px;
-        background: white;
-        border: 1px solid #dadce0;
-        border-radius: 4px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        padding: 8px 0;
-        z-index: 100;
-        min-width: 200px;
-        display: flex;
-        flex-direction: column;
-      }
       .col-actions {
         position: relative;
-      }
-      .col-actions .sort-menu-dropdown {
-        left: auto;
-        right: 0;
-      }
-      .sort-section-title {
-        padding: 4px 40px;
-        font-size: 12px;
-        color: #5f6368;
-        font-weight: 500;
-      }
-      .sort-divider {
-        height: 1px;
-        background-color: #e8eaed;
-        margin: 8px 0;
-      }
-      .check-icon {
-        font-size: 18px;
-        width: 24px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin-right: 8px;
       }
       .sort-btn-list {
         display: flex;
@@ -608,6 +482,26 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
         overflow-y: auto;
         overflow-x: hidden;
         box-sizing: border-box;
+      }
+
+      .computer-empty-state {
+        display: grid;
+        flex: 1 1 auto;
+        min-height: 160px;
+        place-items: center;
+        padding: 24px;
+        color: var(--default-workspace-muted, #6b7280);
+        text-align: center;
+      }
+
+      .computer-load-more {
+        align-self: center;
+        margin: 10px;
+        padding: 7px 14px;
+        border: 1px solid var(--default-border-strong, #9ca3af);
+        border-radius: 4px;
+        background: var(--default-surface, transparent);
+        color: inherit;
       }
 
       .file-row {
@@ -1297,7 +1191,8 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
     `
   ],
 })
-export class FileListComponent implements OnInit, OnDestroy {
+export class FileListComponent implements OnInit, OnDestroy, AfterViewInit {
+  readonly formatBytes = (bytes: number) => formatBytesValue(bytes, 2);
   private readonly appState = inject(AppStateService);
   readonly driveStore = inject(DriveStore);
   private readonly ngZone = inject(NgZone);
@@ -1307,90 +1202,157 @@ export class FileListComponent implements OnInit, OnDestroy {
   private clickUnsub: (() => void) | null = null;
   private resizeUnsub: (() => void) | null = null;
   private scrollUnsub: (() => void) | null = null;
+  @ViewChildren(ThumbnailViewportTargetDirective) private readonly thumbnailTargets!: QueryList<ThumbnailViewportTargetDirective>;
+  private thumbnailObserver: IntersectionObserver | null = null;
+  private thumbnailTargetsSubscription: Subscription | null = null;
+  private readonly observedThumbnailTargets = new Set<HTMLElement>();
+  private readonly requestedThumbnailCandidates = new Map<HTMLElement, number>();
+  private readonly thumbnailTargetByElement = new Map<HTMLElement, ThumbnailViewportTargetDirective>();
 
   constructor() {
     effect(() => {
-      if (this.driveStore.displayMode() === 'grid' && !this.isLocked()) {
-        const gridFiles = this.sortedFilesOnly();
-        gridFiles.forEach(f => {
-          if (f.type === 'image' || f.type === 'video') {
-            // Load thumbnail lazily (cache prevents multiple loads)
-            this.driveStore.loadThumbnail(f);
-          }
-        });
-        this.sortedFolders().forEach(folder => {
-          const preview = this.folderPreviewFile(folder);
-          if (preview) this.driveStore.loadThumbnail(preview);
-        });
+      this.driveStore.displayMode();
+      this.viewMode();
+      this.isLocked();
+      this.sortedFiles();
+      this.folderPreviewByFolderId();
+      queueMicrotask(() => this.syncThumbnailTargets());
+    });
+    let previousResetState: string | undefined;
+    effect(() => {
+      const resetState = `${this.viewMode()}:${this.selectionResetKey()}`;
+      if (previousResetState !== undefined && previousResetState !== resetState) {
+        this.selectedItemKeys.set(new Set());
+        this.closeMenu();
       }
+      previousResetState = resetState;
     });
   }
 
   ngOnInit() {
     this.ngZone.runOutsideAngular(() => {
       this.clickUnsub = this.renderer.listen('document', 'click', () => {
-        if (this.activeMenuFileId() !== null || this.isContainerMenuOpen()) {
+        if (this.activeMenuItem() !== null || this.isContainerMenuOpen()) {
           this.ngZone.run(() => this.closeMenu());
         }
       });
 
       this.resizeUnsub = this.renderer.listen('window', 'resize', () => {
-        if (this.activeMenuFileId() !== null || this.isContainerMenuOpen()) {
+        if (this.activeMenuItem() !== null || this.isContainerMenuOpen()) {
           this.ngZone.run(() => this.closeMenu());
         }
       });
 
       this.scrollUnsub = this.renderer.listen('window', 'scroll', () => {
-        if (this.activeMenuFileId() !== null || this.isContainerMenuOpen()) {
+        if (this.activeMenuItem() !== null || this.isContainerMenuOpen()) {
           this.ngZone.run(() => this.closeMenu());
         }
       });
     });
   }
 
+  ngAfterViewInit() {
+    if (typeof IntersectionObserver !== 'undefined') {
+      this.thumbnailObserver = new IntersectionObserver(entries => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const element = entry.target as HTMLElement;
+          const target = this.thumbnailTargetByElement.get(element);
+          const candidate = target?.appThumbnailViewportTarget;
+          if (!candidate || this.isLocked() || this.driveStore.displayMode() !== 'grid' || this.viewMode() === 'storage') continue;
+          if (this.requestedThumbnailCandidates.get(element) === candidate.id) continue;
+          this.requestedThumbnailCandidates.set(element, candidate.id);
+          const observer = this.thumbnailObserver;
+          observer?.unobserve(element);
+          this.observedThumbnailTargets.delete(element);
+          void this.driveStore.loadThumbnail(candidate);
+        }
+      }, { root: null, rootMargin: '0px', threshold: 0.01 });
+    }
+    this.thumbnailTargetsSubscription = this.thumbnailTargets.changes.subscribe(() => this.syncThumbnailTargets());
+    this.syncThumbnailTargets();
+  }
+
   ngOnDestroy() {
     if (this.clickUnsub) this.clickUnsub();
     if (this.resizeUnsub) this.resizeUnsub();
     if (this.scrollUnsub) this.scrollUnsub();
+    this.thumbnailTargetsSubscription?.unsubscribe();
+    this.thumbnailObserver?.disconnect();
+    this.observedThumbnailTargets.clear();
+    this.thumbnailTargetByElement.clear();
+    this.requestedThumbnailCandidates.clear();
   }
 
   readonly files = input.required<DriveFile[]>();
-  readonly viewMode = input<'drive' | 'storage' | 'trash'>('drive');
+  readonly viewMode = input<'drive' | 'storage' | 'computer' | 'trash'>('drive');
   readonly quota = input<QuotaState | null>(null);
+  readonly folderPreviewFiles = input<DriveFile[]>([]);
+  readonly movingFileIds = input<ReadonlySet<number>>(new Set<number>());
+  readonly selectionResetKey = input('');
+  readonly hasMore = input(false);
+  readonly loading = input(false);
+  readonly emptyMessage = input('Esta unidade não possui arquivos Nanika.');
 
   @Output() createFolderRequested = new EventEmitter<void>();
   @Output() uploadFileRequested = new EventEmitter<void>();
   @Output() previewRequested = new EventEmitter<FilePreviewRequest>();
   @Output() shareRequested = new EventEmitter<DriveFile>();
+  @Output() folderOpenRequested = new EventEmitter<DriveFile>();
+  @Output() storageMoveRequested = new EventEmitter<DriveFile>();
+  @Output() loadMoreRequested = new EventEmitter<void>();
+  private readonly selectedItemKeys = signal<Set<string>>(new Set());
 
   readonly isLocked = this.appState.isLocked;
-  readonly activeMenuFileId = signal<number | null>(null);
+  readonly activeMenuItem = signal<DriveFile | null>(null);
   readonly contextMenuPosition = signal<{ x: number, y: number } | null>(null);
   readonly isContainerMenuOpen = signal(false);
   readonly sortMenuPosition = signal<{ x: number, y: number } | null>(null);
 
-  readonly activeMenuFile = computed(() => {
-    const id = this.activeMenuFileId();
-    if (id === null) return null;
-    const allFiles = [...this.driveStore.files(), ...this.driveStore.trashFiles()];
-    return allFiles.find(f => f.id === id) || null;
-  });
+  readonly activeMenuFile = computed(() => this.activeMenuItem());
 
-  readonly draggedFiles = signal<DriveFile[]>([]);
-  readonly dragOverFolderId = signal<number | null>(null);
-
-  isDragged(file: DriveFile): boolean {
-    return this.draggedFiles().some(f => f.id === file.id);
+  selectedCount(): number {
+    const selected = this.selectedItemKeys();
+    return selected.size > 0 ? selected.size : this.driveStore.selectedFileIds().size;
   }
 
-  sortColumn = signal<string>('name');
+  isFileSelected(file: DriveFile): boolean {
+    const selected = this.selectedItemKeys();
+    return selected.size > 0 ? selected.has(this.itemKey(file)) : this.driveStore.selectedFileIds().has(file.id);
+  }
+
+  canDrag(file: DriveFile): boolean {
+    return this.viewMode() !== 'computer' && !this.isLocked() && file.id !== -9999;
+  }
+
+  itemKey(file: DriveFile): string {
+    return `${file.isFolder ? 'folder' : 'file'}:${file.id}`;
+  }
+
+  canRequestStorageMove(file: DriveFile): boolean {
+    return this.viewMode() !== 'trash'
+      && !file.isFolder
+      && file.id !== -9999
+      && !file.isHidden
+      && !this.isLocked()
+      && !this.movingFileIds().has(file.id);
+  }
+
+  readonly draggedFiles = signal<DriveFile[]>([]);
+  readonly dragOverItemKey = signal<string | null>(null);
+
+  isDragged(file: DriveFile): boolean {
+    return this.draggedFiles().some(f => this.itemKey(f) === this.itemKey(file));
+  }
+
+  sortColumn = signal<FileSortColumn>('name');
   sortDirection = signal<'asc' | 'desc'>('asc');
   sortFoldersMode = signal<'top' | 'mixed'>('top');
   isSortMenuOpen = signal(false);
 
   isDraggingSelection = signal(false);
   selectionBox = signal({ startX: 0, startY: 0, x: 0, y: 0, w: 0, h: 0 });
-  private dragSelectionInitialSet = new Set<number>();
+  private dragSelectionInitialSet = new Set<string>();
   private readonly elRef = inject(ElementRef);
   readonly pinnedFoldersStore = inject(PinnedFoldersStore);
 
@@ -1399,7 +1361,7 @@ export class FileListComponent implements OnInit, OnDestroy {
   }
 
   closeMenu() {
-    this.activeMenuFileId.set(null);
+    this.activeMenuItem.set(null);
     this.contextMenuPosition.set(null);
     this.isContainerMenuOpen.set(false);
   }
@@ -1408,11 +1370,11 @@ export class FileListComponent implements OnInit, OnDestroy {
     event.stopPropagation();
     this.isContainerMenuOpen.set(false);
 
-    if (this.activeMenuFileId() === file.id) {
-      this.activeMenuFileId.set(null);
+    if (this.activeMenuItem() === file) {
+      this.activeMenuItem.set(null);
       this.contextMenuPosition.set(null);
     } else {
-      this.activeMenuFileId.set(file.id);
+      this.activeMenuItem.set(file);
 
       const target = event.currentTarget as HTMLElement;
       const rect = target.getBoundingClientRect();
@@ -1443,7 +1405,7 @@ export class FileListComponent implements OnInit, OnDestroy {
     }
 
     this.contextMenuPosition.set({ x, y });
-    this.activeMenuFileId.set(file.id);
+    this.activeMenuItem.set(file);
     this.isContainerMenuOpen.set(false);
   }
 
@@ -1474,7 +1436,7 @@ export class FileListComponent implements OnInit, OnDestroy {
 
     this.contextMenuPosition.set({ x, y });
     this.isContainerMenuOpen.set(true);
-    this.activeMenuFileId.set(null);
+    this.activeMenuItem.set(null);
   }
 
   onCreateFolder(event: Event) {
@@ -1504,14 +1466,14 @@ export class FileListComponent implements OnInit, OnDestroy {
   }
 
   onDragStart(event: DragEvent, file: DriveFile, previewEl: HTMLElement) {
-    if (this.isLocked() || file.id === -9999) {
+    if (!this.canDrag(file)) {
       event.preventDefault();
       return;
     }
 
     let filesToDrag = [file];
-    const selection = this.driveStore.selectedFileIds();
-    if (selection.has(file.id)) {
+    const selection = this.selectedItemKeys();
+    if (selection.has(this.itemKey(file)) || (selection.size === 0 && this.driveStore.selectedFileIds().has(file.id))) {
       filesToDrag = this.getSelectedFiles();
     }
     this.draggedFiles.set(filesToDrag);
@@ -1553,7 +1515,7 @@ export class FileListComponent implements OnInit, OnDestroy {
   }
 
   onDragOver(event: DragEvent, targetFile: DriveFile) {
-    if (this.isLocked()) return;
+    if (this.viewMode() === 'computer' || this.isLocked()) return;
     const draggedItems = this.draggedFiles();
     if (draggedItems.length === 0) return;
 
@@ -1575,24 +1537,24 @@ export class FileListComponent implements OnInit, OnDestroy {
 
     // Prevent default to allow drop
     event.preventDefault();
-    this.dragOverFolderId.set(targetFile.id);
+    this.dragOverItemKey.set(this.itemKey(targetFile));
   }
 
-  onDragLeave(event: DragEvent, file: DriveFile) {
-    if (this.dragOverFolderId() === file.id) {
-      this.dragOverFolderId.set(null);
+  onDragLeave(_event: DragEvent, file: DriveFile) {
+    if (this.dragOverItemKey() === this.itemKey(file)) {
+      this.dragOverItemKey.set(null);
     }
   }
 
   onDragEnd() {
     this.draggedFiles.set([]);
-    this.dragOverFolderId.set(null);
+    this.dragOverItemKey.set(null);
   }
 
   async onDrop(event: DragEvent, targetFile: DriveFile) {
-    if (this.isLocked()) return;
+    if (this.viewMode() === 'computer' || this.isLocked()) return;
     event.preventDefault();
-    this.dragOverFolderId.set(null);
+    this.dragOverItemKey.set(null);
 
     const draggedItems = this.draggedFiles();
     if (draggedItems.length === 0) return;
@@ -1640,7 +1602,7 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   async onRestore(file: DriveFile, event: Event) {
     event.stopPropagation();
-    this.activeMenuFileId.set(null);
+    this.activeMenuItem.set(null);
     try {
       await this.driveStore.restoreItem(file);
     } catch (e) {
@@ -1650,7 +1612,7 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   async onPermanentDelete(file: DriveFile, event: Event) {
     event.stopPropagation();
-    this.activeMenuFileId.set(null);
+    this.activeMenuItem.set(null);
     const confirmed = await this.dialogService.confirm(
       'Excluir permanentemente?',
       `O item "${file.decryptedName || file.encryptedName}" será excluído permanentemente. Não é possível desfazer essa ação.`,
@@ -1680,8 +1642,37 @@ export class FileListComponent implements OnInit, OnDestroy {
     this.openPreview(file, event);
   }
 
+  onContextMenuAction(file: DriveFile, action: FileContextMenuAction): void {
+    const handlers: Record<FileContextMenuAction['type'], (event: Event) => void | Promise<void>> = {
+      'open-folder': event => this.onOpenFolder(file, event),
+      preview: event => this.onPlayOriginal(file, event),
+      'preview-proxy': event => this.onPlayProxy(file, event),
+      download: event => this.onDownload(file, event),
+      'storage-move': event => this.onStorageMove(file, event),
+      share: event => this.onShare(file, event),
+      restore: event => this.onRestore(file, event),
+      'permanent-delete': event => this.onPermanentDelete(file, event),
+      rename: event => this.onRename(file, event),
+      'toggle-pin': event => this.togglePinned(file, event),
+      delete: event => this.onDelete(file, event),
+    };
+    void handlers[action.type](action.event);
+  }
+
   onPlayProxy(file: DriveFile, event: Event) {
     this.openPreview(file, event);
+  }
+
+  onOpenFolder(file: DriveFile, event: Event): void {
+    event.stopPropagation();
+    this.closeMenu();
+    if (file.isFolder) this.folderOpenRequested.emit(file);
+  }
+
+  onStorageMove(file: DriveFile, event: Event): void {
+    event.stopPropagation();
+    this.closeMenu();
+    if (this.canRequestStorageMove(file)) this.storageMoveRequested.emit(file);
   }
 
   private openPreview(file: DriveFile, event: Event): void {
@@ -1696,24 +1687,9 @@ export class FileListComponent implements OnInit, OnDestroy {
     return this.driveStore.files().some(f => f.decryptedName === proxyName && f.folderId === file.folderId);
   }
 
-  checkSubmenuBounds(event: MouseEvent) {
-    const wrapper = event.currentTarget as HTMLElement;
-    const submenu = wrapper.querySelector('.submenu') as HTMLElement;
-    if (!submenu) return;
-
-    // Se o mouse estiver na metade direita da tela, abre o submenu para a esquerda
-    if (event.clientX > window.innerWidth / 2) {
-      submenu.style.left = 'auto';
-      submenu.style.right = '100%';
-    } else {
-      submenu.style.left = '100%';
-      submenu.style.right = 'auto';
-    }
-  }
-
   async onRename(file: DriveFile, event: Event) {
     event.stopPropagation();
-    this.activeMenuFileId.set(null);
+    this.activeMenuItem.set(null);
     const newName = await this.dialogService.prompt('Renomear', file.decryptedName || file.encryptedName, 'Nome do item', 'OK');
     if (!newName || newName === (file.decryptedName || file.encryptedName)) return;
 
@@ -1734,7 +1710,7 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   async onMove(file: DriveFile, event: Event) {
     event.stopPropagation();
-    this.activeMenuFileId.set(null);
+    this.activeMenuItem.set(null);
 
     const folders = this.getAvailableFolders(file);
     let msg = 'Selecione o número da pasta de destino:\n\n0: Raiz (Meu Drive)\n';
@@ -1766,7 +1742,7 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   async onDelete(file: DriveFile, event: Event) {
     event.stopPropagation();
-    this.activeMenuFileId.set(null);
+    this.activeMenuItem.set(null);
 
     const confirmed = await this.dialogService.confirm(
       'Mover para a lixeira?',
@@ -1783,51 +1759,17 @@ export class FileListComponent implements OnInit, OnDestroy {
   }
 
   sortedFiles = computed(() => {
-    let fileArray = [...this.files()];
-
-    // Auto sort by size descending in storage view if not manually overridden
     const mode = this.viewMode();
-    const col = this.sortColumn();
-    const dir = this.sortDirection();
-
-    fileArray.sort((a, b) => {
-      let valA: any = a.decryptedName || a.encryptedName;
-      let valB: any = b.decryptedName || b.encryptedName;
-
-      if (col === 'size') {
-        valA = a.sizeBytes;
-        valB = b.sizeBytes;
-      } else if (col === 'owner') {
-        valA = a.owner;
-        valB = b.owner;
-      } else if (col === 'modified') {
-        valA = a.modifiedAt;
-        valB = b.modifiedAt;
-      } else if (col === 'name') {
-        valA = (a.decryptedName || a.encryptedName).toLowerCase();
-        valB = (b.decryptedName || b.encryptedName).toLowerCase();
-      }
-
-      if (valA < valB) return dir === 'asc' ? -1 : 1;
-      if (valA > valB) return dir === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-    const foldersMode = this.sortFoldersMode();
-    if (foldersMode === 'top') {
-      fileArray.sort((a, b) => {
-        if (a.isFolder === b.isFolder) return 0;
-        return a.isFolder ? -1 : 1;
-      });
-    }
-
-    if (mode === 'storage' && col === 'name' && dir === 'asc') {
-      // Se o user ainda não clicou em nada (estado default de name asc), força sort por tamanho desc
-      fileArray = [...this.files()].sort((a, b) => b.sizeBytes - a.sizeBytes);
-    }
+    const fileArray = sortFiles(
+      this.files(),
+      this.sortColumn(),
+      this.sortDirection(),
+      this.sortFoldersMode(),
+      mode === 'storage',
+    );
 
     const currentId = this.driveStore.currentFolderId();
-    if (currentId !== null && mode !== 'storage' && mode !== 'trash') {
+    if (currentId !== null && mode !== 'storage' && mode !== 'trash' && mode !== 'computer') {
       const currentFolder = this.driveStore.files().find(f => f.isFolder && f.id === currentId);
       const parentId = currentFolder?.parentId ?? null;
 
@@ -1855,13 +1797,28 @@ export class FileListComponent implements OnInit, OnDestroy {
   sortedFolders = computed(() => this.sortedFiles().filter(f => f.isFolder));
   sortedFilesOnly = computed(() => this.sortedFiles().filter(f => !f.isFolder));
 
+  private readonly folderPreviewByFolderId = computed(() => {
+    const candidates = this.viewMode() === 'computer' ? this.folderPreviewFiles() : this.driveStore.files();
+    const previews = new Map<number, DriveFile>();
+    for (const file of candidates) {
+      if (file.isFolder || file.isHidden || file.folderId == null || (file.type !== 'image' && file.type !== 'video')) {
+        continue;
+      }
+      if (!previews.has(file.folderId)) previews.set(file.folderId, file);
+    }
+    return previews;
+  });
+
   private folderPreviewFile(folder: DriveFile): DriveFile | undefined {
-    return this.driveStore.files().find(file =>
-      !file.isFolder &&
-      !file.isHidden &&
-      file.folderId === folder.id &&
-      (file.type === 'image' || file.type === 'video')
-    );
+    return this.folderPreviewByFolderId().get(folder.id);
+  }
+
+  getFolderPreviewCandidate(folder: DriveFile): DriveFile | null {
+    return this.folderPreviewFile(folder) ?? null;
+  }
+
+  thumbnailCandidate(file: DriveFile): DriveFile | null {
+    return !file.isFolder && !file.isHidden && (file.type === 'image' || file.type === 'video') ? file : null;
   }
 
   getFolderThumbnail(folder: DriveFile): string | null {
@@ -1922,7 +1879,7 @@ export class FileListComponent implements OnInit, OnDestroy {
     }
   }
 
-  setSort(col: string) {
+  setSort(col: FileSortColumn) {
     if (this.sortColumn() === col) {
       this.sortDirection.update(d => d === 'asc' ? 'desc' : 'asc');
     } else {
@@ -1967,14 +1924,6 @@ export class FileListComponent implements OnInit, OnDestroy {
     return file.sizeBytes + this.getProxySize(file);
   }
 
-  formatBytes(bytes: number): string {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  }
-
   getPercentage(file: DriveFile): string {
     const max = this.getTotalStorageMax();
     if (max === 0) return '0%';
@@ -1987,24 +1936,28 @@ export class FileListComponent implements OnInit, OnDestroy {
     event.stopPropagation();
     if (this.isLocked()) return;
 
-    const currentSelection = new Set(this.driveStore.selectedFileIds());
+    const currentSelection = new Set(this.selectedItemKeys().size > 0
+      ? this.selectedItemKeys()
+      : [...this.files()].filter(file => this.driveStore.selectedFileIds().has(file.id)).map(file => this.itemKey(file)));
     if (event.ctrlKey || event.metaKey) {
-      if (currentSelection.has(file.id)) {
-        currentSelection.delete(file.id);
+      const key = this.itemKey(file);
+      if (currentSelection.has(key)) {
+        currentSelection.delete(key);
       } else {
-        currentSelection.add(file.id);
+        currentSelection.add(key);
       }
     } else {
       currentSelection.clear();
-      currentSelection.add(file.id);
+      currentSelection.add(this.itemKey(file));
     }
-    this.driveStore.selectedFileIds.set(currentSelection);
+    this.selectedItemKeys.set(currentSelection);
+    this.syncDriveSelection(currentSelection);
   }
 
   onContainerClick(event: MouseEvent) {
     const isDrag = this.selectionBox().w > 5 || this.selectionBox().h > 5;
     if (!event.defaultPrevented && !isDrag) {
-      this.driveStore.selectedFileIds.set(new Set());
+      this.clearSelection();
     }
     this.isSortMenuOpen.set(false);
     this.selectionBox.set({ startX: 0, startY: 0, x: 0, y: 0, w: 0, h: 0 }); // reset box
@@ -2031,9 +1984,12 @@ export class FileListComponent implements OnInit, OnDestroy {
     });
 
     if (event.ctrlKey || event.metaKey) {
-      this.dragSelectionInitialSet = new Set(this.driveStore.selectedFileIds());
+      this.dragSelectionInitialSet = new Set(this.selectedItemKeys().size > 0
+        ? this.selectedItemKeys()
+        : [...this.files()].filter(file => this.driveStore.selectedFileIds().has(file.id)).map(file => this.itemKey(file)));
     } else {
       this.dragSelectionInitialSet = new Set();
+      this.selectedItemKeys.set(new Set());
       this.driveStore.selectedFileIds.set(new Set());
     }
 
@@ -2062,7 +2018,7 @@ export class FileListComponent implements OnInit, OnDestroy {
     this.updateSelectionFromDragBox(newX, newY, newW, newH);
   }
 
-  onWindowMouseUp(event: MouseEvent) {
+  onWindowMouseUp(_event: MouseEvent) {
     if (this.isDraggingSelection()) {
       this.isDraggingSelection.set(false);
     }
@@ -2092,24 +2048,26 @@ export class FileListComponent implements OnInit, OnDestroy {
         rect.top > dragRect.bottom
       );
 
-      const id = parseInt(item.getAttribute('data-id') || '-1', 10);
+      const key = item.getAttribute('data-item-key');
       if (intersects) {
-        if (!newSelection.has(id)) newSelection.add(id);
+        if (key && !newSelection.has(key)) newSelection.add(key);
       }
     });
 
-    this.driveStore.selectedFileIds.set(newSelection);
+    this.selectedItemKeys.set(newSelection);
+    this.syncDriveSelection(newSelection);
   }
 
   onFileDblClick(file: DriveFile, event: Event) {
     event.stopPropagation();
     if (this.isLocked()) return;
     if (file.id === -9999) {
-      this.driveStore.navigateTo(file.parentId ?? null);
+      if (this.viewMode() !== 'computer') this.driveStore.navigateTo(file.parentId ?? null);
       return;
     }
     if (file.isFolder) {
-      this.driveStore.navigateTo(file.id);
+      if (this.viewMode() === 'computer') this.folderOpenRequested.emit(file);
+      else this.driveStore.navigateTo(file.id);
     } else {
       const playlist = this.sortedFiles().filter(f => !f.isFolder);
       this.previewRequested.emit({ file, playlist });
@@ -2117,13 +2075,68 @@ export class FileListComponent implements OnInit, OnDestroy {
   }
 
   clearSelection() {
+    this.selectedItemKeys.set(new Set());
     this.driveStore.selectedFileIds.set(new Set());
   }
 
+  private syncThumbnailTargets(): void {
+    if (!this.thumbnailTargets || !this.thumbnailObserver && typeof IntersectionObserver !== 'undefined') return;
+
+    const active = this.driveStore.displayMode() === 'grid' && this.viewMode() !== 'storage' && !this.isLocked();
+    const current = new Set<HTMLElement>();
+    for (const target of this.thumbnailTargets) {
+      const element = target.element;
+      current.add(element);
+      this.thumbnailTargetByElement.set(element, target);
+      const candidate = active ? target.appThumbnailViewportTarget : null;
+      if (!candidate) {
+        this.unobserveThumbnailTarget(element);
+        this.requestedThumbnailCandidates.delete(element);
+        continue;
+      }
+
+      if (this.requestedThumbnailCandidates.get(element) === candidate.id) continue;
+      this.unobserveThumbnailTarget(element);
+      if (!this.thumbnailObserver) {
+        this.requestedThumbnailCandidates.set(element, candidate.id);
+        void this.driveStore.loadThumbnail(candidate);
+      } else {
+        this.thumbnailObserver.observe(element);
+        this.observedThumbnailTargets.add(element);
+      }
+    }
+
+    for (const element of [...this.thumbnailTargetByElement.keys()]) {
+      if (!current.has(element)) {
+        this.unobserveThumbnailTarget(element);
+        this.thumbnailTargetByElement.delete(element);
+        this.requestedThumbnailCandidates.delete(element);
+      }
+    }
+  }
+
+  private unobserveThumbnailTarget(element: HTMLElement): void {
+    if (!this.observedThumbnailTargets.has(element)) return;
+    this.thumbnailObserver?.unobserve(element);
+    this.observedThumbnailTargets.delete(element);
+  }
+
   getSelectedFiles(): DriveFile[] {
-    const ids = this.driveStore.selectedFileIds();
-    const allFiles = [...this.driveStore.files(), ...this.driveStore.trashFiles()];
-    return allFiles.filter(f => ids.has(f.id));
+    const selected = this.selectedItemKeys();
+    const allFiles = this.viewMode() === 'computer'
+      ? this.files()
+      : [...this.driveStore.files(), ...this.driveStore.trashFiles()];
+    return selected.size > 0
+      ? allFiles.filter(file => selected.has(this.itemKey(file)))
+      : allFiles.filter(file => this.driveStore.selectedFileIds().has(file.id));
+  }
+
+  private syncDriveSelection(keys: ReadonlySet<string>): void {
+    if (this.viewMode() === 'computer') return;
+    const files = this.viewMode() === 'trash' ? this.driveStore.trashFiles() : this.files();
+    this.driveStore.selectedFileIds.set(new Set(
+      files.filter(file => keys.has(this.itemKey(file))).map(file => file.id)
+    ));
   }
 
   async onBulkDownload() {
@@ -2187,7 +2200,7 @@ export class FileListComponent implements OnInit, OnDestroy {
     this.clearSelection();
   }
 
-  onShare(file: DriveFile, event: MouseEvent) {
+  onShare(file: DriveFile, event: Event) {
     event.stopPropagation();
     this.closeMenu();
     if (!getPublicShareAvailability(file).allowed) return;
@@ -2196,5 +2209,15 @@ export class FileListComponent implements OnInit, OnDestroy {
 
   getShareAvailability(file: DriveFile) {
     return getPublicShareAvailability(file);
+  }
+
+  getShareReason(file: DriveFile): 'folder' | 'google_drive' | undefined {
+    const availability = this.getShareAvailability(file);
+    return availability.allowed ? undefined : availability.reason;
+  }
+
+  getShareMessage(file: DriveFile): string {
+    const availability = this.getShareAvailability(file);
+    return availability.allowed ? '' : availability.message;
   }
 }

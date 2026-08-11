@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_TESTS "Compilar suite de testes" ON)
+option(BUILD_BENCHMARKS "Build backend microbenchmarks" OFF)
 option(ENABLE_COVERAGE "Instrumentar os testes para cobertura" OFF)
 
 include(FetchContent)
@@ -13,29 +14,43 @@ if(NOT WIN32)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static" FORCE)
 endif()
 
-find_program(CCACHE_PROGRAM ccache)
-if(CCACHE_PROGRAM)
-    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+if(NOT MSVC)
+    find_program(CCACHE_PROGRAM ccache)
+    if(CCACHE_PROGRAM)
+        set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
+    endif()
 endif()
 
 # ----------------------------------------------------------------------
 # FASE 1: DEPENDÊNCIAS DO SISTEMA
 # ----------------------------------------------------------------------
 find_package(Threads REQUIRED)
-find_package(PkgConfig REQUIRED)
 find_package(OpenSSL REQUIRED)
 
-# Bibliotecas de produção
-pkg_check_modules(SODIUM REQUIRED libsodium)
-pkg_check_modules(ZIP REQUIRED libzip)
+if(MSVC)
+    find_package(libpqxx CONFIG REQUIRED)
+    find_package(unofficial-sodium CONFIG REQUIRED)
+    find_package(asio CONFIG REQUIRED)
+    find_package(nlohmann_json CONFIG REQUIRED)
+elseif(WIN32)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SODIUM REQUIRED libsodium)
+    pkg_check_modules(PQXX REQUIRED libpqxx)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SODIUM REQUIRED libsodium)
+endif()
 
 # Framework de testes
-if(BUILD_TESTS)
+if(BUILD_TESTS OR BUILD_BENCHMARKS)
     find_package(Catch2 3 CONFIG REQUIRED)
 endif()
 
 # Cliente HTTP (CPR)
-if(WIN32)
+if(MSVC)
+    # Native Windows uses the vcpkg CONFIG package.
+    find_package(cpr CONFIG REQUIRED)
+elseif(WIN32)
     find_package(cpr REQUIRED)
 else()
     set(CPR_USE_SYSTEM_CURL ON CACHE BOOL "Use system cURL" FORCE)
@@ -47,9 +62,7 @@ else()
 endif()
 
 # Banco de Dados (libpqxx) - Inteligência de Plataforma
-if(WIN32)
-    pkg_check_modules(PQXX REQUIRED libpqxx)
-else()
+if(NOT MSVC AND NOT WIN32)
     set(SKIP_PQXX_TESTS ON CACHE BOOL "Skip tests" FORCE)
     set(SKIP_BUILD_TEST ON CACHE BOOL "Skip tests" FORCE)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static" FORCE)
@@ -63,12 +76,31 @@ endif()
 # ----------------------------------------------------------------------
 # FASE 2: SEPARANDO O CÓDIGO FONTE E HEADERS
 # ----------------------------------------------------------------------
-file(GLOB_RECURSE ALL_SRC_FILES "src/*.cpp")
-list(REMOVE_ITEM ALL_SRC_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
-set(CORE_SOURCES ${ALL_SRC_FILES})
+set(CORE_SOURCES
+    src/controllers/ApiRouter.cpp
+    src/database/DatabaseMigration.cpp
+    src/database/DatabasePool.cpp
+    src/database/FileManager.cpp
+    src/database/FolderManager.cpp
+    src/database/UsersManager.cpp
+    src/Services/AuthService.cpp
+    src/Services/EmailService.cpp
+    src/Services/GoogleDriveService.cpp
+    src/Services/GoogleJwksCache.cpp
+    src/storage/FileChunker.cpp
+    src/storage/GarbageCollector.cpp
+)
+
+set(BENCHMARK_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_perf_auth.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_perf_chunk_io.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_perf_crypto.cpp"
+)
 
 if(BUILD_TESTS)
-    file(GLOB_RECURSE TEST_FILES "tests/*.cpp")
+    file(GLOB_RECURSE TEST_FILES CONFIGURE_DEPENDS "tests/*.cpp")
+    list(FILTER TEST_FILES EXCLUDE REGEX "test_perf_.*\\.cpp$")
+    list(FILTER TEST_FILES EXCLUDE REGEX "/e2e_fixture\\.cpp$")
 endif()
 
 # ----------------------------------------------------------------------
@@ -96,43 +128,81 @@ FetchContent_Declare(jwt_cpp
 )
 FetchContent_MakeAvailable(jwt_cpp)
 
+if(MSVC)
+    set(NANIKA_PQXX_TARGET libpqxx::pqxx)
+    set(NANIKA_SODIUM_TARGET unofficial-sodium::sodium)
+    set(NANIKA_ASIO_TARGET asio::asio)
+    set(NANIKA_JSON_TARGET nlohmann_json::nlohmann_json)
+    set(NANIKA_PLATFORM_INCLUDE_DIRS)
+    set(NANIKA_PLATFORM_LIBRARY_DIRS)
+    set(NANIKA_PLATFORM_LINK_LIBS ws2_32 mswsock crypt32 bcrypt)
+elseif(WIN32)
+    # Keep the existing MSYS2/MinGW pkg-config path for local development.
+    set(NANIKA_PQXX_TARGET ${PQXX_LIBRARIES})
+    set(NANIKA_SODIUM_TARGET ${SODIUM_LIBRARIES})
+    set(NANIKA_ASIO_TARGET)
+    set(NANIKA_JSON_TARGET)
+    set(NANIKA_PLATFORM_INCLUDE_DIRS ${PQXX_INCLUDE_DIRS} ${SODIUM_INCLUDE_DIRS})
+    set(NANIKA_PLATFORM_LIBRARY_DIRS ${PQXX_LIBRARY_DIRS} ${SODIUM_LIBRARY_DIRS})
+    set(NANIKA_PLATFORM_LINK_LIBS ws2_32 mswsock crypt32 bcrypt)
+else()
+    set(NANIKA_PQXX_TARGET pqxx)
+    set(NANIKA_SODIUM_TARGET ${SODIUM_LIBRARIES})
+    set(NANIKA_ASIO_TARGET)
+    set(NANIKA_JSON_TARGET)
+    set(NANIKA_PLATFORM_INCLUDE_DIRS ${SODIUM_INCLUDE_DIRS})
+    set(NANIKA_PLATFORM_LIBRARY_DIRS ${SODIUM_LIBRARY_DIRS})
+    set(NANIKA_PLATFORM_LINK_LIBS)
+endif()
+
+set(NANIKA_COMMON_LIBS
+    Threads::Threads
+    ${NANIKA_PQXX_TARGET}
+    ${NANIKA_SODIUM_TARGET}
+    ${NANIKA_JSON_TARGET}
+    jwt-cpp::jwt-cpp
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    cpr::cpr
+    ${NANIKA_ASIO_TARGET}
+    ${NANIKA_PLATFORM_LINK_LIBS}
+)
+
+function(configure_nanika_platform target)
+    target_include_directories(${target} PRIVATE include ${NANIKA_PLATFORM_INCLUDE_DIRS})
+    if(MSVC)
+        target_compile_definitions(${target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+    if(NANIKA_PLATFORM_LIBRARY_DIRS)
+        target_link_directories(${target} PRIVATE ${NANIKA_PLATFORM_LIBRARY_DIRS})
+    endif()
+    target_link_libraries(${target} PRIVATE ${NANIKA_COMMON_LIBS})
+endfunction()
+
+function(configure_asio_compat target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /UASIO_NO_DEPRECATED /UBOOST_ASIO_NO_DEPRECATED)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE -UASIO_NO_DEPRECATED -UBOOST_ASIO_NO_DEPRECATED)
+    endif()
+endfunction()
+
 # ----------------------------------------------------------------------
 # FASE 3: CONSTRUINDO O SERVIDOR (Produção)
 # ----------------------------------------------------------------------
 add_executable(savebox_server src/main.cpp ${CORE_SOURCES})
 
-target_compile_options(savebox_server PRIVATE -UASIO_NO_DEPRECATED -UBOOST_ASIO_NO_DEPRECATED)
+function(enable_project_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /utf-8)
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
 
-if(WIN32)
-    # No Windows, usamos a libpqxx instalada pelo MSYS2
-    target_include_directories(savebox_server PRIVATE include ${PQXX_INCLUDE_DIRS} ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
-    target_link_directories(savebox_server PRIVATE ${PQXX_LIBRARY_DIRS} ${SODIUM_LIBRARY_DIRS} ${ZIP_LIBRARY_DIRS})
-    target_link_libraries(savebox_server PRIVATE 
-        Threads::Threads 
-        ${PQXX_LIBRARIES} 
-        ${SODIUM_LIBRARIES} 
-        ${ZIP_LIBRARIES} 
-        jwt-cpp::jwt-cpp 
-        OpenSSL::SSL 
-        OpenSSL::Crypto 
-        cpr::cpr 
-        ws2_32 mswsock crypt32 bcrypt
-    )
-else()
-    # No Linux (Docker), usamos a libpqxx compilada pelo FetchContent (nome 'pqxx')
-    target_include_directories(savebox_server PRIVATE include ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
-    target_link_directories(savebox_server PRIVATE ${SODIUM_LIBRARY_DIRS} ${ZIP_LIBRARY_DIRS})
-    target_link_libraries(savebox_server PRIVATE 
-        Threads::Threads 
-        pqxx  # <-- A mágica da libpqxx moderna no Linux
-        ${SODIUM_LIBRARIES} 
-        ${ZIP_LIBRARIES} 
-        jwt-cpp::jwt-cpp 
-        OpenSSL::SSL 
-        OpenSSL::Crypto 
-        cpr::cpr
-    )
-endif()
+enable_project_warnings(savebox_server)
+configure_nanika_platform(savebox_server)
+configure_asio_compat(savebox_server)
 
 # ----------------------------------------------------------------------
 # FASE 4: CONSTRUINDO OS TESTES (Laboratório)
@@ -140,42 +210,61 @@ endif()
 if(BUILD_TESTS)
     add_executable(savebox_tests ${TEST_FILES} ${CORE_SOURCES})
 
-    target_compile_options(savebox_tests PRIVATE -UASIO_NO_DEPRECATED -UBOOST_ASIO_NO_DEPRECATED)
+    target_compile_definitions(savebox_tests PRIVATE NANIKA_TESTING=1)
+    target_include_directories(savebox_tests PRIVATE tests)
+    configure_nanika_platform(savebox_tests)
+    target_link_libraries(savebox_tests PRIVATE Catch2::Catch2)
+    configure_asio_compat(savebox_tests)
+    enable_project_warnings(savebox_tests)
 
     if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(savebox_tests PRIVATE -O0 -g --coverage)
         target_link_options(savebox_tests PRIVATE --coverage)
     endif()
 
-    if(WIN32)
-        target_include_directories(savebox_tests PRIVATE include tests ${PQXX_INCLUDE_DIRS} ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
-        target_link_directories(savebox_tests PRIVATE ${PQXX_LIBRARY_DIRS} ${SODIUM_LIBRARY_DIRS} ${ZIP_LIBRARY_DIRS})
-        target_link_libraries(savebox_tests PRIVATE
-            Threads::Threads
-            Catch2::Catch2
-            ${PQXX_LIBRARIES}
-            ${SODIUM_LIBRARIES}
-            ${ZIP_LIBRARIES}
+    add_executable(nanika_e2e_fixture tests/e2e_fixture.cpp tests/e2e_fixture_support.cpp ${CORE_SOURCES})
+    target_include_directories(nanika_e2e_fixture PRIVATE tests)
+    configure_nanika_platform(nanika_e2e_fixture)
+    configure_asio_compat(nanika_e2e_fixture)
+    enable_project_warnings(nanika_e2e_fixture)
+endif()
+
+if(BUILD_BENCHMARKS)
+    add_executable(savebox_benchmarks ${BENCHMARK_FILES})
+
+    enable_project_warnings(savebox_benchmarks)
+
+    if(MSVC)
+        target_link_libraries(savebox_benchmarks PRIVATE
+            Catch2::Catch2WithMain
+            unofficial-sodium::sodium
             jwt-cpp::jwt-cpp
             OpenSSL::SSL
             OpenSSL::Crypto
-            cpr::cpr
+            ws2_32 mswsock crypt32 bcrypt
+        )
+    elseif(WIN32)
+        target_include_directories(savebox_benchmarks PRIVATE ${SODIUM_INCLUDE_DIRS})
+        target_link_directories(savebox_benchmarks PRIVATE ${SODIUM_LIBRARY_DIRS})
+        target_link_libraries(savebox_benchmarks PRIVATE
+            Catch2::Catch2WithMain
+            ${SODIUM_LIBRARIES}
+            jwt-cpp::jwt-cpp
+            OpenSSL::SSL
+            OpenSSL::Crypto
             ws2_32 mswsock crypt32 bcrypt
         )
     else()
-        target_include_directories(savebox_tests PRIVATE include tests ${SODIUM_INCLUDE_DIRS} ${ZIP_INCLUDE_DIRS})
-        target_link_directories(savebox_tests PRIVATE ${SODIUM_LIBRARY_DIRS} ${ZIP_LIBRARY_DIRS})
-        target_link_libraries(savebox_tests PRIVATE
-            Threads::Threads
-            Catch2::Catch2
-            pqxx
+        target_include_directories(savebox_benchmarks PRIVATE ${SODIUM_INCLUDE_DIRS})
+        target_link_directories(savebox_benchmarks PRIVATE ${SODIUM_LIBRARY_DIRS})
+        target_link_libraries(savebox_benchmarks PRIVATE
+            Catch2::Catch2WithMain
             ${SODIUM_LIBRARIES}
-            ${ZIP_LIBRARIES}
             jwt-cpp::jwt-cpp
             OpenSSL::SSL
             OpenSSL::Crypto
-            cpr::cpr
         )
     endif()
+
 endif()
 

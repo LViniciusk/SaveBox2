@@ -69,7 +69,9 @@ import { ComputerViewComponent } from '../computer-view/computer-view.component'
 
     @if (currentView() === 'computer') {
       <app-computer-view
+        [movingFileIds]="movingFileIds()"
         (previewRequested)="previewRequested.emit($event)"
+        (storageMoveRequested)="storageMoveRequested.emit($event)"
         (shareRequested)="shareRequested.emit($event)" />
     } @else if (currentView() === 'trash') {
       <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" (previewRequested)="previewRequested.emit($event)" />
@@ -80,10 +82,12 @@ import { ComputerViewComponent } from '../computer-view/computer-view.component'
         [files]="currentView() === 'storage' ? currentStorageFiles() : driveStore.currentFolderFiles()"
         [viewMode]="currentView() === 'storage' ? 'storage' : 'drive'"
         [quota]="driveStore.quota()"
+        [movingFileIds]="movingFileIds()"
         (createFolderRequested)="createFolderRequested.emit()"
         (uploadFileRequested)="uploadFileRequested.emit()"
         (previewRequested)="previewRequested.emit($event)"
-        (shareRequested)="shareRequested.emit($event)" />
+        (shareRequested)="shareRequested.emit($event)"
+        (storageMoveRequested)="storageMoveRequested.emit($event)" />
     }
 
     @if (currentView() !== 'transfers') {
@@ -128,21 +132,6 @@ import { ComputerViewComponent } from '../computer-view/computer-view.component'
     :host-context(:root[data-theme='default']) .workspace-drop-zone { background: var(--default-workspace-bg); isolation: isolate; }
     :host-context(:root[data-theme='default']) .workspace-drop-zone.drop-zone-active::after { inset: 0; border-radius: 0; border-color: var(--default-workspace-selected-border); background: color-mix(in srgb, var(--default-workspace-selected) 80%, transparent); color: var(--default-workspace-text); }
     :host-context(:root[data-theme='default']) .breadcrumb { display: none; }
-    :host-context(:root[data-theme='default']) .breadcrumb { min-height: 38px; gap: 6px; padding: 5px 12px; border-bottom: 1px solid var(--default-workspace-border); color: var(--default-workspace-text); font-size: 13px; }
-    :host-context(:root[data-theme='default']) .breadcrumb-icon { color: var(--default-folder); font-size: 18px; }
-    :host-context(:root[data-theme='default']) .breadcrumb-text,
-    :host-context(:root[data-theme='default']) .breadcrumb-path,
-    :host-context(:root[data-theme='default']) .breadcrumb-link { font: 13px 'Segoe UI', sans-serif; }
-    :host-context(:root[data-theme='default']) .breadcrumb-link { color: var(--default-workspace-muted); padding: 2px 4px; }
-    :host-context(:root[data-theme='default']) .breadcrumb-link:hover:not(:disabled) { color: var(--default-workspace-text); background: var(--default-workspace-hover); text-decoration: none; }
-    :host-context(:root[data-theme='default']) .breadcrumb-link:disabled { color: var(--default-workspace-text); }
-    :host-context(:root[data-theme='default']) .breadcrumb-separator { color: var(--default-workspace-muted); }
-    :host-context(:root[data-theme='default']) .view-mode-toggle { border-color: var(--default-context-border); border-radius: var(--default-workspace-radius); }
-    :host-context(:root[data-theme='default']) .view-mode-toggle button { min-width: 34px; padding: 3px 7px; color: var(--default-workspace-muted); }
-    :host-context(:root[data-theme='default']) .view-mode-toggle button:first-child { border-color: var(--default-context-border); }
-    :host-context(:root[data-theme='default']) .view-mode-toggle button:hover { background: var(--default-workspace-hover); color: var(--default-workspace-text); }
-    :host-context(:root[data-theme='default']) .view-mode-toggle button.active,
-    :host-context(:root[data-theme='default']) .view-mode-toggle button.active:hover { background: var(--default-workspace-selected); color: var(--default-workspace-text); }
     :host-context(:root[data-theme='default']) .trash-banner { margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--default-workspace-border); border-radius: 0; background: var(--default-workspace-surface-alt); }
     :host-context(:root[data-theme='default']) .trash-banner-text { color: var(--default-workspace-muted); font-family: inherit; }
     :host-context(:root[data-theme='default']) .empty-trash-btn { border-radius: var(--default-workspace-radius); background: transparent; color: #8fc8f4; font-family: inherit; }
@@ -152,12 +141,14 @@ import { ComputerViewComponent } from '../computer-view/computer-view.component'
 export class DriveWorkspaceComponent {
   readonly currentView = input.required<DriveView>();
   readonly locked = input(false);
+  readonly movingFileIds = input<ReadonlySet<number>>(new Set<number>());
   readonly driveStore = inject(DriveStore);
   readonly themeService = inject(ThemeService);
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
   readonly previewRequested = output<FilePreviewRequest>();
   readonly shareRequested = output<DriveFile>();
+  readonly storageMoveRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
   readonly externalDrop = output<DroppedItems>();
   readonly dropStarted = output<void>();

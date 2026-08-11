@@ -1,0 +1,202 @@
+name: Quality Baseline
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Python quality tooling
+        run: |
+          python3 -m venv "$RUNNER_TEMP/nanika-quality-venv"
+          "$RUNNER_TEMP/nanika-quality-venv/bin/python" -m pip install --requirement tools/quality/requirements.txt
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Dependency security contract
+        run: python3 tools/quality/test_dependency_security.py
+
+      - name: Frontend machine-readable coverage
+        working-directory: frontend
+        run: npm run test:coverage
+
+      - name: Knip report-only baseline
+        working-directory: frontend
+        shell: bash
+        run: |
+          mkdir -p ../.quality
+          set +e
+          npx --no-install knip --reporter json > ../.quality/knip-normal.json
+          code=$?
+          set -e
+          test "$code" -le 1
+          set +e
+          npx --no-install knip --production --reporter json > ../.quality/knip-production.json
+          code=$?
+          set -e
+          test "$code" -le 1
+          set +e
+          npx --no-install knip --cycles --reporter json > ../.quality/knip-cycles.json
+          code=$?
+          set -e
+          test "$code" -le 1
+
+      - name: Complexity and module metrics
+        run: |
+          mkdir -p .quality
+          "$RUNNER_TEMP/nanika-quality-venv/bin/python" tools/quality/test_module_metrics.py
+          "$RUNNER_TEMP/nanika-quality-venv/bin/python" tools/quality/module_metrics.py --root . --output .quality/module-metrics.json
+
+      - name: Cppcheck report-only baseline
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes cppcheck
+          set +e
+          python3 tools/quality/run_cppcheck.py --root . --output .quality/cppcheck.xml
+          code=$?
+          set -e
+          test "$code" -le 1
+
+      - name: Dependency reports
+        working-directory: frontend
+        shell: bash
+        run: |
+          npm audit --json > ../.quality/npm-audit.json || test "$?" -eq 1
+          npm audit --omit=dev --json > ../.quality/npm-audit-runtime.json || test "$?" -eq 1
+          npm outdated --json > ../.quality/npm-outdated.json || test "$?" -eq 1
+
+      - name: Publish sanitized report inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-baseline-inputs
+          path: .quality
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install native PostgreSQL and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential cmake pkg-config git curl \
+            libasio-dev libssl-dev libsodium-dev \
+            libcurl4-openssl-dev libpq-dev nlohmann-json3-dev catch2 \
+            postgresql postgresql-client
+
+      - name: Start isolated PostgreSQL
+        run: |
+          sudo service postgresql start
+          sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE nanika_e2e LOGIN PASSWORD 'nanika_e2e_password';
+          CREATE DATABASE nanika_e2e OWNER nanika_e2e;
+          SQL
+
+      - name: Create E2E environment
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.quality/e2e-storage"
+          storage_id=$(openssl rand -hex 32)
+          printf '%s' "$storage_id" > "$GITHUB_WORKSPACE/.quality/e2e-storage/.nanika-e2e-storage-id"
+          echo "NANIKA_E2E_STORAGE_PATH=$GITHUB_WORKSPACE/.quality/e2e-storage" >> "$GITHUB_ENV"
+          echo "NANIKA_E2E_STORAGE_ID=$storage_id" >> "$GITHUB_ENV"
+          cat > .env <<EOF
+          DB_USER=nanika_e2e
+          DB_PASSWORD=nanika_e2e_password
+          DB_NAME=nanika_e2e
+          DB_HOST=127.0.0.1
+          DB_PORT=5432
+          PASS_PEPPER=nanika_e2e_pepper
+          NANIKA_JWT_SECRET=nanika_e2e_jwt_secret
+          RESEND_API_KEY=nanika_e2e_resend
+          EMAIL_VALIDATION_API_KEY=nanika_e2e_email
+          NANIKA_STORAGE_PATH=$GITHUB_WORKSPACE/.quality/e2e-storage
+          CORS_ORIGIN=http://localhost:4200
+          CORS_ALLOWED_ORIGINS=http://localhost:4200
+          NANIKA_BIND_ADDRESS=127.0.0.1
+          PORT=8080
+          EOF
+
+      - name: Build backend E2E targets
+        run: |
+          cmake -S backend -B backend/build-e2e -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build backend/build-e2e --target savebox_server nanika_e2e_fixture --parallel
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Start backend and frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd backend/build-e2e
+            exec ./savebox_server > "$RUNNER_TEMP/nanika-backend.log" 2>&1
+          ) &
+          backend_pid=$!
+          (
+            cd frontend
+            exec npm start -- --host 127.0.0.1 > "$RUNNER_TEMP/nanika-frontend.log" 2>&1
+          ) &
+          frontend_pid=$!
+          cleanup() {
+            kill "$frontend_pid" "$backend_pid" 2>/dev/null || true
+            wait "$frontend_pid" "$backend_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for endpoint in http://127.0.0.1:8080/health http://127.0.0.1:4200/; do
+            for attempt in $(seq 1 60); do
+              if curl --fail --silent "$endpoint" >/dev/null; then break; fi
+              if [ "$attempt" -eq 60 ]; then
+                cat "$RUNNER_TEMP/nanika-backend.log" "$RUNNER_TEMP/nanika-frontend.log"
+                exit 1
+              fi
+              sleep 1
+            done
+          done
+          (
+            cd frontend
+            npx playwright install --with-deps chromium
+          )
+          export NANIKA_E2E_BASE_URL=http://localhost:4200
+          export NANIKA_E2E_BACKEND_URL=http://localhost:8080
+          export NANIKA_E2E_FIXTURE_EXE="$GITHUB_WORKSPACE/backend/build-e2e/nanika_e2e_fixture"
+          python3 tools/quality/run_playwright.py
+
+      - name: Upload E2E report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-e2e
+          path: |
+            .quality/playwright
+            ${{ runner.temp }}/nanika-backend.log
+            ${{ runner.temp }}/nanika-frontend.log

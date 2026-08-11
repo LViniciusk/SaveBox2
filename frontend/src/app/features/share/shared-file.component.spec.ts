@@ -4,7 +4,27 @@ import { SharedFileComponent } from './shared-file.component';
 import { ShareService } from '../drive/services/share.service';
 import { KasumiCryptoService } from '../../core/crypto/kasumi-crypto.service';
 import { ActivatedRoute } from '@angular/router';
-import { of, throwError } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
+
+function fdkBytes(fill = 0x5a): Uint8Array {
+  return new Uint8Array(32).fill(fill);
+}
+
+function encodeBase64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function withLocationHash(hash: string, callback: () => void): void {
+  const previousHash = window.location.hash;
+  window.location.hash = hash ? `#${hash}` : '';
+  try {
+    callback();
+  } finally {
+    window.location.hash = previousHash;
+  }
+}
 
 describe('SharedFileComponent', () => {
   let fixture: any;
@@ -33,34 +53,99 @@ describe('SharedFileComponent', () => {
     component = fixture.componentInstance;
   });
 
-  describe('decodeBase64UrlSafe', () => {
-    it('should correctly restore padding and decode URL-Safe Base64 with minus character', () => {
-      // Arrange
-      // String "-g" corresponds to standard base64 "+g==" (btoa of char code 250)
-      const urlSafeStr = '-g';
+  describe('share fragment validation', () => {
+    it('rejects missing, malformed, noncanonical and wrong-size fragments without loading metadata', () => {
+      const loadMetadata = spyOn(component, 'loadMetadata').and.resolveTo();
+      const invalidFragments = [
+        '',
+        '-g',
+        'P_8',
+        'A'.repeat(42),
+        `${'A'.repeat(42)}B`,
+        `${'A'.repeat(42)}=`,
+        `${'A'.repeat(42)}+`,
+        `${'A'.repeat(42)}/`,
+        `${'A'.repeat(42)} `,
+        `${'A'.repeat(42)}%`,
+      ];
 
-      // Act
-      const result = component.decodeBase64UrlSafe(urlSafeStr);
+      for (const fragment of invalidFragments) {
+        component.fdkUint8 = null;
+        withLocationHash(fragment, () => component.ngOnInit());
+        expect(component.fdkUint8).toBeNull();
+      }
 
-      // Assert
-      expect(result).toBeInstanceOf(Uint8Array);
-      expect(result.length).toBe(1);
-      expect(result[0]).toBe(250);
+      expect(loadMetadata).not.toHaveBeenCalled();
+      expect(shareSpy.getSharedFileMetadata).not.toHaveBeenCalled();
+      expect(component.securityError()).toContain('Link invalido');
     });
-    
-    it('should correctly replace underscores with slashes and decode', () => {
-      // Arrange
-      // String "P_8" corresponds to standard base64 "P/8=" (btoa of char codes [63, 255])
-      const urlSafeStr = 'P_8';
-      
-      // Act
-      const result = component.decodeBase64UrlSafe(urlSafeStr);
-      
-      // Assert
-      expect(result).toBeInstanceOf(Uint8Array);
-      expect(result.length).toBe(2);
-      expect(result[0]).toBe(63);
-      expect(result[1]).toBe(255);
+
+    it('accepts exactly one canonical 32-byte FDK from the fragment', () => {
+      const root = fdkBytes(0xa0);
+      const loadMetadata = spyOn(component, 'loadMetadata').and.resolveTo();
+
+      withLocationHash(encodeBase64Url(root), () => component.ngOnInit());
+
+      expect(component.fdkUint8).toEqual(root);
+      expect(component.fdkUint8).not.toBe(root);
+      expect(loadMetadata).toHaveBeenCalledTimes(1);
+    });
+
+    it('accepts every canonical final sextet for a 32-byte FDK', () => {
+      const expectedEndings = 'AEIMQUYcgkosw048';
+
+      for (let nibble = 0; nibble < 16; nibble++) {
+        const root = new Uint8Array(32).fill(0xa0);
+        root[31] = 0xa0 | nibble;
+        const fragment = encodeBase64Url(root);
+
+        expect(fragment.length).toBe(43);
+        expect(fragment.at(-1)).toBe(expectedEndings[nibble]);
+
+        const decoded = (component as any).decodeShareFdk(fragment);
+
+        expect(decoded).not.toBe(root);
+        expect(Array.from(decoded)).toEqual(Array.from(root));
+      }
+    });
+
+    it('accepts a valid public-share FDK ending in o through ngOnInit', () => {
+      const root = fdkBytes();
+      const fragment = encodeBase64Url(root);
+      const loadMetadata = spyOn(component, 'loadMetadata').and.resolveTo();
+
+      expect(fragment.at(-1)).toBe('o');
+
+      withLocationHash(fragment, () => component.ngOnInit());
+
+      expect(component.securityError()).toBeNull();
+      expect(component.fdkUint8).toEqual(root);
+      expect(component.fdkUint8).not.toBe(root);
+      expect(loadMetadata).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects every noncanonical final Base64URL sextet', () => {
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+      const canonical = new Set('AEIMQUYcgkosw048');
+
+      for (const finalChar of alphabet) {
+        if (canonical.has(finalChar)) continue;
+
+        expect(() =>
+          (component as any).decodeShareFdk(`${'A'.repeat(42)}${finalChar}`)
+        ).toThrow();
+      }
+    });
+
+    it('accepts URL-safe substitutions in valid encoded FDKs', () => {
+      for (const fill of [0xfb, 0xff]) {
+        const root = fdkBytes(fill);
+        const fragment = encodeBase64Url(root);
+        const decoded = (component as any).decodeShareFdk(fragment);
+
+        expect(fragment).toMatch(/[-_]/);
+        expect(Array.from(decoded)).toEqual(Array.from(root));
+      }
     });
   });
 
@@ -71,14 +156,23 @@ describe('SharedFileComponent', () => {
       storage_provider: 'local'
     } as any;
     component.shareId = 'share-123';
-    component.fdkUint8 = new Uint8Array([1, 2, 3]);
+    const root = fdkBytes();
+    component.fdkUint8 = root;
     shareSpy.getSharedFileMetadata.and.returnValue(of(metadata));
-    kasumiSpy.decryptName.and.resolveTo('photo.png');
+    let operationFdk!: Uint8Array;
+    kasumiSpy.decryptName.and.callFake(async (_encryptedName: string, fdk: Uint8Array) => {
+      operationFdk = fdk;
+      expect(Array.from(fdk)).toEqual(Array.from(root));
+      return 'photo.png';
+    });
 
     await component.loadMetadata();
 
     expect(shareSpy.getSharedFileMetadata).toHaveBeenCalledWith('share-123');
-    expect(kasumiSpy.decryptName).toHaveBeenCalledWith(metadata.encrypted_name, component.fdkUint8);
+    expect(kasumiSpy.decryptName).toHaveBeenCalledWith(metadata.encrypted_name, jasmine.any(Uint8Array));
+    expect(operationFdk).not.toBe(root);
+    expect(Array.from(operationFdk)).toEqual(new Array(32).fill(0));
+    expect(Array.from(root)).toEqual(new Array(32).fill(0x5a));
     expect(component.metadata()).toBe(metadata);
     expect(component.decryptedName()).toBe('photo.png');
     expect(component.sizeBytes()).toBe(2048);
@@ -87,7 +181,7 @@ describe('SharedFileComponent', () => {
 
   it('reports expired or missing shares without exposing decrypted state', async () => {
     component.shareId = 'missing';
-    component.fdkUint8 = new Uint8Array([1]);
+    component.fdkUint8 = fdkBytes();
     shareSpy.getSharedFileMetadata.and.returnValue(
       throwError(() => ({ error: { error: 'Link expirado' } }))
     );
@@ -111,47 +205,84 @@ describe('SharedFileComponent', () => {
     expect(kasumiSpy.decryptName).not.toHaveBeenCalled();
   });
 
-  it('classifies shared files and formats their size for the UI', () => {
+  it('classifies shared files for the player', () => {
     component.decryptedName.set('photo.PNG');
-    component.sizeBytes.set(1536);
     expect(component.isImage()).toBeTrue();
-    expect(component.isMedia()).toBeTrue();
-    expect(component.getFileIcon()).toBe('image');
-    expect(component.getFormattedSize()).toBe('1.5 KB');
 
     component.decryptedName.set('movie.mp4');
     expect(component.isVideo()).toBeTrue();
-    expect(component.getFileIcon()).toBe('movie');
-
-    component.decryptedName.set('archive.zip');
-    expect(component.isMedia()).toBeFalse();
-    expect(component.getFileIcon()).toBe('zip_box');
-
-    component.decryptedName.set('report.pdf');
-    expect(component.getFileIcon()).toBe('picture_as_pdf');
-
-    component.decryptedName.set('song.mp3');
-    expect(component.getFileIcon()).toBe('audiotrack');
-
-    component.decryptedName.set('notes.md');
-    expect(component.getFileIcon()).toBe('description');
-
-    component.decryptedName.set('unknown.bin');
-    expect(component.getFileIcon()).toBe('insert_drive_file');
   });
 
-  it('surfaces download failures and ignores downloads without an FDK', async () => {
-    component.shareId = 'share-123';
-    component.fdkUint8 = new Uint8Array([1]);
-    shareSpy.downloadSharedFileInRanges.and.returnValue(Promise.reject({ error: { error: 'Arquivo indisponível' } }));
+  it('wipes the page-owned FDK on destroy and keeps destroy idempotent', () => {
+    const root = fdkBytes();
+    component.fdkUint8 = root;
 
-    await component.downloadAndDecryptFile();
+    (component as any).ngOnDestroy();
+    (component as any).ngOnDestroy();
 
-    expect(component.error()).toBe('Arquivo indisponível');
-    expect(component.downloading()).toBeFalse();
+    expect(component.fdkUint8).toBeNull();
+    expect(Array.from(root)).toEqual(new Array(32).fill(0));
+  });
 
-    component.fdkUint8 = null;
-    await component.downloadAndDecryptFile();
-    expect(shareSpy.downloadSharedFileInRanges).toHaveBeenCalledTimes(1);
+  it('unsubscribes pending metadata and does not publish state after destroy', async () => {
+    const root = fdkBytes();
+    component.fdkUint8 = root;
+    let unsubscribed = false;
+    shareSpy.getSharedFileMetadata.and.returnValue(new Observable(() => () => { unsubscribed = true; }));
+
+    const pending = component.loadMetadata();
+    await Promise.resolve();
+    (component as any).ngOnDestroy();
+    await pending;
+
+    expect(unsubscribed).toBeTrue();
+    expect(component.metadata()).toBeNull();
+    expect(component.decryptedName()).toBe('');
+  });
+
+  it('wipes the temporary decrypt copy while preserving the page root', async () => {
+    const root = fdkBytes();
+    component.fdkUint8 = root;
+    const metadata = { encrypted_name: 'encrypted-name', size_bytes: 2048, storage_provider: 'local' } as any;
+    shareSpy.getSharedFileMetadata.and.returnValue(of(metadata));
+    let resolveDecrypt!: (name: string) => void;
+    let operationFdk!: Uint8Array;
+    kasumiSpy.decryptName.and.callFake((_encryptedName: string, fdk: Uint8Array) => {
+      operationFdk = fdk;
+      return new Promise<string>(resolve => { resolveDecrypt = resolve; });
+    });
+
+    const pending = component.loadMetadata();
+    await Promise.resolve();
+    await Promise.resolve();
+    (component as any).ngOnDestroy();
+    expect(Array.from(root)).toEqual(new Array(32).fill(0));
+    expect(Array.from(operationFdk)).toEqual(new Array(32).fill(0x5a));
+
+    resolveDecrypt('stale.png');
+    await pending;
+
+    expect(Array.from(operationFdk)).toEqual(new Array(32).fill(0));
+    expect(component.metadata()).toBeNull();
+    expect(component.decryptedName()).toBe('');
+    expect(component.sizeBytes()).toBe(0);
+  });
+
+  it('wipes a temporary decrypt copy when metadata decryption fails', async () => {
+    const root = fdkBytes();
+    component.fdkUint8 = root;
+    shareSpy.getSharedFileMetadata.and.returnValue(of({ encrypted_name: 'encrypted-name', size_bytes: 10 } as any));
+    let operationFdk!: Uint8Array;
+    kasumiSpy.decryptName.and.callFake((_encryptedName: string, fdk: Uint8Array) => {
+      operationFdk = fdk;
+      return Promise.reject(new Error('bad decrypt'));
+    });
+
+    await component.loadMetadata();
+
+    expect(Array.from(operationFdk)).toEqual(new Array(32).fill(0));
+    expect(Array.from(root)).toEqual(new Array(32).fill(0x5a));
+    expect(component.metadata()).toBeNull();
+    expect(component.error()).toContain('descriptografar');
   });
 });

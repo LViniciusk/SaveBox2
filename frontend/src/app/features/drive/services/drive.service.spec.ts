@@ -4,6 +4,8 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { DriveService } from './drive.service';
 import { environment } from '../../../../environments/environment';
+import { DRIVE_TRANSFER_CHUNK_SIZE } from '../transfer-limits';
+import { firstValueFromAbortable } from '../upload/abortable-observable';
 
 describe('DriveService', () => {
   let service: DriveService;
@@ -43,6 +45,13 @@ describe('DriveService', () => {
   it('should request a tree page when pagination is provided', () => {
     service.getTree(100, 200).subscribe();
     const req = httpMock.expectOne(`${environment.apiUrl}/tree?file_limit=100&file_offset=200`);
+    expect(req.request.method).toBe('GET');
+    req.flush({});
+  });
+
+  it('requests folders explicitly only when requested by a paginated caller', () => {
+    (service.getTree as any)(100, 200, false).subscribe();
+    const req = httpMock.expectOne(`${environment.apiUrl}/tree?file_limit=100&file_offset=200&include_folders=false`);
     expect(req.request.method).toBe('GET');
     req.flush({});
   });
@@ -125,14 +134,40 @@ describe('DriveService', () => {
     req.flush({});
   });
 
-  it('should upload chunk', () => {
+  it('resolves a real HttpClient void chunk response through firstValueFromAbortable', async () => {
     const blob = new Blob(['chunk']);
-    service.uploadChunk(100, 0, blob).subscribe();
+    const result = firstValueFromAbortable(service.uploadChunk(100, 1, blob));
     const req = httpMock.expectOne(`${environment.uploadApiUrl}/files/100/chunks`);
     expect(req.request.method).toBe('POST');
-    expect(req.request.headers.get('X-Chunk-Index')).toBe('0');
+    expect(req.request.headers.get('X-Chunk-Index')).toBe('1');
     expect(req.request.body).toBe(blob);
+    expect(req.request.withCredentials).toBeTrue();
     req.flush(null);
+
+    await expectAsync(result).toBeResolved();
+  });
+
+  it('rejects a real HttpClient chunk error', async () => {
+    const result = firstValueFromAbortable(service.uploadChunk(100, 1, new Blob(['chunk'])));
+    const req = httpMock.expectOne(`${environment.uploadApiUrl}/files/100/chunks`);
+    req.flush({}, { status: 500, statusText: 'Internal Server Error' });
+
+    let rejectedWithHttpError = false;
+    await result.catch(error => rejectedWithHttpError = error.status === 500);
+    expect(rejectedWithHttpError).toBeTrue();
+  });
+
+  it('aborts and unsubscribes a real HttpClient chunk request', async () => {
+    const controller = new AbortController();
+    const result = firstValueFromAbortable(
+      service.uploadChunk(100, 1, new Blob(['chunk'])),
+      controller.signal,
+    );
+    const req = httpMock.expectOne(`${environment.uploadApiUrl}/files/100/chunks`);
+    controller.abort();
+
+    await expectAsync(result).toBeRejectedWithError('Upload cancelled');
+    expect(req.cancelled).toBeTrue();
   });
 
   it('should get uploaded chunks', () => {
@@ -166,17 +201,44 @@ describe('DriveService', () => {
     req.flush(new Blob());
   });
 
+  it('should download a pending local recovery prefix with an exact 206 response', () => {
+    const blob = new Blob(['cipher-prefix']);
+    let result: Blob | undefined;
+    service.downloadPendingUploadRecoveryPrefix(100, 131071).subscribe(value => result = value);
+    const req = httpMock.expectOne(`${environment.apiUrl}/files/100/pending-upload-recovery-prefix`);
+    expect(req.request.method).toBe('GET');
+    expect(req.request.withCredentials).toBeTrue();
+    expect(req.request.headers.get('Range')).toBe('bytes=0-131071');
+    expect(req.request.body).toBeNull();
+    req.flush(blob, { status: 206, statusText: 'Partial Content' });
+    expect(result).toBe(blob);
+  });
+
+  it('rejects invalid pending recovery prefix ends', () => {
+    for (const end of [-1, DRIVE_TRANSFER_CHUNK_SIZE, 1.5]) {
+      expect(() => service.downloadPendingUploadRecoveryPrefix(100, end)).toThrowError('Range de recovery inválido');
+    }
+  });
+
+  it('rejects a non-partial pending recovery response', () => {
+    let error: Error | undefined;
+    service.downloadPendingUploadRecoveryPrefix(100, 31).subscribe({ error: value => error = value });
+    const req = httpMock.expectOne(`${environment.apiUrl}/files/100/pending-upload-recovery-prefix`);
+    req.flush(new Blob(['unexpected']), { status: 200, statusText: 'OK' });
+    expect(error?.message).toBe('Resposta de recovery inválida');
+  });
+
   it('should download a preview using sequential Range requests', async () => {
-    const promise = service.downloadFileInRanges(100, 4 * 1024 * 1024 + 1);
+    const promise = service.downloadFileInRanges(100, DRIVE_TRANSFER_CHUNK_SIZE + 1);
     await Promise.resolve();
 
     const first = httpMock.expectOne(`${environment.apiUrl}/files/100/download`);
-    expect(first.request.headers.get('Range')).toBe('bytes=0-4194303');
+    expect(first.request.headers.get('Range')).toBe(`bytes=0-${DRIVE_TRANSFER_CHUNK_SIZE - 1}`);
     first.flush(new Blob(['first']));
     await Promise.resolve();
 
     const second = httpMock.expectOne(`${environment.apiUrl}/files/100/download`);
-    expect(second.request.headers.get('Range')).toBe('bytes=4194304-4194304');
+    expect(second.request.headers.get('Range')).toBe(`bytes=${DRIVE_TRANSFER_CHUNK_SIZE}-${DRIVE_TRANSFER_CHUNK_SIZE}`);
     second.flush(new Blob(['second']));
 
     expect((await promise).size).toBe(11);
@@ -255,6 +317,7 @@ describe('DriveService', () => {
   it('should initialize a bounded encrypted batch without plaintext fields', () => {
     service.batchInitUploads([
       {
+        client_ref: 'local-ref',
         folder_id: null,
         encrypted_name: 'enc-name',
         name_hash: 'hash-name',
@@ -264,6 +327,7 @@ describe('DriveService', () => {
         storage_provider: 'local',
       },
       {
+        client_ref: 'google-ref',
         folder_id: 7,
         encrypted_name: 'enc-google-name',
         name_hash: 'hash-google-name',
@@ -395,6 +459,28 @@ describe('DriveService', () => {
     req.flush({});
   });
 
+  it('gets the opaque Google recovery context for the pending file', () => {
+    service.getExternalUploadRecoveryContext(100).subscribe();
+    const req = httpMock.expectOne(`${environment.apiUrl}/files/100/external-upload-recovery-context`);
+    expect(req.request.method).toBe('GET');
+    expect(req.request.withCredentials).toBeTrue();
+    expect(req.request.body).toBeNull();
+    req.flush({
+      storage_provider: 'google_drive',
+      external_storage_id: 42,
+      name_hash: 'opaque-hash',
+    });
+  });
+
+  it('transfers ambiguous Google cancellation to the backend control plane', () => {
+    service.cancelExternalUpload(100).subscribe();
+    const req = httpMock.expectOne(`${environment.apiUrl}/files/100/external-upload-cancel`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.withCredentials).toBeTrue();
+    expect(req.request.body).toEqual({});
+    req.flush({ status: 'cleanup_pending' });
+  });
+
   it('maps storage targets without leaking backend field names', () => {
     let result: any;
     service.getStorageTargets().subscribe(value => result = value);
@@ -412,6 +498,41 @@ describe('DriveService', () => {
       availableBytes: 90,
     }));
     expect(result[0].external_storage_id).toBeUndefined();
+  });
+
+  it('preserves unavailable quota as null', () => {
+    let result: any;
+    service.getStorageTargets().subscribe(value => result = value);
+    const req = httpMock.expectOne(`${environment.apiUrl}/api/storage/targets`);
+    req.flush({ targets: [{
+      key: 'google:8', provider: 'google_drive', label: 'Conta indisponível', external_storage_id: 8,
+      account_email: 'unavailable@example.com', account_picture: null,
+      used_bytes: null, max_bytes: null, available_bytes: null, nanika_used_bytes: 0,
+      status: 'unavailable',
+    }] });
+
+    expect(result[0]).toEqual(jasmine.objectContaining({
+      externalStorageId: 8,
+      usedBytes: null,
+      maxBytes: null,
+      availableBytes: null,
+      status: 'unavailable',
+    }));
+  });
+
+  it('normalizes linked account pictures and rejects non-HTTPS values', () => {
+    let result: any;
+    service.getLinkedGoogleAccounts().subscribe(value => result = value);
+    const req = httpMock.expectOne(`${environment.apiUrl}/api/storage/google/accounts`);
+    req.flush({ accounts: [
+      { id: 1, account_email: 'a@example.com', account_picture: ' https://lh3.googleusercontent.com/a ' },
+      { id: 2, account_email: 'b@example.com', account_picture: 'http://insecure.example/b' },
+      { id: 3, account_email: 'c@example.com', account_picture: null },
+    ] });
+
+    expect(result.accounts[0].account_picture).toBe('https://lh3.googleusercontent.com/a');
+    expect(result.accounts[1].account_picture).toBeUndefined();
+    expect(result.accounts[2].account_picture).toBeUndefined();
   });
 
   it('requests one paginated storage projection', () => {

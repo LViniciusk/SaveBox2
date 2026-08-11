@@ -11,6 +11,7 @@ export class DriveDropZoneDirective implements OnDestroy {
   readonly dropError = output<unknown>();
   readonly isActive = signal(false);
   private dragDepth = 0;
+  private dropReadPending = false;
 
   @HostBinding('class.drop-zone-active')
   get dropZoneActive(): boolean {
@@ -44,12 +45,15 @@ export class DriveDropZoneDirective implements OnDestroy {
     if (!this.isExternal(event.dataTransfer)) return;
     event.preventDefault();
     this.reset();
-    if (!this.enabled() || this.locked() || !event.dataTransfer) return;
+    if (!this.enabled() || this.locked() || this.dropReadPending || !event.dataTransfer) return;
     this.dropStarted.emit();
+    this.dropReadPending = true;
     try {
       this.dropped.emit(await this.reader.read(event.dataTransfer));
     } catch (error) {
       this.dropError.emit(error);
+    } finally {
+      this.dropReadPending = false;
     }
   }
 

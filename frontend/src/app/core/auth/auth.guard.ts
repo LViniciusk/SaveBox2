@@ -8,7 +8,7 @@ import { AppStateService, AppStatus } from '../state/app-state.service';
  *
  * Redirects to /login when status is Unauthenticated.
  */
-export const authGuard: CanActivateFn = (route, state) => {
+export const authGuard: CanActivateFn = (_route, state) => {
   const appState = inject(AppStateService);
   const router = inject(Router);
 

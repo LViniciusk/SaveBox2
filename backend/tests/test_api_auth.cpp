@@ -8,7 +8,25 @@
 #include "database/UsersManager.hpp"
 #include <crow_all.h>
 #include <jwt-cpp/jwt.h>
-#include "utils/utils.hpp"
+#include "utils/RandomIds.hpp"
+#include <string_view>
+
+namespace {
+bool has_cookie_attribute(const std::string& cookie, std::string_view expected) {
+    size_t start = 0;
+    while (start <= cookie.size()) {
+        const size_t end = cookie.find(';', start);
+        std::string_view token(cookie.data() + start,
+                               end == std::string::npos ? cookie.size() - start : end - start);
+        while (!token.empty() && token.front() == ' ') token.remove_prefix(1);
+        while (!token.empty() && token.back() == ' ') token.remove_suffix(1);
+        if (token == expected) return true;
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return false;
+}
+}
 
 
 TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
@@ -27,6 +45,13 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
     }
 
     SECTION("Base62Generator - Tamanho, Alfabeto e Entropia") {
+        constexpr std::string_view alphabet =
+            "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+        REQUIRE(Base62Generator::generate(0).empty());
+        REQUIRE(Base62Generator::generate(1).size() == 1);
+        std::string token64 = Base62Generator::generate(64);
+        REQUIRE(token64.size() == 64);
         std::string token1 = Base62Generator::generate(6);
         std::string token2 = Base62Generator::generate(7);
 
@@ -34,15 +59,16 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         REQUIRE(token2.length() == 7);
         REQUIRE(token1 != token2); // Entropia básica
 
-        auto is_base62 = [](const std::string& str) {
+        auto is_base62 = [alphabet](const std::string& str) {
             for (char c : str) {
-                if (!std::isalnum(c)) return false;
+                if (alphabet.find(c) == std::string_view::npos) return false;
             }
             return true;
         };
 
         REQUIRE(is_base62(token1));
         REQUIRE(is_base62(token2));
+        REQUIRE(is_base62(token64));
     }
 
     SECTION("Registro de Usuário - handle_register") {
@@ -409,6 +435,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
 
         crow::request req_reg;
         req_reg.body = R"({"username": "verify_user", "email": "verify_user@test.com", "password": "super_senha"})";
+        req_reg.remote_ip_address = "10.0.0.99";
         req_reg.add_header("CF-Connecting-IP", "10.0.0.99");
         router.handle_register(req_reg);
         
@@ -445,6 +472,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
             crow::request req_bad;
             req_bad.url = "/verify";
             req_bad.url_params = crow::query_string("?token=WRONG1");
+            req_bad.remote_ip_address = "10.0.0.99";
             req_bad.add_header("CF-Connecting-IP", "10.0.0.99");
             
             rl_mw.before_handle(req_bad, dummy_res, ctx);
@@ -457,6 +485,7 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         // A 6ª tentativa deve ser bloqueada pelo middleware (429 ou 403)
         crow::request req_blocked;
         req_blocked.url = "/verify";
+        req_blocked.remote_ip_address = "10.0.0.99";
         req_blocked.add_header("CF-Connecting-IP", "10.0.0.99");
         rl_mw.before_handle(req_blocked, dummy_res, ctx);
         REQUIRE(dummy_res.code != 0); // Está bloqueado! (Provavelmente 429 ou 403)
@@ -480,5 +509,175 @@ TEST_CASE("API de Autenticação - Registro e Login", "[api][auth]") {
         txn.exec("DELETE FROM users WHERE email = 'local_user@test.com'");
         txn.commit();
     }
+}
+
+TEST_CASE("B.36 registration uses the direct peer instead of a forged forwarded identity", "[api][auth][b36]") {
+    const std::string conn_str = get_secure_conn_string();
+    DatabasePool pool(2, conn_str);
+    MockEmailService email;
+    AuthService auth("Lords_do_Underground", "A_flor", &email);
+    FolderManager folder_mgr(pool);
+    ApiRouter router(pool, auth, folder_mgr);
+
+    const std::string peer = "198.51.100.30";
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+        txn.exec("DELETE FROM users WHERE username LIKE 'b36_reg_%'");
+        txn.commit();
+    }
+
+    for (int i = 0; i < 3; ++i) {
+        crow::request req;
+        req.remote_ip_address = peer;
+        req.add_header("CF-Connecting-IP", "203.0.113." + std::to_string(i + 1));
+        req.body = "{\"username\":\"b36_reg_" + std::to_string(i) +
+                   "\",\"email\":\"b36_reg_" + std::to_string(i) +
+                   "@test.com\",\"password\":\"super_senha\"}";
+        REQUIRE(router.handle_register(req).code == 201);
+    }
+
+    crow::request fourth;
+    fourth.remote_ip_address = peer;
+    fourth.add_header("CF-Connecting-IP", "203.0.113.99");
+    fourth.body = R"({"username":"b36_reg_3","email":"b36_reg_3@test.com","password":"super_senha"})";
+    const auto response = router.handle_register(fourth);
+    REQUIRE(response.code == 429);
+    REQUIRE(response.body.find("Muitas contas") != std::string::npos);
+
+    auto conn = pool.acquire_connection();
+    pqxx::work txn(*conn);
+    const auto rows = txn.exec(
+        "SELECT registration_ip FROM users WHERE username LIKE 'b36_reg_%' ORDER BY username");
+    REQUIRE(rows.size() == 3);
+    for (const auto& row : rows) {
+        REQUIRE(row[0].as<std::string>() == peer);
+    }
+    txn.exec("DELETE FROM users WHERE username LIKE 'b36_reg_%'");
+    txn.commit();
+}
+
+TEST_CASE("B.82 auth HTTP boundary centraliza cookies e no-store", "[api][auth][b82]") {
+    CHECK(AuthHttpPolicy::secure_cookie_for_origin("https://nanika.lvinik.app"));
+    CHECK_FALSE(AuthHttpPolicy::secure_cookie_for_origin("http://localhost:4200"));
+    CHECK_FALSE(AuthHttpPolicy::secure_cookie_for_origin("not-https://nanika.lvinik.app"));
+
+    DatabasePool pool(2, get_secure_conn_string());
+    MockEmailService email;
+    AuthService auth("B82_cookie_pepper", "B82_cookie_secret", &email);
+    FolderManager folders(pool);
+    const std::string username = "b82_cookie_user";
+    const std::string email_address = "b82-cookie@test.com";
+
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+        txn.exec("DELETE FROM users WHERE username = $1", pqxx::params{username});
+        txn.commit();
+    }
+
+    const auto password_hash = auth.hash_password("B82_password");
+    int user_id = 0;
+    {
+        auto conn = pool.acquire_connection();
+        pqxx::work txn(*conn);
+        const auto row = txn.exec(
+            "INSERT INTO users(username,email,password_hash,is_email_verified) "
+            "VALUES($1,$2,$3,TRUE) RETURNING id",
+            pqxx::params{username, email_address, password_hash});
+        user_id = row[0][0].as<int>();
+        txn.commit();
+    }
+
+    ApiRouter https_router(pool, auth, folders, nullptr, nullptr, nullptr, {}, false,
+                           "https://nanika.lvinik.app");
+    crow::request login_request;
+    login_request.body = R"({"username":"b82_cookie_user","password":"B82_password"})";
+    auto login = https_router.handle_login(login_request);
+    REQUIRE(login.code == 200);
+    const auto login_body = crow::json::load(login.body);
+    REQUIRE(login_body.has("token"));
+    const std::string token = login_body["token"].s();
+    const std::string secure_cookie = login.get_header_value("Set-Cookie");
+    CHECK(has_cookie_attribute(secure_cookie, "HttpOnly"));
+    CHECK(has_cookie_attribute(secure_cookie, "Secure"));
+    CHECK(has_cookie_attribute(secure_cookie, "SameSite=Lax"));
+    CHECK(has_cookie_attribute(secure_cookie, "Path=/"));
+    CHECK(has_cookie_attribute(secure_cookie, "Max-Age=86400"));
+    CHECK(secure_cookie.find("Domain=") == std::string::npos);
+    CHECK(login.get_header_value("Cache-Control") == "no-store");
+    CHECK(login.get_header_value("Pragma") == "no-cache");
+
+    crow::request refresh_request;
+    refresh_request.add_header("Cookie", "jwt=" + token);
+    auto refresh = https_router.handle_refresh(refresh_request);
+    REQUIRE(refresh.code == 200);
+    REQUIRE(crow::json::load(refresh.body).has("token"));
+    const std::string refreshed_token = crow::json::load(refresh.body)["token"].s();
+    const std::string refresh_cookie = refresh.get_header_value("Set-Cookie");
+    CHECK(has_cookie_attribute(refresh_cookie, "Secure"));
+    CHECK(has_cookie_attribute(refresh_cookie, "SameSite=Lax"));
+    CHECK(has_cookie_attribute(refresh_cookie, "Max-Age=86400"));
+    CHECK(refresh.get_header_value("Cache-Control") == "no-store");
+    CHECK(refresh.get_header_value("Pragma") == "no-cache");
+
+    crow::request logout_request;
+    logout_request.add_header("Authorization", "Bearer " + refreshed_token);
+    auto logout = https_router.handle_logout(logout_request);
+    REQUIRE(logout.code == 200);
+    const std::string cleared_cookie = logout.get_header_value("Set-Cookie");
+    CHECK(has_cookie_attribute(cleared_cookie, "HttpOnly"));
+    CHECK(has_cookie_attribute(cleared_cookie, "Secure"));
+    CHECK(has_cookie_attribute(cleared_cookie, "SameSite=Lax"));
+    CHECK(has_cookie_attribute(cleared_cookie, "Path=/"));
+    CHECK(has_cookie_attribute(cleared_cookie, "Max-Age=0"));
+    CHECK(cleared_cookie.find("Domain=") == std::string::npos);
+    CHECK(logout.get_header_value("Cache-Control") == "no-store");
+    CHECK(logout.get_header_value("Pragma") == "no-cache");
+
+    const std::string global_token = auth.generate_token(static_cast<uint64_t>(user_id));
+    crow::request global_logout_request;
+    global_logout_request.add_header("Authorization", "Bearer " + global_token);
+    auto global_logout = https_router.handle_logout_global(global_logout_request);
+    REQUIRE(global_logout.code == 200);
+    const std::string global_cookie = global_logout.get_header_value("Set-Cookie");
+    CHECK(has_cookie_attribute(global_cookie, "Secure"));
+    CHECK(has_cookie_attribute(global_cookie, "SameSite=Lax"));
+    CHECK(has_cookie_attribute(global_cookie, "Path=/"));
+    CHECK(has_cookie_attribute(global_cookie, "Max-Age=0"));
+    CHECK(global_logout.get_header_value("Cache-Control") == "no-store");
+    CHECK(global_logout.get_header_value("Pragma") == "no-cache");
+
+    ApiRouter http_router(pool, auth, folders, nullptr, nullptr, nullptr, {}, false,
+                          "http://localhost:4200");
+    crow::request dev_login_request;
+    dev_login_request.body = R"({"username":"b82_cookie_user","password":"B82_password"})";
+    auto dev_login = http_router.handle_login(dev_login_request);
+    REQUIRE(dev_login.code == 200);
+    const std::string dev_token = crow::json::load(dev_login.body)["token"].s();
+    const std::string dev_login_cookie = dev_login.get_header_value("Set-Cookie");
+    CHECK_FALSE(has_cookie_attribute(dev_login_cookie, "Secure"));
+    CHECK(has_cookie_attribute(dev_login_cookie, "HttpOnly"));
+    CHECK(has_cookie_attribute(dev_login_cookie, "SameSite=Lax"));
+    CHECK(has_cookie_attribute(dev_login_cookie, "Path=/"));
+    CHECK(has_cookie_attribute(dev_login_cookie, "Max-Age=86400"));
+    CHECK(dev_login.get_header_value("Cache-Control") == "no-store");
+    CHECK(dev_login.get_header_value("Pragma") == "no-cache");
+
+    crow::request dev_logout_request;
+    dev_logout_request.add_header("Authorization", "Bearer " + dev_token);
+    auto dev_logout = http_router.handle_logout(dev_logout_request);
+    REQUIRE(dev_logout.code == 200);
+    const std::string dev_cookie = dev_logout.get_header_value("Set-Cookie");
+    CHECK_FALSE(has_cookie_attribute(dev_cookie, "Secure"));
+    CHECK(has_cookie_attribute(dev_cookie, "HttpOnly"));
+    CHECK(has_cookie_attribute(dev_cookie, "SameSite=Lax"));
+    CHECK(has_cookie_attribute(dev_cookie, "Path=/"));
+    CHECK(has_cookie_attribute(dev_cookie, "Max-Age=0"));
+
+    auto conn = pool.acquire_connection();
+    pqxx::work txn(*conn);
+    txn.exec("DELETE FROM users WHERE id = $1", pqxx::params{user_id});
+    txn.commit();
 }
 

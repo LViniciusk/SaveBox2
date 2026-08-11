@@ -15,7 +15,7 @@ describe('VideoPlayerComponent', () => {
   beforeEach(async () => {
     stream = jasmine.createSpyObj('VideoStreamService', ['initializeStream', 'destroyStream']);
     Object.assign(stream, {
-      error: () => null,
+      error: jasmine.createSpy('error').and.returnValue(null),
       isStreaming: () => false,
       isBuffering: () => false,
       originalBitrateWarning: () => false,
@@ -103,6 +103,17 @@ describe('VideoPlayerComponent', () => {
     expect((component as any).formatTime(3661)).toBe('1:01:01');
     expect((component as any).formatTime(61)).toBe('1:01');
     expect((component as any).formatTime(NaN)).toBe('0:00');
+    expect((component as any).formatDuration(125)).toBe('2:05');
+    expect((component as any).formatDuration(0)).toBe('--:--');
+    expect((component as any).formatDuration(Infinity)).toBe('--:--');
+  });
+
+  it('shows an explicit placeholder when the total media duration is unknown', () => {
+    component.duration.set(Infinity);
+    (component as any).isInitialLoad.set(false);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.total-time')?.textContent?.trim()).toBe('--:--');
   });
 
   it('responds to keyboard shortcuts and emits user actions', () => {
@@ -194,5 +205,48 @@ describe('VideoPlayerComponent', () => {
     (component as any).retryPlayback();
     expect(stream.initializeStream.calls.count()).toBeGreaterThan(1);
     expect(play).toBeDefined();
+  });
+
+  it('renders an interactive error surface in seamless mode', () => {
+    (stream.error as jasmine.Spy).and.returnValue('append failure');
+    fixture.componentRef.setInput('seamless', true);
+    fixture.detectChanges();
+
+    const overlay = fixture.nativeElement.querySelector('.error-overlay') as HTMLElement;
+    expect(overlay).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.minimal-controls-bar')).toBeNull();
+    expect(getComputedStyle(overlay).pointerEvents).toBe('auto');
+  });
+
+  it('keeps error clicks away from video and retries exactly once', () => {
+    (stream.error as jasmine.Spy).and.returnValue('append failure');
+    fixture.componentRef.setInput('seamless', true);
+    fixture.detectChanges();
+    const overlay = fixture.nativeElement.querySelector('.error-overlay') as HTMLElement;
+    const retry = fixture.nativeElement.querySelector('.retry-btn') as HTMLButtonElement;
+    const onVideoClick = spyOn<any>(component, 'onVideoClick').and.callThrough();
+    stream.initializeStream.calls.reset();
+
+    overlay.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    retry.click();
+
+    expect(onVideoClick).not.toHaveBeenCalled();
+    expect(stream.initializeStream).toHaveBeenCalledTimes(1);
+    expect(video.play).not.toHaveBeenCalled();
+    expect(video.pause).not.toHaveBeenCalled();
+  });
+
+  it('does not close the standalone player when retry is clicked', () => {
+    (stream.error as jasmine.Spy).and.returnValue('append failure');
+    fixture.componentRef.setInput('seamless', false);
+    fixture.detectChanges();
+    const retry = fixture.nativeElement.querySelector('.retry-btn') as HTMLButtonElement;
+    spyOn(component.close, 'emit');
+    stream.initializeStream.calls.reset();
+
+    retry.click();
+
+    expect(stream.initializeStream).toHaveBeenCalledTimes(1);
+    expect(component.close.emit).not.toHaveBeenCalled();
   });
 });

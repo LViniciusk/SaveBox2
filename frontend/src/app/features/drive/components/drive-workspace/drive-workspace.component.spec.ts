@@ -1,5 +1,6 @@
 import { Component, input, output } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { DriveWorkspaceComponent } from './drive-workspace.component';
 import { DriveFile, DriveStore } from '../../state/drive.store';
@@ -11,10 +12,12 @@ class FileListStubComponent {
   readonly files = input<DriveFile[]>([]);
   readonly viewMode = input<'drive' | 'storage' | 'trash'>('drive');
   readonly quota = input<any>(null);
+  readonly movingFileIds = input<ReadonlySet<number>>(new Set<number>());
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
   readonly previewRequested = output<any>();
   readonly shareRequested = output<DriveFile>();
+  readonly storageMoveRequested = output<DriveFile>();
 }
 
 @Component({ selector: 'app-transfer-panel', standalone: true, template: '' })
@@ -58,17 +61,15 @@ describe('DriveWorkspaceComponent', () => {
     expect(fixture.nativeElement.querySelector('.view-mode-toggle')).not.toBeNull();
   });
 
-  it('applies the compact workspace surface only to the Default theme', () => {
+  it('hides the workspace breadcrumb in Default and shows it in GDrive', () => {
     document.documentElement.dataset['theme'] = 'default';
     fixture.detectChanges();
     const breadcrumb = fixture.nativeElement.querySelector('.breadcrumb') as HTMLElement;
-    expect(getComputedStyle(breadcrumb).borderBottomStyle).toBe('solid');
-    expect(getComputedStyle(breadcrumb).fontFamily).toContain('Segoe UI');
+    expect(getComputedStyle(breadcrumb).display).toBe('none');
 
     document.documentElement.dataset['theme'] = 'gdrive';
     fixture.detectChanges();
-    expect(getComputedStyle(breadcrumb).borderBottomStyle).toBe('none');
-    expect(getComputedStyle(breadcrumb).fontFamily).toContain('Roboto');
+    expect(getComputedStyle(breadcrumb).display).not.toBe('none');
   });
 
   it('renders each non-drive mode through its matching branch', () => {
@@ -125,16 +126,21 @@ describe('DriveWorkspaceComponent', () => {
     fixture.componentRef.setInput('currentView', 'storage');
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector('[data-id="-9999"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-item-key="folder:-9999"]')).toBeNull();
   });
 
   it('forwards local share requests from the file list', () => {
     const share = jasmine.createSpy('share');
+    const move = jasmine.createSpy('move');
     fixture.componentInstance.shareRequested.subscribe(share);
+    fixture.componentInstance.storageMoveRequested.subscribe(move);
     fixture.detectChanges();
 
+    const child = fixture.debugElement.query(By.directive(FileListStubComponent)).componentInstance as FileListStubComponent;
     fixture.nativeElement.querySelector('#share').click();
+    child.storageMoveRequested.emit(child.file);
 
     expect(share).toHaveBeenCalledWith(jasmine.objectContaining({ id: 7, storageProvider: 'local' }));
+    expect(move).toHaveBeenCalledWith(jasmine.objectContaining({ id: 7, storageProvider: 'local' }));
   });
 });
