@@ -27,6 +27,10 @@ class SecurityTrackACiTests(unittest.TestCase):
         self.assertIn('target_compile_definitions(savebox_tests PRIVATE NANIKA_TESTING=1)', cmake)
         self.assertNotIn('target_compile_definitions(savebox_server PRIVATE NANIKA_TESTING', cmake)
         self.assertIn('./savebox_tests --order rand --rng-seed 60101', workflow)
+        self.assertRegex(workflow, r'Build backend targets\s+run: \|\s+cmake --build backend/build-linux-ci')
+        install = workflow.split('- name: Install native dependencies', 1)[1].split('- name: Setup native PostgreSQL', 1)[0]
+        self.assertIn('New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE', install)
+        self.assertLess(install.index('New-Item'), install.index('vcpkg install'))
 
 
 if __name__ == '__main__':

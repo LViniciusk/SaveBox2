@@ -5,6 +5,8 @@
   "QA-01": "CLOSED",
   "branch": "security/track-a-hardening",
   "pullRequestBase": "frontend",
+  "pullRequestUrl": "https://github.com/LViniciusk/SaveBox2/pull/18",
+  "remoteFrontendBaseSynced": "d99f93473eb1ebc8bd5e8d08783008cf1250b833",
   "baselineHead": "d99f93473eb1ebc8bd5e8d08783008cf1250b833",
   "validation": {
     "focusedCppCases": 62,
@@ -27,7 +29,7 @@
     "affectedBackendBuild": "PASS"
   },
   "limitations": [
-    "Full existing CI workflows execute on GitHub; local validation was focused.",
+    "GitHub quality-report passed; existing backend workflow build/cache defects were corrected, with final remote jobs pending.",
     "No full production Docker image rebuild; packaging copy contract, immutable asset hashes and Linux UID 10001 readability were verified.",
     "Full C.02/C.03, AP-06, memory, mutation and coverage campaigns were outside this track.",
     "The recovery gate mocks schema authority; real restore still requires the separate C.01 schema authority work.",
