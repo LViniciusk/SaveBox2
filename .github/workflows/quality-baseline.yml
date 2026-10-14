@@ -34,6 +34,15 @@ jobs:
       - name: Dependency security contract
         run: python3 tools/quality/test_dependency_security.py
 
+      - name: Swagger, deployment, OpenAPI and recovery contracts
+        run: |
+          python3 -m unittest \
+            tools.quality.test_deployment_security \
+            tools.quality.test_openapi_contract \
+            tools.quality.test_nanika_recovery \
+            tools.quality.test_auth_memory_contract \
+            tools.quality.test_security_track_a_ci
+
       - name: Frontend machine-readable coverage
         working-directory: frontend
         run: npm run test:coverage

@@ -33,6 +33,11 @@ class OpenApiBatchInitContractTest(unittest.TestCase):
     def setUpClass(cls):
         cls.source = SWAGGER.read_text(encoding="utf-8")
 
+    def test_flow_descriptions_quote_colons(self):
+        for description in re.findall(r'(?m)^\s*[\'"]\d{3}[\'"]:\s*\{\s*description:\s*([^{}\n]*?)\s*\}\s*$', self.source):
+            if not description.startswith(('"', "'")):
+                self.assertNotRegex(description, r':\s', 'Colon-space in a YAML flow scalar requires quotes')
+
     def test_batch_request_is_batch_specific(self):
         item = schema_block(self.source, "BatchInitUploadItemRequest")
         self.assertIn("$ref: '#/components/schemas/InitUploadRequest'", item)

@@ -1,0 +1,36 @@
+{
+  "result": "PASS_SECURITY_TRACK_A_HARDENED",
+  "SEC-01": "CLOSED",
+  "SEC-03": "CLOSED",
+  "QA-01": "CLOSED",
+  "branch": "security/track-a-hardening",
+  "pullRequestBase": "frontend",
+  "baselineHead": "d99f93473eb1ebc8bd5e8d08783008cf1250b833",
+  "validation": {
+    "focusedCppCases": 62,
+    "focusedCppAssertions": 567,
+    "finalSwaggerCppCases": 2,
+    "finalSwaggerCppAssertions": 61,
+    "mandatoryPythonGateTests": 44,
+    "existingPythonGateTests": 18,
+    "hashCallerRegressionTests": 26,
+    "exactGitIndexPythonTests": 62,
+    "finalBrowserScenarios": 4,
+    "finalBrowserLaunches": 1,
+    "finalUnexpectedCspViolations": 0,
+    "baselineFilesInventoried": 543,
+    "outsideScopeFilesPreserved": 534,
+    "productionTestHooksAbsent": true,
+    "artifactSecretScan": "PASS",
+    "assetIntegrity": "PASS",
+    "productionUidAssetReadability": "PASS",
+    "affectedBackendBuild": "PASS"
+  },
+  "limitations": [
+    "Full existing CI workflows execute on GitHub; local validation was focused.",
+    "No full production Docker image rebuild; packaging copy contract, immutable asset hashes and Linux UID 10001 readability were verified.",
+    "Full C.02/C.03, AP-06, memory, mutation and coverage campaigns were outside this track.",
+    "The recovery gate mocks schema authority; real restore still requires the separate C.01 schema authority work.",
+    "Debugging required five Chromium launches in total and repeated incremental builds in one existing CMake configuration."
+  ]
+}
