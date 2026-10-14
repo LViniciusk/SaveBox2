@@ -34,7 +34,7 @@ export async function generateVideo(path: string, audio: boolean, movFlags: stri
   const ffmpeg = process.env['NANIKA_FFMPEG_PATH'] ?? 'ffmpeg';
   const args = [
     '-hide_banner', '-loglevel', 'error', '-y',
-    '-f', 'lavfi', '-i', `testsrc2=size=320x180:rate=24:duration=${duration}`,
+    '-f', 'lavfi', '-i', `testsrc2=size=${bitrateKbps === 1200 ? '320x180' : '640x360'}:rate=24:duration=${duration}`,
   ];
   if (audio) args.push('-f', 'lavfi', '-i', `sine=frequency=880:sample_rate=48000:duration=${duration}`);
   args.push(

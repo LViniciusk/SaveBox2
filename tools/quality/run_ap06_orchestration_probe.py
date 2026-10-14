@@ -13,7 +13,7 @@ from run_ap06_transport_probe import media_server
 from run_ap06_transmux_probe import CRYPTO, DOES_NOT, REPRODUCES, INCONCLUSIVE, PHASES, classify, validate_raw, validate_chromium_preflight
 from validate_ap06_r6_authorities import BUNDLES
 
-OUTPUT = '.quality/readiness-wave6-rebaseline'
+OUTPUT = '.quality/readiness-wave6-rebaseline-r1'
 CONDITIONS = ('control', 'r6.1', 'r6.2', 'r6.3')
 TOOLING = (
     'frontend/tools/ap06-orchestration-probe.mjs', 'frontend/tools/ap06-orchestration-probe.test.mjs',
@@ -224,12 +224,12 @@ def measure(wave, condition, stage, fixtures, ciphertext, manifest_path, freeze,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--frozen-campaign', action='store_true', required=True)
+    parser.add_argument('--validated-campaign', action='store_true', required=True)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]; wave = Wave(root); wave.output = root / OUTPUT
-    freeze = json.loads((wave.output / 'tooling/freeze.json').read_text())
+    freeze = json.loads((wave.output / 'tooling/validated-tooling.json').read_text())
     approval = json.loads((wave.output / 'baseline/budget-approval.json').read_text())
-    if freeze.get('status') != 'FROZEN' or (wave.output / 'pipeline/launch-ledger.json').exists():
+    if freeze.get('status') != 'READY_FOR_FIXTURE_PREPARATION' or (wave.output / 'tooling/freeze.json').exists() or (wave.output / 'pipeline/launch-ledger.json').exists():
         raise WaveFailure('BLOCKED_CAMPAIGN_NOT_FRESH_OR_NOT_FROZEN')
     verify_freeze(root, freeze)
     check_budget(approval,0,1)
@@ -246,6 +246,10 @@ def main():
         try:
             fixtures, ciphertext, manifest = prepare_cohort(wave, wave.temp, 'faststart')
             freeze['fixtureManifestHashes'] = {manifest.name: campaign.sha256_file(manifest)}
+            verify_freeze(root,freeze)
+            freeze['status']='FROZEN'
+            with (wave.output/'tooling/freeze.json').open('x',encoding='utf-8') as file:
+                json.dump(freeze,file,indent=2);file.write('\n')
             wave.save('fixtures/faststart-freeze.json', {'manifestSha256': freeze['fixtureManifestHashes'][manifest.name]})
             condition, stage = ('r6.1' if freeze['baselineCase'] == 'RECOVERED_R5_R2' else 'control'), 'triage'
             while True:
