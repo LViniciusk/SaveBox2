@@ -11,6 +11,9 @@ if (!output) throw new Error('OWNED_R7_UNIT_OUTPUT_REQUIRED');
 const fixtures = JSON.parse(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST, 'utf8'));
 const paths = JSON.parse(process.env.AP06_R7_ALLOWED_PATHS), origin = process.env.AP06_R5_MEDIA_ORIGIN;
 const result = { status: 'FAIL', measurementBrowsers: 0, unitBrowserLaunchAttempts: 0, unitBrowserLaunches: 0, cases: [], observations: {},
+  multiplexedContract: { fixtureHash: createHash('sha256').update(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST)).digest('hex'),
+    workerHashes: { crypto: process.env.AP06_R5_CRYPTO_WORKER_SHA256, transmux: process.env.AP06_R5_TRANSMUX_WORKER_SHA256 },
+    initDataPerFixture: [1, 1, 1], initDataId: 0 }, sourceBufferChecks: [],
   pageScriptSha256: createHash('sha256').update(integrationPageScript()).digest('hex'),
   appProducts: JSON.parse(process.env.AP06_R7_APP_PRODUCTS),
   sourceHashes: Object.fromEntries(['ap06-transmux-probe.mjs', 'ap06-orchestration-probe.mjs', 'ap06-integration-probe.mjs',
@@ -49,17 +52,27 @@ try {
       }
       const listenersBefore = await windowListeners();
       await check(condition + ' actual playback and repeated Angular mount/destroy', async () => {
-        for (const fixture of fixtures.slice(0, 2)) await page.evaluate(fixture => window.r7Run(fixture), fixture);
+        for (const fixture of fixtures) {
+          const before = await page.evaluate(() => ({ ...window.r5Counters.observed }));
+          await page.evaluate(fixture => window.r7Run(fixture), fixture);
+          const after = await page.evaluate(() => ({ ...window.r5Counters.observed }));
+          assert.equal(after.sourceBuffersCreated - before.sourceBuffersCreated, 1);
+          assert.equal(after.sourceBuffersReleased - before.sourceBuffersReleased, 1);
+          assert.equal(after.pendingAppends, 0);
+          result.sourceBufferChecks.push({ condition, fixture: fixture.id, tracks: fixture.tracks.length,
+            created: after.sourceBuffersCreated - before.sourceBuffersCreated,
+            released: after.sourceBuffersReleased - before.sourceBuffersReleased }); save();
+        }
         const state = await page.evaluate(() => ({ counters: window.r5Counters, media: document.querySelectorAll('video,audio').length }));
         result.observations[condition] = state.counters.sessions; save();
         validateIntegrationFunctional(state.counters, state.media);
-        assert.equal(state.counters.observed.playbackCompleted, 2);
-        assert.equal(state.counters.observed.workersCreated, 4);
+        assert.equal(state.counters.observed.playbackCompleted, 3);
+        assert.equal(state.counters.observed.workersCreated, 6);
         assert.ok(state.counters.observed.detachedTransfers > 0);
         assert.ok(state.counters.sessions.every(session => session.maxCurrentTime > 1.5 && session.maxCurrentTime < 10 && session.seeks === 0));
         assert.ok(state.counters.sessions.every(session => session.muted === (condition !== 'r7.2') && session.volume === 1 && session.playbackRate === 1));
         assert.equal(await windowListeners(), listenersBefore);
-        if (condition !== 'r7.0') assert.equal(state.counters.observed.componentsMounted, condition === 'r7.2' ? 4 : 2);
+        if (condition !== 'r7.0') assert.equal(state.counters.observed.componentsMounted, condition === 'r7.2' ? 6 : 3);
         if (condition === 'r7.2') assert.ok(state.counters.sessions.every(session => session.playbackMs - session.canplayMs >= 450));
       });
       if (condition === 'r7.1') {

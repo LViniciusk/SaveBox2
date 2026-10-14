@@ -12,7 +12,7 @@ from run_ap06_transport_probe import media_server
 from run_ap06_transmux_probe import CRYPTO, DOES_NOT, REPRODUCES, INCONCLUSIVE, PHASES, validate_raw
 from run_ap06_orchestration_probe import checked_classification, individual_deltas
 
-OUTPUT = '.quality/readiness-wave7'
+OUTPUT = '.quality/readiness-wave7-r2'
 VERSION = '151.0.7922.34'
 CONDITIONS = ('r7.0', 'r7.1', 'r7.2')
 AUTOPLAY = ['--autoplay-policy=no-user-gesture-required']
@@ -82,6 +82,9 @@ def verify_authorities(root):
         for path, expected in values.items():
             if campaign.sha256_file(directory / path) != expected:
                 raise WaveFailure('R7_HISTORICAL_AUTHORITY_CHANGED')
+    for path, expected in baseline['priorR7Artifacts'].items():
+        if campaign.sha256_file(root / path) != expected:
+            raise WaveFailure('R7_ORIGINAL_CAMPAIGN_CHANGED')
     old_config = json.loads(Wave(root).git('show', baseline['baseHead'] + ':frontend/angular.json'))
     if read(root / 'frontend/angular.json')['projects']['frontend'] != old_config['projects']['frontend']:
         raise WaveFailure('R7_NORMAL_APP_CONFIGURATION_CHANGED')
@@ -95,7 +98,21 @@ def verify_freeze(root, freeze):
     verify_authorities(root)
 
 
+def expected_source_buffers(fixtures, cycle):
+    if ([row.get('id') for row in fixtures] != [0, 1, 2] or
+            [[track.get('type') for track in row.get('tracks', [])] for row in fixtures] !=
+            [['video', 'audio'], ['video'], ['video', 'audio']]):
+        raise WaveFailure('R7_INVALID_FIXTURE_COHORT')
+    # Frozen handleTransmuxReady emits one multiplexed initData item (id=0) per fixture.
+    return cycle * len(fixtures)
+
+
 def validate_condition(raw, condition, stage, freeze, fixtures):
+    expected_source_buffers(fixtures, 0)
+    if freeze.get('multiplexedContract') != {'fixtureHash': freeze['fixtureHash'],
+            'workerHashes': {kind: row['sha256'] for kind, row in freeze['workers'].items()},
+            'initDataPerFixture': [1, 1, 1], 'initDataId': 0}:
+        raise WaveFailure('R7_MULTIPLEXED_CONTRACT_NOT_VERIFIED')
     identities = {'playwrightRoutingInstalled': True, 'fetchInterceptionInstalled': False,
         'videoStreamServiceUsed': condition != 'r7.0', 'angularOrBackendUsed': True,
         'videoPlayerComponentUsed': condition == 'r7.2', 'backendUsed': False,
@@ -133,7 +150,7 @@ def validate_condition(raw, condition, stage, freeze, fixtures):
                 raise WaveFailure('R7_SAMPLE_WORKER_IDENTITY_CHANGED')
             c = sample['counters'].get('observed', {})
             components = sessions * (0 if condition == 'r7.0' else 2 if condition == 'r7.2' else 1)
-            buffers = sessions if condition == 'r7.0' else cycle * sum(len(row['tracks']) for row in fixtures)
+            buffers = expected_source_buffers(fixtures, cycle)
             expected = {'initializeAttempts': sessions, 'initializeSettled': sessions, 'playbackStarted': sessions,
                 'playbackCompleted': sessions, 'destroyCalls': sessions, 'componentsMounted': components,
                 'componentsDestroyed': components, 'metadataRequests': sessions, 'workersCreated': sessions * 2,

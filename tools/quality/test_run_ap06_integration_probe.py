@@ -1,3 +1,4 @@
+import copy
 import math
 from pathlib import Path
 import tempfile
@@ -6,7 +7,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from run_ap06_integration_probe import (AUTOPLAY, CONDITIONS, check_budget, next_condition, claim_stage,
-    validate_condition, verify_freeze)
+    validate_condition, verify_freeze, expected_source_buffers)
 from run_ap06_transport_probe import media_server
 from run_ap06_orchestration_probe import checked_classification
 from run_ap06_transmux_probe import DOES_NOT, REPRODUCES, INCONCLUSIVE
@@ -15,10 +16,13 @@ from test_run_ap06_orchestration_probe import condition_raw
 from test_run_ap06_transmux_probe import SOURCE, FIXTURE, summary
 
 BUDGET = {'approved': True, 'measurementMaximum': 6, 'measurementRetries': 0}
-FIXTURES = [{'id': n, 'name': f'unit-{n}', 'bytes': 100, 'sha256': str(n), 'tracks': [{}]} for n in range(3)]
+FIXTURES = [{'id': n, 'name': f'unit-{n}', 'bytes': 100, 'sha256': str(n),
+    'tracks': [{'type': kind} for kind in (['video'] if n == 1 else ['video', 'audio'])]} for n in range(3)]
 FREEZE = {'sourceHash': SOURCE, 'fixtureHash': FIXTURE, 'harnessHash': 'harness', 'runnerHash': 'runner',
     'workers': {'crypto': {'name': 'worker-C.js', 'sha256': 'crypto'}, 'transmux': {'name': 'worker-T.js', 'sha256': 'transmux'}},
     'appProducts': {'main.js': 'app'}, 'pageScriptSha256': 'page'}
+FREEZE['multiplexedContract'] = {'fixtureHash': FIXTURE,
+    'workerHashes': {'crypto': 'crypto', 'transmux': 'transmux'}, 'initDataPerFixture': [1, 1, 1], 'initDataId': 0}
 
 
 def integration_raw(condition='r7.1', stage='triage'):
@@ -97,6 +101,36 @@ class R7Contracts(unittest.TestCase):
         with self.assertRaises(WaveFailure): validate_condition(data, 'r7.1', 'formal', FREEZE, FIXTURES)
         data = integration_raw(); data['runs'][0]['samples'].pop()
         with self.assertRaises(WaveFailure): validate_condition(data, 'r7.1', 'triage', FREEZE, FIXTURES)
+
+    def test_multiplexed_cohort_has_three_buffers_per_cycle_and_eighteen_at_six(self):
+        self.assertEqual([len(row['tracks']) for row in FIXTURES], [2, 1, 2])
+        self.assertEqual(expected_source_buffers(FIXTURES, 1), 3)
+        self.assertEqual(expected_source_buffers(FIXTURES, 6), 18)
+        for fixtures in [FIXTURES[:2], FIXTURES[::-1], [FIXTURES[0]] * 3,
+                [{**FIXTURES[0], 'tracks': [{'type': 'video'}]}, *FIXTURES[1:]]]:
+            with self.assertRaisesRegex(WaveFailure, 'INVALID_FIXTURE_COHORT'):
+                expected_source_buffers(fixtures, 1)
+
+    def test_balanced_wrong_counts_unbalanced_and_pending_source_buffers_fail(self):
+        for condition in CONDITIONS:
+            for created, released in [(17, 17), (19, 19), (30, 30), (18, 17), (17, 18)]:
+                data = integration_raw(condition)
+                data['runs'][0]['samples'][6]['counters']['observed'].update(
+                    sourceBuffersCreated=created, sourceBuffersReleased=released)
+                with self.assertRaisesRegex(WaveFailure, 'LIFECYCLE_INCOMPLETE'):
+                    validate_condition(data, condition, 'triage', FREEZE, FIXTURES)
+            data = integration_raw(condition)
+            data['runs'][0]['samples'][6]['counters']['observed']['pendingAppends'] = 1
+            with self.assertRaises(WaveFailure): validate_condition(data, condition, 'triage', FREEZE, FIXTURES)
+
+    def test_multiplexed_contract_is_pinned_to_corpus_and_workers(self):
+        for patch in [{'fixtureHash': 'wrong'}, {'workerHashes': {}}, {'initDataPerFixture': [2, 1, 2]}, {'initDataId': 1}]:
+            freeze = copy.deepcopy(FREEZE); freeze['multiplexedContract'].update(patch)
+            with self.assertRaisesRegex(WaveFailure, 'CONTRACT_NOT_VERIFIED'):
+                validate_condition(integration_raw(), 'r7.1', 'triage', freeze, FIXTURES)
+        for key in ('workerBundleHash', 'cryptoWorkerBundleHash'):
+            data = integration_raw(); data['runs'][0]['samples'][6][key] = 'wrong'
+            with self.assertRaises(WaveFailure): validate_condition(data, 'r7.1', 'triage', FREEZE, FIXTURES)
 
     def test_source_fixture_bundle_and_app_identities_are_enforced(self):
         for key, value in [('fixtureManifestSha256', 'wrong'), ('fixtureIdentities', []),

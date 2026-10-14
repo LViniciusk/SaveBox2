@@ -9,6 +9,28 @@ import { buildKasumi, loadKasumi, validateContainer } from './ap06-r7-fixtures.m
 import { disposableCryptoMaterial } from './ap06-mse-probe.mjs';
 import { newIntegrationCounters, integrationSnapshot, validateIntegrationCleanup, validateIntegrationFunctional } from './ap06-r7-instrumentation.mjs';
 import { configureIntegrationPage, integrationPageScript, AUTOPLAY_ARGS } from './ap06-integration-probe.mjs';
+import { handleTransmuxReady } from '../src/app/features/drive/workers/stream-transmux-ready.ts';
+
+test('real ready handler multiplexes the frozen AV/video/AV cohort into one initData id=0 each', () => {
+  const cohort = [['avc1.42c01e', 'mp4a.40.2'], ['avc1.42c01e'], ['avc1.42c01e', 'mp4a.40.2']];
+  let sourceBuffers = 0;
+  for (const codecs of cohort) {
+    const tracks = codecs.map((codec, index) => ({ id: index + 1, codec }));
+    const segments = [], buffer = new ArrayBuffer(8);
+    let started = 0, resolved = 0;
+    const state = { videoDuration: null, initData: null, resolveReady: () => resolved++ };
+    handleTransmuxReady({ tracks, duration: 30000, timescale: 1000 }, state, {
+      setSegmentOptions: (...args) => segments.push(args),
+      initializeSegmentation: () => ({ buffer }), start: () => started++,
+    });
+    assert.equal(segments.length, tracks.length);
+    assert.deepEqual(state.initData, [{ id: 0, codecString: `video/mp4; codecs="${codecs.join(', ')}"`, buffer }]);
+    assert.equal(started, 1); assert.equal(resolved, 1);
+    sourceBuffers += state.initData.length;
+  }
+  assert.equal(sourceBuffers, 3);
+  assert.equal(sourceBuffers * 6, 18);
+});
 
 const fixtures = [0, 1, 2].map(id => ({ id, ciphertextBytes: 100 }));
 const counters = () => newIntegrationCounters().observed;
