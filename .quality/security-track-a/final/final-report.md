@@ -1,6 +1,6 @@
 # Nanika Security Track A
 
-Result: **PENDING_REQUIRED_REMOTE_CI**. SEC-01 and SEC-03 passed independent semantic review; QA-01 remains open until all five required remote jobs pass. Earlier local GREEN evidence does not establish full remote CI success.
+Result: **PASS_SECURITY_TRACK_A_HARDENED**. SEC-01, SEC-03 and QA-01 are CLOSED. The five required remote checks passed on the implementation HEAD recorded below; local results are listed separately.
 
 Baseline: `d99f93473eb1ebc8bd5e8d08783008cf1250b833`, branch `frontend`.
 Delivery branch: `security/track-a-hardening`; PR base: `frontend`, selected by the user so the six earlier commits are excluded from this PR.
@@ -45,13 +45,13 @@ One existing backend CMake configuration was reused. Incremental builds were rep
 
 Every isolated PostgreSQL/backend/Nginx process was cleaned up; preexisting containers were preserved. The baseline inventoried **543 files**; all **533 outside the allowed changes** matched their initial bytes, including video streaming/workers, DatabasePool, DatabaseMigration and AP-06 evidence. Required inherited dependencies retained their baseline bytes. `git diff --check` passed; real configured secrets and GitHub token patterns were absent from the evidence. Test-only crypto seam and observer symbols were absent from the production executable.
 
-GitHub `quality-report` passed on the first scheduled run. Its backend jobs failed before compilation/testing because of the two workflow defects described above; their minimal fixes passed the local workflow contracts and submitted-index gate. Final remote backend/E2E jobs are pending, and their full success is not claimed. Production packaging was verified by its copy contract, file hashes and Linux runtime UID readability, without rebuilding the full image. Real recovery/restore depends on the separately excluded C.01 migration authority and was not claimed here. Source-level contracts complement the executed C++ and browser checks; they do not substitute for those executions.
+Historical state before the CI follow-up: GitHub `quality-report` passed on the first scheduled run. Its backend jobs failed before compilation/testing because of the two workflow defects described above; their minimal fixes passed the local workflow contracts and submitted-index gate. At that point, remote backend/E2E jobs were pending; the confirmed closure below supersedes that status. Production packaging was verified by its copy contract, file hashes and Linux runtime UID readability, without rebuilding the full image. Real recovery/restore depends on the separately excluded C.01 migration authority and was not claimed here. Source-level contracts complement the executed C++ and browser checks; they do not substitute for those executions.
 
 Detailed sanitized local evidence is in `.quality/security-track-a/{baseline,sec01,sec03,qa01,final}`. This report and `decision.json` are included in the PR; diagnostic output and the inherited patch remain local.
 
 ## PR #18 CI follow-up
 
-The remote run of `bba1bedc` did not pass: quality-report succeeded, GCC/Coverage failed on five nonexistent CPR enum references, E2E failed before a login response, and MSVC was still running when this follow-up began. Global PASS is withdrawn until all five required jobs succeed.
+The remote run of `bba1bedc` did not pass: quality-report succeeded, GCC/Coverage failed on five nonexistent CPR enum references, E2E failed before a login response, and MSVC was still running when this follow-up began. Global PASS was withdrawn while the five required jobs were being repaired; the confirmed closure below records their success.
 
 Linux resolves CPR 1.10.5: its official `error.h` declares `CONNECTION_FAILURE`, and its `error.cpp` maps `CURLE_COULDNT_CONNECT` to that value. Windows's unchanged vcpkg baseline resolves CPR 1.14.2, which uses the newer enum. The five fault injections now use `cpr::Error{CURLE_COULDNT_CONNECT, {}}.code`, allowing the dependency to perform the identical connection-failure mapping on both platforms. Only the two test files changed; EmailService and dependencies are unchanged. Local focused B.58/B.59: **16 cases, 140 assertions passed**; reused backend build passed.
 The next Linux build exposed a sixth identical reference in B.96's profile failure table. That one test value received the same mapping fix; a repository-wide enumeration check found only shared `OK`/`OPERATION_TIMEDOUT` references afterward. Production profile handling is unchanged. Local B.96 regressions passed **4 cases / 109 assertions** after the incremental build.
@@ -65,3 +65,19 @@ The Linux E2E artifact confirmed a recovery-test observation race: durable evide
 The first completed MSVC suite compiled and ran 319 cases; only three B.96 profile tests failed before their provider mock. Their required `DotEnv::get_imgur_client_id()` had no value in the generated CI environment. All three backend jobs now supply the synthetic `IMGUR_CLIENT_ID=test-imgur-client-id`, matching the isolated local owner's prerequisite. Production configuration and provider handling are unchanged. A permanent workflow contract checks this mock configuration for GCC, Coverage and MSVC.
 
 After the recovery race fix, remote canonical E2E reached the final case but its sixth total credential POST received HTTP 429: the probe and canonical suite had shared one process with the committed five-login-per-minute limit. The workflow now stops/joins its owned probe backend and starts a fresh instance before the canonical phase, using the existing readiness check. The five-test suite keeps its exact production limit and zero test retries; no sleep was added to wait out rate limiting. Frontend, isolated DB/storage and fixture identity remain shared and owned. A contract verifies the lifecycle boundary.
+
+## Confirmed remote CI closure
+
+Implementation HEAD: `342a8e5115514325e4d7706a57c5e5e8713928af`. All five required checks completed successfully. The closure commit records evidence only; runnable code and workflow authorities are identical to this tested implementation.
+
+| Required job | Result |
+| --- | --- |
+| [Backend / Linux GCC](https://github.com/LViniciusk/SaveBox2/actions/runs/38554587267/job/115820458453) | PASS |
+| [quality-report](https://github.com/LViniciusk/SaveBox2/actions/runs/38554587047/job/115820457180) | PASS |
+| [Backend / Windows MSVC](https://github.com/LViniciusk/SaveBox2/actions/runs/38554587267/job/115820458082) | PASS |
+| [e2e](https://github.com/LViniciusk/SaveBox2/actions/runs/38554587047/job/115820456714) | PASS |
+| [Backend / Linux Coverage](https://github.com/LViniciusk/SaveBox2/actions/runs/38554587267/job/115820458468) | PASS |
+
+Linux GCC and Coverage: **321 cases / 9,244 assertions**, zero failures; line coverage **81%** (50% gate preserved). Windows MSVC: **319 cases / 9,235 assertions**, zero failures. Quality Baseline E2E passed the focused credential probe and all five canonical cases; quality-report passed its required contracts, frontend coverage and existing reports.
+
+Local follow-up: B.58/B.59 16 cases / 140 assertions; B.96 4 / 109; focused login and recovery passed; canonical 5/5; submitted-index Python contracts 63/63; routing 7/7; strict recovery diagnostics 21/21. The 558-file entry inventory, protected authorities and real-secret/token artifact scan passed. No merge or other PR modification.
