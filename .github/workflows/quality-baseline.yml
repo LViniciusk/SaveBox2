@@ -181,16 +181,19 @@ jobs:
             wait "$frontend_pid" "$backend_pid" 2>/dev/null || true
           }
           trap cleanup EXIT
-          for endpoint in http://127.0.0.1:8080/health http://127.0.0.1:4200/; do
-            for attempt in $(seq 1 60); do
-              if curl --fail --silent "$endpoint" >/dev/null; then break; fi
-              if [ "$attempt" -eq 60 ]; then
-                cat "$RUNNER_TEMP/nanika-backend.log" "$RUNNER_TEMP/nanika-frontend.log"
-                exit 1
-              fi
-              sleep 1
+          wait_ready() {
+            for endpoint in "$@"; do
+              for attempt in $(seq 1 60); do
+                if curl --fail --silent "$endpoint" >/dev/null; then break; fi
+                if [ "$attempt" -eq 60 ]; then
+                  cat "$RUNNER_TEMP/nanika-backend.log" "$RUNNER_TEMP/nanika-frontend.log"
+                  exit 1
+                fi
+                sleep 1
+              done
             done
-          done
+          }
+          wait_ready http://127.0.0.1:8080/health http://127.0.0.1:4200/
           (
             cd frontend
             npx playwright install --with-deps chromium
@@ -204,6 +207,15 @@ jobs:
             cd frontend
             node node_modules/@playwright/test/cli.js test --config=playwright.ci-login.config.ts
           )
+          # Each phase owns a fresh process and its existing five-login rate budget.
+          kill "$backend_pid"
+          wait "$backend_pid" 2>/dev/null || true
+          (
+            cd backend/build-e2e
+            exec ./savebox_server >> "$RUNNER_TEMP/nanika-backend.log" 2>&1
+          ) &
+          backend_pid=$!
+          wait_ready http://127.0.0.1:8080/health
           python3 tools/quality/run_playwright.py
 
       - name: Upload E2E report

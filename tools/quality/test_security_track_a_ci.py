@@ -16,6 +16,11 @@ class SecurityTrackACiTests(unittest.TestCase):
         self.assertNotIn('export NANIKA_E2E_BACKEND_URL=http://localhost:8080', workflow)
         self.assertLess(workflow.index('--config=playwright.ci-login.config.ts'),
                         workflow.index('python3 tools/quality/run_playwright.py'))
+        between = workflow.split('--config=playwright.ci-login.config.ts', 1)[1].split('python3 tools/quality/run_playwright.py', 1)[0]
+        self.assertIn('kill "$backend_pid"', between)
+        self.assertIn('wait "$backend_pid"', between)
+        self.assertIn('exec ./savebox_server', between)
+        self.assertIn('wait_ready http://127.0.0.1:8080/health', between)
         config = (ROOT / 'frontend/playwright.ci-login.config.ts').read_text(encoding='utf-8')
         self.assertIn("testMatch: 'credential-login-boundary.spec.ts'", config)
         self.assertIn('retries: 0', config)
