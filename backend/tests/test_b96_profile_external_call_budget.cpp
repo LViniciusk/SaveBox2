@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <curl/curl.h>
 #include <exception>
 #include <iostream>
 #include <mutex>
@@ -191,7 +192,7 @@ TEST_CASE("B.96 provider failures never update avatar or retry the upload",
         {"transport timeout", 0, cpr::ErrorCode::OPERATION_TIMEDOUT, "B96-PROVIDER-SENTINEL"},
         {"timeout after HTTP 200 headers", 200, cpr::ErrorCode::OPERATION_TIMEDOUT,
          R"({"success":true,"data":{"link":"https://new.example.invalid/avatar"}})"},
-        {"transport connection failure", 0, cpr::ErrorCode::COULDNT_CONNECT, "B96-PROVIDER-SENTINEL"},
+        {"transport connection failure", 0, cpr::Error{CURLE_COULDNT_CONNECT, {}}.code, "B96-PROVIDER-SENTINEL"},
         {"HTTP 500", 500, cpr::ErrorCode::OK, "B96-PROVIDER-SENTINEL"},
         {"HTTP 429", 429, cpr::ErrorCode::OK, "B96-PROVIDER-SENTINEL"},
         {"HTTP 400", 400, cpr::ErrorCode::OK, "B96-PROVIDER-SENTINEL"},
