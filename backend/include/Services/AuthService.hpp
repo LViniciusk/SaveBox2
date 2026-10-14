@@ -29,6 +29,10 @@ public:
     static void clear_password_hash_test_hook();
     static void set_password_verify_test_hook(std::function<void()> hook);
     static void clear_password_verify_test_hook();
+    static void set_password_material_test_hook(std::function<void()> hook);
+    static void clear_password_material_test_hook();
+    static void set_password_crypto_test_hook(std::function<int(char*, const char*, size_t)> hook);
+    static void clear_password_crypto_test_hook();
 #endif
 
     int register_user(const std::string& username, const std::string& email, const std::string& password, const std::string& ip_address);

@@ -1,4 +1,5 @@
 #include "Services/AuthService.hpp"
+#include "Services/detail/ScopedMemoryWipe.hpp"
 #include "database/DatabasePool.hpp"
 #include "Services/EmailService.hpp"
 #include "utils.hpp"
@@ -22,10 +23,22 @@ namespace {
 std::mutex password_hash_test_hook_mutex;
 std::function<void()> password_hash_test_hook;
 std::function<void()> password_verify_test_hook;
+std::function<void()> password_material_test_hook;
+std::function<int(char*, const char*, size_t)> password_crypto_test_hook;
+
+void after_password_material_for_testing() {
+    std::function<void()> hook;
+    {
+        std::lock_guard<std::mutex> lock(password_hash_test_hook_mutex);
+        hook = password_material_test_hook;
+    }
+    if (hook) hook();
+}
 }
 #endif
 
 namespace {
+using AuthDetail::ScopedMemoryWipe;
 void validate_pepper_or_throw(const std::string& pepper) {
     if (pepper.empty()) {
         throw std::invalid_argument("O Pepper do servidor nao pode ser vazio.");
@@ -106,10 +119,29 @@ void AuthService::clear_password_verify_test_hook() {
     std::lock_guard<std::mutex> lock(password_hash_test_hook_mutex);
     password_verify_test_hook = nullptr;
 }
+
+void AuthService::set_password_material_test_hook(std::function<void()> hook) {
+    std::lock_guard<std::mutex> lock(password_hash_test_hook_mutex);
+    password_material_test_hook = std::move(hook);
+}
+
+void AuthService::clear_password_material_test_hook() {
+    set_password_material_test_hook(nullptr);
+}
+
+void AuthService::set_password_crypto_test_hook(std::function<int(char*, const char*, size_t)> hook) {
+    std::lock_guard<std::mutex> lock(password_hash_test_hook_mutex);
+    password_crypto_test_hook = std::move(hook);
+}
+
+void AuthService::clear_password_crypto_test_hook() {
+    set_password_crypto_test_hook(nullptr);
+}
 #endif
 
 std::string AuthService::apply_pepper(const std::string& plain_password) const {
     std::array<unsigned char, crypto_generichash_BYTES> pre_hash{};
+    ScopedMemoryWipe pre_hash_wipe(pre_hash.data(), pre_hash.size());
 
     const int rc = crypto_generichash(
         pre_hash.data(), pre_hash.size(),
@@ -118,15 +150,12 @@ std::string AuthService::apply_pepper(const std::string& plain_password) const {
     );
 
     if (rc != 0) {
-        sodium_memzero(pre_hash.data(), pre_hash.size());
         throw std::runtime_error("AUTH_CRYPTO_FAILURE");
     }
 
     std::string hex_pre_hash(crypto_generichash_BYTES * 2 + 1, '\0');
     sodium_bin2hex(hex_pre_hash.data(), hex_pre_hash.size(), pre_hash.data(), pre_hash.size());
 
-    sodium_memzero(pre_hash.data(), pre_hash.size());
-    
     hex_pre_hash.resize(crypto_generichash_BYTES * 2);
     
     return hex_pre_hash;
@@ -145,20 +174,31 @@ std::string AuthService::hash_password(const std::string& plain_password) {
 #endif
 
     std::string peppered_password = apply_pepper(plain_password);
+    ScopedMemoryWipe password_wipe(peppered_password);
 
-    char hashed[crypto_pwhash_STRBYTES];
-    std::memset(hashed, 0, sizeof(hashed));
+    char hashed[crypto_pwhash_STRBYTES]{};
+    ScopedMemoryWipe hash_wipe(hashed, sizeof(hashed));
 
-    if (crypto_pwhash_str(
+#ifdef NANIKA_TESTING
+    after_password_material_for_testing();
+    std::function<int(char*, const char*, size_t)> crypto_hook;
+    {
+        std::lock_guard<std::mutex> lock(password_hash_test_hook_mutex);
+        crypto_hook = password_crypto_test_hook;
+    }
+    const int rc = crypto_hook ? crypto_hook(hashed, peppered_password.c_str(), peppered_password.size()) :
+#else
+    const int rc =
+#endif
+        crypto_pwhash_str(
             hashed,
             peppered_password.c_str(),
             peppered_password.size(),
             crypto_pwhash_OPSLIMIT_INTERACTIVE,
-            crypto_pwhash_MEMLIMIT_INTERACTIVE) != 0) {
-        throw std::runtime_error("Falha ao gerar hash da senha (memoria insuficiente?).");
+            crypto_pwhash_MEMLIMIT_INTERACTIVE);
+    if (rc != 0) {
+        throw std::runtime_error("AUTH_CRYPTO_FAILURE");
     }
-
-    sodium_memzero(peppered_password.data(), peppered_password.size());
 
     return std::string(hashed);
 }
@@ -176,14 +216,17 @@ bool AuthService::verify_password(const std::string& plain_password, const std::
 #endif
 
     std::string peppered_password = apply_pepper(plain_password);
+    ScopedMemoryWipe password_wipe(peppered_password);
+
+#ifdef NANIKA_TESTING
+    after_password_material_for_testing();
+#endif
 
     bool is_valid = crypto_pwhash_str_verify(
         hashed_password.c_str(),
         peppered_password.c_str(),
         peppered_password.size()
     ) == 0;
-
-    sodium_memzero(peppered_password.data(), peppered_password.size());
 
     return is_valid;
 }
