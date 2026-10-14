@@ -36,6 +36,34 @@ void apply_sensitive_response_headers(crow::response& response) {
     response.set_header("Pragma", "no-cache");
 }
 
+void apply_docs_response_headers(crow::response& response) {
+    response.set_header("X-Content-Type-Options", "nosniff");
+    response.set_header("Referrer-Policy", "no-referrer");
+    response.set_header("X-Frame-Options", "DENY");
+    response.set_header("Cache-Control", "no-store");
+}
+
+// Callers supply only literal whitelisted paths, never request data.
+crow::response read_docs_file(const char* file, const char* mime) {
+    std::ifstream input(std::string("./docs/") + file, std::ios::binary);
+    if (!input.is_open()) {
+        input.clear();
+        input.open(std::string("../../docs/") + file, std::ios::binary);
+    }
+    crow::response response(503, "Service Unavailable");
+    response.set_header("Content-Type", "text/plain; charset=utf-8");
+    if (input.is_open() && input.good()) {
+        std::stringstream buffer;
+        buffer << input.rdbuf();
+        if (!input.bad() && !buffer.fail()) {
+            response = crow::response(buffer.str());
+            response.set_header("Content-Type", mime);
+        }
+    }
+    apply_docs_response_headers(response);
+    return response;
+}
+
 std::string make_auth_cookie(const std::string& token, int max_age, bool secure) {
     std::string cookie = "jwt=" + token + "; HttpOnly; Path=/; Max-Age=" +
         std::to_string(max_age) + "; SameSite=Lax";
@@ -3076,62 +3104,42 @@ crow::response ApiRouter::handle_google_sync_cleanup(const crow::request& req, i
 
 void ApiRouter::setup_routes(NanikaCrowApp& app) {
 
-    CROW_ROUTE(app, "/api/docs")
-    ([]() {
-        std::string html = R"(
-        <!DOCTYPE html>
-        <html lang="pt-br">
-        <head>
-            <meta charset="UTF-8">
-            <title>Nanika API Docs</title>
-            <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.css" >
-        </head>
-        <body>
-            <div id="swagger-ui"></div>
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.js"></script>
-            <script>
-            window.onload = function() {
-                window.ui = SwaggerUIBundle({
-                    url: "/api/docs/swagger.yaml",
-                    dom_id: '#swagger-ui',
-                    deepLinking: true,
-                    presets: [ SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset ],
-                    layout: "BaseLayout"
-                });
-            }
-            </script>
-        </body>
-        </html>
-        )";
-        
-        auto res = crow::response(html);
-        res.set_header("Content-Type", "text/html");
-        return res;
-    });
+    const auto docs_html = [](bool trailing_slash) {
+        const std::string assets = trailing_slash ? "assets/" : "docs/assets/";
+        const std::string html =
+            "<!DOCTYPE html><html lang=\"pt-br\"><head>"
+            "<meta charset=\"UTF-8\"><title>Nanika API Docs</title>"
+            "<link rel=\"stylesheet\" href=\"" + assets + "swagger-ui.css\">"
+            "</head><body><div id=\"swagger-ui\"></div>"
+            "<script src=\"" + assets + "swagger-ui-bundle.js\" defer></script>"
+            "<script src=\"" + assets + "swagger-init.js\" defer></script>"
+            "</body></html>";
+        auto response = crow::response(html);
+        response.set_header("Content-Type", "text/html; charset=utf-8");
+        response.set_header("Content-Security-Policy",
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+            "font-src 'self'; connect-src 'self'; base-uri 'none'; object-src 'none'; "
+            "frame-ancestors 'none'; form-action 'none';");
+        apply_docs_response_headers(response);
+        return response;
+    };
+    CROW_ROUTE(app, "/api/docs").methods(crow::HTTPMethod::Get)
+    ([docs_html]() { return docs_html(false); });
 
-    CROW_ROUTE(app, "/api/docs/swagger.yaml")
-    ([]() {
-        std::ifstream ifs("./docs/swagger.yaml");
-    
-        if (!ifs.is_open()) {
-            ifs.open("../../docs/swagger.yaml");
-        }
+    CROW_ROUTE(app, "/api/docs/swagger.yaml").methods(crow::HTTPMethod::Get)
+    ([]() { return read_docs_file("swagger.yaml", "text/yaml; charset=utf-8"); });
+    CROW_ROUTE(app, "/api/docs/assets/swagger-ui.css").methods(crow::HTTPMethod::Get)
+    ([]() { return read_docs_file("swagger-ui/swagger-ui.css", "text/css; charset=utf-8"); });
+    CROW_ROUTE(app, "/api/docs/assets/swagger-ui-bundle.js").methods(crow::HTTPMethod::Get)
+    ([]() { return read_docs_file("swagger-ui/swagger-ui-bundle.js", "application/javascript; charset=utf-8"); });
+    CROW_ROUTE(app, "/api/docs/assets/swagger-init.js").methods(crow::HTTPMethod::Get)
+    ([]() { return read_docs_file("swagger-ui/swagger-init.js", "application/javascript; charset=utf-8"); });
 
-        if (!ifs.is_open() || !ifs.good()) {
-            CROW_LOG_ERROR << "ERRO: swagger.yaml nao encontrado ou IO Resource Exhausted!";
-            return crow::response(503, "Service Unavailable - IO Resource Exhausted");
-        }
-        
-        std::stringstream buffer;
-        buffer << ifs.rdbuf();
-
-        if (ifs.fail() && !ifs.eof()) {
-            return crow::response(503, "Service Unavailable - IO Resource Exhausted");
-        }
-        
-        auto res = crow::response(buffer.str());
-        res.set_header("Content-Type", "text/yaml");
-        return res;
+    // Crow selects the first matching route; keep this slash-only alias after the whitelist.
+    CROW_ROUTE(app, "/api/docs<path>").methods(crow::HTTPMethod::Get)
+    ([docs_html](const std::string& suffix) {
+        if (suffix != "/") return crow::response(404);
+        return docs_html(true);
     });
 
     CROW_ROUTE(app, "/health").methods(crow::HTTPMethod::Get)
