@@ -76,6 +76,7 @@ async function installContinuationTrace(page: Page, filename: string): Promise<b
     const targetPresent = () => store.transfers().some((item: any) => item?.id === targetId);
 
     const originalLoop = store.runUploadLoop;
+    let loopCompletion: Promise<unknown> | undefined;
     restores.push(() => { store.runUploadLoop = originalLoop; });
     store.runUploadLoop = function (...args: any[]) {
       if (args[1] !== targetId) return originalLoop.apply(this, args);
@@ -84,13 +85,14 @@ async function installContinuationTrace(page: Page, filename: string): Promise<b
       let operation: Promise<unknown>;
       try { operation = originalLoop.apply(this, args); }
       catch (error) { record('run-upload-loop-rejected', { generationCurrent: generation === store.uploadRuntimeGeneration }); throw error; }
-      return Promise.resolve(operation).then(value => {
-        record('run-upload-loop-resolved', { generationCurrent: generation === store.uploadRuntimeGeneration });
+      loopCompletion = Promise.resolve(operation).then(async value => {
+        await record('run-upload-loop-resolved', { generationCurrent: generation === store.uploadRuntimeGeneration });
         return value;
-      }, error => {
-        record('run-upload-loop-rejected', { generationCurrent: generation === store.uploadRuntimeGeneration });
+      }, async error => {
+        await record('run-upload-loop-rejected', { generationCurrent: generation === store.uploadRuntimeGeneration });
         throw error;
       });
+      return loopCompletion;
     };
 
     const engine = store.uploadEngine;
@@ -181,6 +183,10 @@ async function installContinuationTrace(page: Page, filename: string): Promise<b
         : snapshot;
     };
     (window as any).__nanikaM26Trace = {
+      waitForLoopCompletion: () => {
+        if (!loopCompletion) throw new Error('Recovery upload loop was not observed');
+        return loopCompletion;
+      },
       snapshotStore,
       snapshotDom,
       valid: () => targetFinalChunkWrapped && instrumentationHealthy,
@@ -394,6 +400,7 @@ test('recovers the same local upload and preserves its bytes', async ({ page, cr
       return (state ?? '').split(/\s+/).includes('success') ? 'completed' : fingerprint;
     }, { timeout: RECOVERY_CONVERGENCE_TIMEOUT_MS }).toMatch(/^(completed|completed-hidden)$/);
     await page.evaluate(async () => {
+      await (window as any).__nanikaM26Trace.waitForLoopCompletion();
       await (window as any).__nanikaM26Trace?.snapshotStore();
       await (window as any).__nanikaM26Trace?.snapshotDom();
     });

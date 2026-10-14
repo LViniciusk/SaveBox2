@@ -62,6 +62,7 @@ jobs:
           NANIKA_JWT_SECRET=test-jwt-secret
           RESEND_API_KEY=test-resend
           EMAIL_VALIDATION_API_KEY=test-email
+          IMGUR_CLIENT_ID=test-imgur-client-id
           NANIKA_STORAGE_PATH=./savebox_storage/
           EOF
 
@@ -177,6 +178,7 @@ jobs:
           NANIKA_JWT_SECRET=test-jwt-secret
           RESEND_API_KEY=test-resend
           EMAIL_VALIDATION_API_KEY=test-email
+          IMGUR_CLIENT_ID=test-imgur-client-id
           NANIKA_STORAGE_PATH=./savebox_storage/
           "@ | Set-Content -Path .env -NoNewline
 
@@ -265,6 +267,7 @@ jobs:
           NANIKA_JWT_SECRET=test-jwt-secret
           RESEND_API_KEY=test-resend
           EMAIL_VALIDATION_API_KEY=test-email
+          IMGUR_CLIENT_ID=test-imgur-client-id
           NANIKA_STORAGE_PATH=./savebox_storage/
           EOF
 
