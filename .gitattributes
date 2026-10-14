@@ -5,5 +5,6 @@
 frontend/tools/ap06-*.mjs text eol=lf
 frontend/tools/browser-memory-probe.mjs text eol=lf
 frontend/e2e-video/video-fixtures.ts text eol=lf
+frontend/experiments/ap06-r7/** text eol=lf
 tools/quality/*ap06*probe.py text eol=lf
 tools/quality/run_readiness_wave1.py text eol=lf

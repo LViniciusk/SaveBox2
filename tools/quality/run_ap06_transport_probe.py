@@ -41,9 +41,15 @@ def byte_range(value, size, strict=False):
 
 
 @contextlib.contextmanager
-def media_server(files, strict_ranges=False, content_type='video/mp4'):
+def media_server(files, strict_ranges=False, content_type='video/mp4', assets=None):
     """Explicit URL map only. No directory traversal, static root, or external bind."""
     files = dict(files)
+    assets = dict(assets or {})
+    allowed_mimes = {'text/html; charset=utf-8', 'text/javascript', 'text/css'}
+    if any((key != '/' and not re.fullmatch(r'/[\w.-]+\.(?:js|css)', key)) or
+           not path.is_file() or path.is_symlink() or mime not in allowed_mimes
+           for key, (path, mime) in assets.items()):
+        raise ValueError('INVALID_EXPERIMENTAL_ASSET_MAP')
     if content_type not in ('video/mp4','application/octet-stream'): raise ValueError('INVALID_FIXTURE_CONTENT_TYPE')
     if not files or any(not re.fullmatch(r'/video-\d+\.mp4', key) or not path.is_file() or path.is_symlink()
                         for key, path in files.items()):
@@ -65,22 +71,24 @@ def media_server(files, strict_ranges=False, content_type='video/mp4'):
 
         def serve(self, body):
             with lock: stats['requests'] += 1
-            if self.path == '/':
+            if self.path == '/' and self.path not in assets:
                 html = b'<!doctype html><html><body></body></html>'
                 self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8')
                 self.send_header('Content-Length', str(len(html))); self.end_headers()
                 if body: self.wfile.write(html)
                 return
-            path = files.get(self.path)
+            asset = assets.get(self.path)
+            path = asset[0] if asset else files.get(self.path)
             if path is None:
                 self.send_error(404); return
             size = path.stat().st_size; start, end = 0, size - 1
             ranges = self.headers.get_all('Range', [])
-            if strict_ranges and not ranges:
+            if strict_ranges and not ranges and not asset:
                 self.send_response(416); self.send_header('Content-Range', f'bytes */{size}')
                 self.send_header('Content-Length', '0'); self.end_headers(); return
             if ranges:
                 try:
+                    if asset: raise ValueError('ASSET_RANGE_FORBIDDEN')
                     if len(ranges) != 1: raise ValueError('MULTIPLE_RANGES')
                     start, end = byte_range(ranges[0], size, strict_ranges)
                 except ValueError:
@@ -88,7 +96,7 @@ def media_server(files, strict_ranges=False, content_type='video/mp4'):
                     self.send_header('Content-Length', '0'); self.end_headers(); return
                 with lock: stats['ranges'] += 1
             self.send_response(206 if ranges else 200)
-            self.send_header('Content-Type', content_type); self.send_header('Accept-Ranges', 'bytes')
+            self.send_header('Content-Type', asset[1] if asset else content_type); self.send_header('Accept-Ranges', 'bytes')
             self.send_header('Content-Length', str(end - start + 1))
             self.send_header('Cache-Control', 'no-store')
             if ranges: self.send_header('Content-Range', f'bytes {start}-{end}/{size}')

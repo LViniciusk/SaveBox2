@@ -487,7 +487,8 @@ export function ownershipSnapshot(counters) {
 }
 
 export async function runTransmuxProbe({ pageScript = transmuxPageScript(), countersFactory = newTransmuxCounters,
-  cleanupValidator = validateCleanupOwnership, functionalValidator = validateTransmuxOwnership, snapshot = ownershipSnapshot } = {}) {
+  cleanupValidator = validateCleanupOwnership, functionalValidator = validateTransmuxOwnership, snapshot = ownershipSnapshot,
+  launchOptions = {}, configurePage = null, initializePage = null, identity = {} } = {}) {
   const expectedChromiumVersion = validateExpectedChromiumVersion(process.env.AP06_R5_CHROMIUM_VERSION);
   const { AP06_R5_MODE: mode, AP06_R5_STAGE: stage, AP06_R5_ARTIFACT_DIR: artifactDir,
     AP06_R5_MEDIA_ORIGIN: origin, AP06_R5_FIXTURE_MANIFEST: manifestPath,
@@ -512,7 +513,7 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
     browserLaunches: 0, launchAttempts: 0, retries: 0, processSampleCalls: 0,
     orchestratorHash: process.env.AP06_R5_RUNNER_SHA256,
     fixtureManifestSha256: manifestHash, fixtureIdentities: fixtures.map(({ id, name, bytes, sha256 }) => ({ id, name, bytes, sha256 })),
-    workerBundleSha256: transpHash, cryptoWorkerBundleSha256: cryptoWorkerHash, runs: [] };
+    workerBundleSha256: transpHash, cryptoWorkerBundleSha256: cryptoWorkerHash, runs: [], ...identity };
   const output = `${artifactDir}/${mode}.raw.json`;
   const flush = () => writeJsonAtomic(output, raw);
   flush();
@@ -523,16 +524,18 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
     raw.runs.push(run); raw.launchAttempts++; flush();
     let browser = null, page = null, pageInitialized = false;
     try {
-      browser = await chromium.launch(); raw.browserLaunches++; flush();
+      browser = await chromium.launch(launchOptions); raw.browserLaunches++; flush();
       run.browserVersion = browser.version();
       if (run.browserVersion !== expectedChromiumVersion) throw new Error('CHROMIUM_VERSION_MISMATCH');
       const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block' });
       page = await context.newPage();
+      if (configurePage) await configurePage(page, context, raw);
       await page.addInitScript({ content: pageScript });
       await page.goto(origin);
       await page.evaluate(({ counters, transmux, crypto }) => {
         window.r5Counters = counters; window.r5TransmuxWorkerSource = transmux; window.r5CryptoWorkerSource = crypto;
       }, { counters: countersFactory(mode), transmux: transmuxSource, crypto: cryptoSource });
+      if (initializePage) await initializePage(page, raw);
       pageInitialized = true;
       run.supportedCodecs = await page.evaluate(codecs => codecs.map(codec => ({ codec, supported: MediaSource.isTypeSupported(codec) })),
         [...new Set(fixtures.map(fixture => fixture.codec))]);
