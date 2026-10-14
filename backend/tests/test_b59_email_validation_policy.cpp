@@ -11,6 +11,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cpr/cpr.h>
+#include <curl/curl.h>
 #include <functional>
 #include <mutex>
 #include <pqxx/pqxx>
@@ -220,7 +221,7 @@ TEST_CASE("B.59 direct validator classifies tri-state outcomes", "[b59][email][s
     }
 
     SECTION("network error and status zero are Unavailable") {
-        service.validation_response = response(0, "", cpr::ErrorCode::COULDNT_CONNECT);
+        service.validation_response = response(0, "", cpr::Error{CURLE_COULDNT_CONNECT, {}}.code);
         REQUIRE(service.validate_email_via_api("user@gmail.com") == EmailValidationResult::Unavailable);
         service.validation_response = response(0, "");
         REQUIRE(service.validate_email_via_api("user@gmail.com") == EmailValidationResult::Unavailable);
