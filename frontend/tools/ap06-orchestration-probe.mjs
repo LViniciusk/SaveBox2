@@ -167,7 +167,7 @@ export function orchestrationSnapshot(counters) {
     'pendingSchedulerJobs', 'currentFetches', 'liveEncryptedFetchBytes'].map(name => [name, counters[name]])) };
 }
 
-async function runOrchestrationFixture(fixture, condition) {
+async function runOrchestrationFixture(fixture, condition, suppliedMaterial = null) {
   const counters = window.r5Counters;
   counters.currentSessionMaxActiveRanges = 0;
   const video = document.createElement('video'); video.muted = true; video.preload = 'auto'; document.body.appendChild(video);
@@ -201,7 +201,7 @@ async function runOrchestrationFixture(fixture, condition) {
   try {
     cryptoHandle = workerBlob(window.r5CryptoWorkerSource, counters, 'crypto'); counters.cryptoWorkersCreated++;
     cryptoHandle.worker.postMessage({ type: 'INIT', logsEnabled: false });
-    material = window.r5DisposableCryptoMaterial(fixture.id);
+    material = suppliedMaterial ?? window.r5DisposableCryptoMaterial(fixture.id);
     transmuxHandle = workerBlob(window.r5TransmuxWorkerSource, counters, 'transmux'); counters.transmuxWorkersCreated++;
     client = window.r5CreateTransmuxWorkerClient(transmuxHandle.worker, counters, 'crypto-transmux-mse');
     let nextIndex = 0;

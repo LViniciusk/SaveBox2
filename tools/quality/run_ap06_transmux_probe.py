@@ -118,15 +118,16 @@ def cycle6_process_deltas(record):
 
 
 def validate_raw(raw, stage, mode, source_hash, fixture_hash, harness_hash=None, runner_hash=None,
-                 expected_chromium_version=None, transmux_chunks_per_cycle=3, control_lifecycle=True):
+                 expected_chromium_version=None, transmux_chunks_per_cycle=3, control_lifecycle=True, identity_expectations=None):
     expected = 1 if stage == 'triage' else 3
     if (raw.get('mode') != mode or raw.get('stage') != stage or raw.get('browserLaunches') != expected or
             raw.get('launchAttempts') != expected or raw.get('retries') != 0 or len(raw.get('runs', [])) != expected):
         raise WaveFailure('AP06_R5_LAUNCH_PROTOCOL_INVALID')
     if raw.get('processSampleCalls') != expected * len(PHASES):
         raise WaveFailure('INCONCLUSIVE_PROCESS_MEMORY_NOT_AVAILABLE')
-    if any(raw.get(key) is not False for key in ('playwrightRoutingInstalled', 'fetchInterceptionInstalled',
-                                                   'videoStreamServiceUsed', 'angularOrBackendUsed')):
+    identities = identity_expectations if identity_expectations is not None else dict.fromkeys(
+        ('playwrightRoutingInstalled', 'fetchInterceptionInstalled', 'videoStreamServiceUsed', 'angularOrBackendUsed'), False)
+    if any(raw.get(key) is not expected_identity for key, expected_identity in identities.items()):
         raise WaveFailure('AP06_R5_CONTROL_IDENTITY_INVALID')
     if raw.get('fixtureManifestSha256') != fixture_hash:
         raise WaveFailure('INCOMPARABLE_MEASUREMENT_BASELINES')
