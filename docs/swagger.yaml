@@ -2261,7 +2261,7 @@ paths:
             Pragma:
               schema: { type: string, example: no-cache }
         '206': { description: Range criptografado da origem local; exige `bytes=início-fim` único de até 4 MiB. }
-        '416': { description: Range inválido ou maior que 4 MiB; retorna `Content-Range: bytes */total`. }
+        '416': { description: "Range inválido ou maior que 4 MiB; retorna `Content-Range: bytes */total`." }
 
   /storage-moves/{moveId}/items/{itemId}/google-session:
     post:

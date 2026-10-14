@@ -10,6 +10,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cpr/cpr.h>
+#include <curl/curl.h>
 #include <exception>
 #include <mutex>
 #include <pqxx/pqxx>
@@ -236,7 +237,7 @@ TEST_CASE("B.58 network delivery failure is normalized and compensated", "[b58][
     B58Scenario scenario("network_failure");
     const auto username = scenario.prefix + "user";
     const auto email = username + "@test.com";
-    scenario.email.delivery_error = cpr::ErrorCode::COULDNT_CONNECT;
+    scenario.email.delivery_error = cpr::Error{CURLE_COULDNT_CONNECT, {}}.code;
     scenario.email.delivery_status = 0;
 
     const auto response = scenario.router.handle_register(
@@ -265,7 +266,7 @@ TEST_CASE("B.58 recovery fails closed when registration ownership changes", "[b5
     B58Scenario scenario("ownership_changed");
     const auto username = scenario.prefix + "user";
     const auto email = username + "@test.com";
-    scenario.email.delivery_error = cpr::ErrorCode::COULDNT_CONNECT;
+    scenario.email.delivery_error = cpr::Error{CURLE_COULDNT_CONNECT, {}}.code;
     scenario.email.delivery_status = 0;
     scenario.email.enable_delivery_gate();
 
@@ -300,7 +301,7 @@ TEST_CASE("B.58 verification wins the ambiguous delivery race", "[b58][auth][reg
     B58Scenario scenario("verify_wins");
     const auto username = scenario.prefix + "user";
     const auto email = username + "@test.com";
-    scenario.email.delivery_error = cpr::ErrorCode::COULDNT_CONNECT;
+    scenario.email.delivery_error = cpr::Error{CURLE_COULDNT_CONNECT, {}}.code;
     scenario.email.delivery_status = 0;
     scenario.email.enable_delivery_gate();
 
@@ -344,7 +345,7 @@ TEST_CASE("B.58 compensation wins and consumes the old token", "[b58][auth][regi
     B58Scenario scenario("compensation_wins");
     const auto username = scenario.prefix + "user";
     const auto email = username + "@test.com";
-    scenario.email.delivery_error = cpr::ErrorCode::COULDNT_CONNECT;
+    scenario.email.delivery_error = cpr::Error{CURLE_COULDNT_CONNECT, {}}.code;
     scenario.email.delivery_status = 0;
     scenario.email.enable_delivery_gate();
 

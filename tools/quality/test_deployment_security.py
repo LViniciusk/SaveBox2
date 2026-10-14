@@ -1,3 +1,6 @@
+import re
+import json
+import hashlib
 import unittest
 from pathlib import Path
 
@@ -8,6 +11,89 @@ ROOT = Path(__file__).resolve().parents[2]
 class DeploymentSecurityTests(unittest.TestCase):
     def read(self, relative: str) -> str:
         return (ROOT / relative).read_text(encoding="utf-8")
+
+    def test_swagger_has_its_own_local_only_browser_policy(self):
+        router = self.read('backend/src/controllers/ApiRouter.cpp')
+        docs = router.split('void ApiRouter::setup_routes(', 1)[1].split('CROW_ROUTE(app, "/health")', 1)[0]
+        self.assertNotIn('https://', docs)
+        self.assertNotIn('<script>', docs)
+        self.assertNotIn('window.onload', docs)
+        self.assertNotIn('onload=', docs)
+        self.assertIn('Content-Security-Policy', docs)
+        for directive in ["default-src 'none'", "script-src 'self'", "style-src 'self'",
+                          "connect-src 'self'", "base-uri 'none'", "object-src 'none'",
+                          "frame-ancestors 'none'", "form-action 'none'"]:
+            self.assertIn(directive, docs)
+        for forbidden in ['unsafe-inline', 'unsafe-eval', 'https:', '/assets/<path>', '/assets/<string>']:
+            self.assertNotIn(forbidden, docs)
+        for asset in ['swagger-ui.css', 'swagger-ui-bundle.js', 'swagger-init.js']:
+            self.assertIn('"/api/docs/assets/' + asset + '"', docs)
+        self.assertIn('"/api/docs<path>"', docs)
+        self.assertIn('if (suffix != "/") return crow::response(404);', docs)
+        init = self.read('docs/swagger-ui/swagger-init.js')
+        self.assertIn('window.location.pathname', init)
+        self.assertIn('swagger.yaml', init)
+        self.assertNotIn('https://', init)
+        self.assertIn('validatorUrl: null', init)
+
+    def test_swagger_vendored_integrity_and_production_packaging(self):
+        provenance = json.loads(self.read('docs/swagger-ui/provenance.json'))
+        self.assertEqual(provenance['repository'], 'https://github.com/swagger-api/swagger-ui')
+        self.assertRegex(provenance['commit'], r'^[a-f0-9]{40}$')
+        self.assertRegex(provenance['version'], r'^5\.\d+\.\d+$')
+        for name in ['swagger-ui-bundle.js', 'swagger-ui.css', 'LICENSE', 'NOTICE']:
+            record = provenance['files'][name]
+            self.assertTrue(record['source'].startswith('https://raw.githubusercontent.com/swagger-api/swagger-ui/' + provenance['commit'] + '/'))
+            self.assertEqual(hashlib.sha256((ROOT / 'docs/swagger-ui' / name).read_bytes()).hexdigest(), record['sha256'])
+            self.assertIn(name + ' -text', self.read('docs/swagger-ui/.gitattributes').splitlines())
+        self.assertIn('COPY --from=builder /src/docs /app/docs', self.read('Dockerfile'))
+        self.assertNotIn('docs', self.read('.dockerignore').splitlines())
+
+    def test_spa_browser_policy_is_narrow_and_does_not_cover_backend_docs(self):
+        nginx = self.read('frontend/nginx.conf')
+        match = re.search(r'location\s+/\s*\{([^{}]*)\}', nginx)
+        self.assertIsNotNone(match, 'SPA location required')
+        spa = match[1]
+        headers = dict(re.findall(r'add_header\s+([\w-]+)\s+"([^"]+)"\s+always\s*;', spa))
+        self.assertIn('Content-Security-Policy', headers)
+        policy = {}
+        for directive in headers['Content-Security-Policy'].split(';'):
+            words = directive.split()
+            if words:
+                self.assertNotIn(words[0], policy, 'Duplicate CSP directive')
+                policy[words[0]] = set(words[1:])
+        for key, value in {'default-src': {"'self'"}, 'base-uri': {"'self'"}, 'object-src': {"'none'"},
+                           'frame-ancestors': {"'none'"}, 'form-action': {"'self'"}}.items():
+            self.assertEqual(policy[key], value)
+        self.assertNotIn("'unsafe-inline'", policy['script-src'])
+        self.assertNotIn("'unsafe-eval'", policy['script-src'])
+        self.assertIn("'wasm-unsafe-eval'", policy['script-src'])
+        self.assertEqual(policy['connect-src'], {"'self'", 'https://upload.nanika.lvinik.app', 'https://www.googleapis.com'})
+        for values in policy.values():
+            self.assertNotIn('*', values); self.assertNotIn('https:', values)
+        self.assertEqual(policy['media-src'], {"'self'", 'blob:'})
+        self.assertEqual(policy['worker-src'], {"'self'", 'blob:'})
+        self.assertEqual(policy['img-src'], {"'self'", 'data:', 'blob:', 'https://i.imgur.com', 'https://lh3.googleusercontent.com'})
+        self.assertEqual(policy['font-src'], {"'self'", 'https://fonts.gstatic.com'})
+        self.assertEqual(policy['style-src'], {"'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'})
+        for key, values in policy.items():
+            if key != 'style-src': self.assertNotIn('https://fonts.googleapis.com', values)
+            if key != 'font-src': self.assertNotIn('https://fonts.gstatic.com', values)
+        self.assertEqual(headers['X-Content-Type-Options'], 'nosniff')
+        self.assertEqual(headers['Referrer-Policy'], 'no-referrer')
+        self.assertEqual(headers['X-Frame-Options'], 'DENY')
+        self.assertEqual(headers['Permissions-Policy'], 'camera=(), microphone=(), geolocation=(), payment=(), usb=()')
+        outside_spa = nginx[:match.start()] + nginx[match.end():]
+        self.assertNotIn('Content-Security-Policy', outside_spa)
+        self.assertIn('location /backend/', outside_spa)
+        self.assertNotIn('cdnjs.cloudflare.com', nginx)
+        self.assertNotIn('Strict-Transport-Security', nginx)
+        self.assertNotIn('X-XSS-Protection', nginx)
+
+    def test_production_styles_do_not_generate_inline_script_handlers(self):
+        production = json.loads(self.read('frontend/angular.json'))['projects']['frontend']['architect']['build']['configurations']['production']
+        self.assertIs(production.get('optimization', {}).get('styles', {}).get('inlineCritical'), False,
+                      'Angular critical-style optimization emits an inline onload handler that CSP blocks')
 
     def service_block(self, compose: str, service: str) -> str:
         lines = compose.splitlines()

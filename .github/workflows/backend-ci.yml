@@ -5,7 +5,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, frontend ]
 
 permissions:
   contents: read
@@ -62,6 +62,7 @@ jobs:
           NANIKA_JWT_SECRET=test-jwt-secret
           RESEND_API_KEY=test-resend
           EMAIL_VALIDATION_API_KEY=test-email
+          IMGUR_CLIENT_ID=test-imgur-client-id
           NANIKA_STORAGE_PATH=./savebox_storage/
           EOF
 
@@ -76,9 +77,10 @@ jobs:
           grep -Eq 'CMAKE_CXX_COMPILER_ID.*GNU' "$compiler_file"
 
       - name: Build backend targets
-        run: cmake --build backend/build-linux-ci \
-          --target savebox_server savebox_tests nanika_e2e_fixture \
-          --parallel 2
+        run: |
+          cmake --build backend/build-linux-ci \
+            --target savebox_server savebox_tests nanika_e2e_fixture \
+            --parallel 2
 
       - name: Run backend tests
         working-directory: backend/build-linux-ci
@@ -111,6 +113,7 @@ jobs:
           if (-not $env:VCPKG_INSTALLATION_ROOT) {
             throw "VCPKG_INSTALLATION_ROOT is not available on the runner"
           }
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
           $env:Path = "$env:VCPKG_INSTALLATION_ROOT;$env:Path"
           vcpkg version
           vcpkg install --x-manifest-root=backend --triplet x64-windows
@@ -175,6 +178,7 @@ jobs:
           NANIKA_JWT_SECRET=test-jwt-secret
           RESEND_API_KEY=test-resend
           EMAIL_VALIDATION_API_KEY=test-email
+          IMGUR_CLIENT_ID=test-imgur-client-id
           NANIKA_STORAGE_PATH=./savebox_storage/
           "@ | Set-Content -Path .env -NoNewline
 
@@ -263,6 +267,7 @@ jobs:
           NANIKA_JWT_SECRET=test-jwt-secret
           RESEND_API_KEY=test-resend
           EMAIL_VALIDATION_API_KEY=test-email
+          IMGUR_CLIENT_ID=test-imgur-client-id
           NANIKA_STORAGE_PATH=./savebox_storage/
           EOF
 
