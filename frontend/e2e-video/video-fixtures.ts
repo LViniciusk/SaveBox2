@@ -114,4 +114,3 @@ export async function installMediaDiagnostics(page: Page): Promise<void> {
     };
   });
 }
-
