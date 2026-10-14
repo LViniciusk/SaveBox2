@@ -9,6 +9,9 @@ class SecurityTrackACiTests(unittest.TestCase):
     def test_e2e_uses_ipv4_bound_backend_and_checks_login_first(self):
         workflow = (ROOT / '.github/workflows/quality-baseline.yml').read_text(encoding='utf-8')
         self.assertIn('NANIKA_BIND_ADDRESS=127.0.0.1', workflow)
+        self.assertIn('export NANIKA_E2E_BASE_URL=http://127.0.0.1:4200', workflow)
+        self.assertIn('CORS_ORIGIN=http://127.0.0.1:4200', workflow)
+        self.assertIn('CORS_ALLOWED_ORIGINS=http://127.0.0.1:4200', workflow)
         self.assertIn('export NANIKA_E2E_BACKEND_URL=http://127.0.0.1:8080', workflow)
         self.assertNotIn('export NANIKA_E2E_BACKEND_URL=http://localhost:8080', workflow)
         self.assertLess(workflow.index('--config=playwright.ci-login.config.ts'),
