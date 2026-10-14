@@ -19,7 +19,7 @@
     "finalBrowserLaunches": 1,
     "finalUnexpectedCspViolations": 0,
     "baselineFilesInventoried": 543,
-    "outsideScopeFilesPreserved": 534,
+    "outsideScopeFilesPreserved": 533,
     "productionTestHooksAbsent": true,
     "artifactSecretScan": "PASS",
     "assetIntegrity": "PASS",

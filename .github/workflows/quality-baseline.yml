@@ -2,7 +2,7 @@ name: Quality Baseline
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, frontend ]
   workflow_dispatch:
 
 permissions:
