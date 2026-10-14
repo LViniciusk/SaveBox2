@@ -196,8 +196,14 @@ jobs:
             npx playwright install --with-deps chromium
           )
           export NANIKA_E2E_BASE_URL=http://localhost:4200
-          export NANIKA_E2E_BACKEND_URL=http://localhost:8080
+          export NANIKA_E2E_BACKEND_URL=http://127.0.0.1:8080
           export NANIKA_E2E_FIXTURE_EXE="$GITHUB_WORKSPACE/backend/build-e2e/nanika_e2e_fixture"
+          export NANIKA_M20_RESULT_PATH="$RUNNER_TEMP/credential-login-result.json"
+          export PLAYWRIGHT_OUTPUT_DIR="$RUNNER_TEMP/nanika-login-output"
+          (
+            cd frontend
+            node node_modules/@playwright/test/cli.js test --config=playwright.ci-login.config.ts
+          )
           python3 tools/quality/run_playwright.py
 
       - name: Upload E2E report

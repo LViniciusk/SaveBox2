@@ -1,6 +1,6 @@
 # Nanika Security Track A
 
-Result: **PASS_SECURITY_TRACK_A_HARDENED**. SEC-01, SEC-03 and QA-01 are CLOSED.
+Result: **PENDING_REQUIRED_REMOTE_CI**. SEC-01 and SEC-03 passed independent semantic review; QA-01 remains open until all five required remote jobs pass. Earlier local GREEN evidence does not establish full remote CI success.
 
 Baseline: `d99f93473eb1ebc8bd5e8d08783008cf1250b833`, branch `frontend`.
 Delivery branch: `security/track-a-hardening`; PR base: `frontend`, selected by the user so the six earlier commits are excluded from this PR.
@@ -48,3 +48,13 @@ Every isolated PostgreSQL/backend/Nginx process was cleaned up; preexisting cont
 GitHub `quality-report` passed on the first scheduled run. Its backend jobs failed before compilation/testing because of the two workflow defects described above; their minimal fixes passed the local workflow contracts and submitted-index gate. Final remote backend/E2E jobs are pending, and their full success is not claimed. Production packaging was verified by its copy contract, file hashes and Linux runtime UID readability, without rebuilding the full image. Real recovery/restore depends on the separately excluded C.01 migration authority and was not claimed here. Source-level contracts complement the executed C++ and browser checks; they do not substitute for those executions.
 
 Detailed sanitized local evidence is in `.quality/security-track-a/{baseline,sec01,sec03,qa01,final}`. This report and `decision.json` are included in the PR; diagnostic output and the inherited patch remain local.
+
+## PR #18 CI follow-up
+
+The remote run of `bba1bedc` did not pass: quality-report succeeded, GCC/Coverage failed on five nonexistent CPR enum references, E2E failed before a login response, and MSVC was still running when this follow-up began. Global PASS is withdrawn until all five required jobs succeed.
+
+Linux resolves CPR 1.10.5: its official `error.h` declares `CONNECTION_FAILURE`, and its `error.cpp` maps `CURLE_COULDNT_CONNECT` to that value. Windows's unchanged vcpkg baseline resolves CPR 1.14.2, which uses the newer enum. The five fault injections now use `cpr::Error{CURLE_COULDNT_CONNECT, {}}.code`, allowing the dependency to perform the identical connection-failure mapping on both platforms. Only the two test files changed; EmailService and dependencies are unchanged. Local focused B.58/B.59: **16 cases, 140 assertions passed**; reused backend build passed.
+
+The E2E workflow now selects `http://127.0.0.1:8080`, matching the existing IPv4 backend bind/readiness checks, and runs the existing credential-boundary probe before the five-test canonical suite. Its small dedicated Playwright config keeps zero retries and no trace/video/screenshots. The existing E2E loopback routing helper is unchanged; CORS and production requests are unchanged. Local actual Angular credential login with an isolated IPv4 backend passed: exactly one POST, 200 response, no request failure, correct origin/backend authority and `/drive/setup` navigation. URLs and comparisons are recorded without credentials in `ci-followup/`.
+
+Seven routing-helper tests and 27 Python runner/native CI/security contracts passed. Full remote CI success is pending; final job links and the final HEAD will be recorded once all five gates conclude. The Swagger/CSP and RAII implementation, inherited production changes and AP-06 authorities are frozen against a fresh 558-file inventory.

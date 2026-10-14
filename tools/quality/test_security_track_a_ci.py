@@ -6,6 +6,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class SecurityTrackACiTests(unittest.TestCase):
+    def test_e2e_uses_ipv4_bound_backend_and_checks_login_first(self):
+        workflow = (ROOT / '.github/workflows/quality-baseline.yml').read_text(encoding='utf-8')
+        self.assertIn('NANIKA_BIND_ADDRESS=127.0.0.1', workflow)
+        self.assertIn('export NANIKA_E2E_BACKEND_URL=http://127.0.0.1:8080', workflow)
+        self.assertNotIn('export NANIKA_E2E_BACKEND_URL=http://localhost:8080', workflow)
+        self.assertLess(workflow.index('--config=playwright.ci-login.config.ts'),
+                        workflow.index('python3 tools/quality/run_playwright.py'))
+        config = (ROOT / 'frontend/playwright.ci-login.config.ts').read_text(encoding='utf-8')
+        self.assertIn("testMatch: 'credential-login-boundary.spec.ts'", config)
+        self.assertIn('retries: 0', config)
+
     def test_required_fast_security_gate_uses_existing_python(self):
         source = (ROOT / '.github/workflows/quality-baseline.yml').read_text(encoding='utf-8')
         self.assertRegex(source, r'pull_request:\s+branches:\s*\[\s*main\s*,\s*frontend\s*\]')

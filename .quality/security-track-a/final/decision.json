@@ -1,8 +1,8 @@
 {
-  "result": "PASS_SECURITY_TRACK_A_HARDENED",
+  "result": "PENDING_REQUIRED_REMOTE_CI",
   "SEC-01": "CLOSED",
   "SEC-03": "CLOSED",
-  "QA-01": "CLOSED",
+  "QA-01": "OPEN/BLOCKED",
   "branch": "security/track-a-hardening",
   "pullRequestBase": "frontend",
   "pullRequestUrl": "https://github.com/LViniciusk/SaveBox2/pull/18",
