@@ -1,0 +1,262 @@
+{
+  "status": "BLOCKED_MISSING_R5_R2_AUTHORITY",
+  "ap06": "OPEN",
+  "baseHead": "df43809e140e5f1f5d93a143f79c5518260a46f7",
+  "toolingHead": "8323ff96f5d1758d234a994ed8898c969ab34158",
+  "branch": "investigation/ap06-r6",
+  "pullRequestBase": "frontend",
+  "conditions": {
+    "R6.1": "NOT_RUN",
+    "R6.2": "NOT_RUN",
+    "R6.3": "NOT_RUN"
+  },
+  "browserLaunches": 0,
+  "productionChanges": 0,
+  "toolVersions": {
+    "node": "v24.21.0",
+    "python": "3.14.3",
+    "playwrightFromOriginalWorktree": "1.62.1",
+    "chromiumFileVersion": "151.0.7922.34",
+    "chromiumExpectedVersion": "151.0.7922.34",
+    "chromiumRuntimeVersion": "NOT_RUN",
+    "ffmpeg": "ffmpeg version 2024-02-04-git-7375a6ca7b-full_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers",
+    "browserLaunches": 0,
+    "historicalExecutablePreflight": "NOT_RUN: indispensable source authority unavailable"
+  },
+  "toolingHashes": {
+    "tools/quality/validate_ap06_r6_authorities.py": "23820a70b3958fe90d14b6a8fa5d2995d3bb177be97af1e80c1eabbc1597a1cc",
+    "tools/quality/test_validate_ap06_r6_authorities.py": "1e13ac93ca2a630289fe0f6e5bde11431ced785bc7f959365f4e5592c594174b"
+  },
+  "protectedSourceHashes": {
+    "backend/include/database/DatabaseMigration.hpp": "900d0b68c120a5a2cc06c44a9068977dbb37171af8adc779f0d5a1ec53d89f14",
+    "backend/include/database/DatabasePool.hpp": "d9d7c60ec48899bed7bb926d2381599546dfefb7ba743577a373bfebd55bf9a4",
+    "backend/src/database/DatabaseMigration.cpp": "977f5aa7a819b5b6c98b76d0a88c15824179fdff03fdd67d8168fc64005a3c6f",
+    "backend/src/database/DatabasePool.cpp": "206fb28c70b20691dcf59107fbd7bda1b13365c1270aff177a25c5df8e9bbbda",
+    "frontend/src/app/core/crypto/kasumi-format.ts": "57d82af4a9b48e97b486100d879f749c36e5ae416fe3a6c9b1e41eb0ee6f72a9",
+    "frontend/src/app/features/drive/services/video-stream.service.spec.ts": "2a0db1e8866bce3615fe83da5b86afe293a440bef81e966a4496c6a182c8e7b2",
+    "frontend/src/app/features/drive/services/video-stream.service.ts": "aeb1b09df72783f41ea432510a68ba40f06bc6391f64bd166d35f78ddd318748",
+    "frontend/src/app/features/drive/workers/stream-crypto-protocol.spec.ts": "009c5a5c1cb00b2c842fbf1bce148e7ff1720d1e4559e21ec905ca15c797b52c",
+    "frontend/src/app/features/drive/workers/stream-crypto-protocol.ts": "0626f4453be932cf5f088341ac1340f9c16747a61c6a19738ce01396896c3470",
+    "frontend/src/app/features/drive/workers/stream-crypto.worker.ts": "9c6845483848ecb856cde5b093bdd3ce359ec3e194155c2560a9822d616c0f30",
+    "frontend/src/app/features/drive/workers/stream-transmux-protocol.spec.ts": "405b153cd8d2026f6273af862eed40d1937f7bb22190d5f3dd3743549df6f1f8",
+    "frontend/src/app/features/drive/workers/stream-transmux-protocol.ts": "4efc6d2c791f49a99384894309e0b00162f37fff95395e0f9efd225c1d18c99b",
+    "frontend/src/app/features/drive/workers/stream-transmux-ready.ts": "25ca3d7d612a372163172df7b845411a5fe3bfb852f3c7183894430fc4f07f6a",
+    "frontend/src/app/features/drive/workers/stream-transmux-resource-guard.integration.spec.ts": "07c22c7444c4681390ff39026bc2070b4678ba0f6a8cd7c76d19ba8ce0aafd83",
+    "frontend/src/app/features/drive/workers/stream-transmux-resource-guard.spec.ts": "a95083773803ebdbf01353c97b0bb1db62f6421f06eb991765d2be08bf0cee1e",
+    "frontend/src/app/features/drive/workers/stream-transmux-resource-guard.ts": "91b27860518f7fec5a734eec156282706fc3d19bade67209a7503ad2f9b02f92",
+    "frontend/src/app/features/drive/workers/stream-transmux-segment.spec.ts": "26c4e986c7285516c1fb5f14400ac3a0618bfe4d2cf9c414480b11a597345fd9",
+    "frontend/src/app/features/drive/workers/stream-transmux-segment.ts": "671916dfa7a128418a12f6b365854721f0a40c6440c13e3c1c235262728a2203",
+    "frontend/src/app/features/drive/workers/stream-transmux-state.spec.ts": "b9ff7e1587490cf2bece434b847538b859f560a2d39090d852381af4ede81088",
+    "frontend/src/app/features/drive/workers/stream-transmux-state.ts": "7a2c2b9772a25805a7729f3a8ba9a6664718c2dc4f16373181754652f5a2916a",
+    "frontend/src/app/features/drive/workers/stream-transmux.worker.spec.ts": "80b76350436a1f41fea953b52d02b3e4c0889b1a318ecec417548371832006b4",
+    "frontend/src/app/features/drive/workers/stream-transmux.worker.ts": "195ec9f5076f0b0978a3d8e246daf443bac2ed288c027082b1304bf2cded90be"
+  },
+  "authorityAudit": {
+    "status": "BLOCKED_MISSING_R5_R2_AUTHORITY",
+    "ap06": "OPEN",
+    "browserLaunches": 0,
+    "conditions": {
+      "R6.1": "NOT_RUN",
+      "R6.2": "NOT_RUN",
+      "R6.3": "NOT_RUN"
+    },
+    "sources": [
+      {
+        "path": "frontend/dist/frontend/browser/worker-NVYMNESP.js",
+        "expectedSha256": "aadbab5d9bf4357ff7a7cdf92d81b53d62d25d4fa61e2480b85bd1d456de9dc6",
+        "observedSha256": "aadbab5d9bf4357ff7a7cdf92d81b53d62d25d4fa61e2480b85bd1d456de9dc6",
+        "provenance": "original-worktree",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "frontend/dist/frontend/browser/worker-QPAI5PFL.js",
+        "expectedSha256": "ea645aefd0a14148aeaa7e95a672b446745f4a2436ae5c018549efd1fd94273b",
+        "observedSha256": "ea645aefd0a14148aeaa7e95a672b446745f4a2436ae5c018549efd1fd94273b",
+        "provenance": "original-worktree",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "frontend/e2e-video/video-fixtures.ts",
+        "expectedSha256": "43f8e41439a285500d625f14a659a5912c9c0e9a25e997a6fc8fe75925b37935",
+        "observedSha256": "e32e29f1e27450f57344c7bd2c73fde2cf91f50c15418880049585143f2bf547",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "HASH_MISMATCH"
+      },
+      {
+        "path": "frontend/package-lock.json",
+        "expectedSha256": "d0e9ed9e05491120e7109246b736c24ca91151e068c0333fd9662f2ac74a762e",
+        "observedSha256": "d0e9ed9e05491120e7109246b736c24ca91151e068c0333fd9662f2ac74a762e",
+        "provenance": "original-worktree",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "frontend/package.json",
+        "expectedSha256": "e84108fbd0d3408a9d604f79b67d80b7007e8d0c3ce81611d3c0bf00de99a159",
+        "observedSha256": "e84108fbd0d3408a9d604f79b67d80b7007e8d0c3ce81611d3c0bf00de99a159",
+        "provenance": "original-worktree",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "frontend/tools/ap06-mse-probe.mjs",
+        "expectedSha256": "fdbcbe67a3541fdc8711fbed24de30e39a7ff60235252d2caf0e820e5d3f459d",
+        "observedSha256": "fdbcbe67a3541fdc8711fbed24de30e39a7ff60235252d2caf0e820e5d3f459d",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "frontend/tools/ap06-mse-probe.test.mjs",
+        "expectedSha256": "b10d4ad6a4d568acfcd9061d4ce9a0085b9f262f06f4397e8f3f92bea0006242",
+        "observedSha256": "b10d4ad6a4d568acfcd9061d4ce9a0085b9f262f06f4397e8f3f92bea0006242",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "frontend/tools/ap06-transmux-probe.mjs",
+        "expectedSha256": "0fed1ffdcff774c9196c70432edbdc90f18f9dc6e4885274f0a3f71ab8b05347",
+        "observedSha256": "0fed1ffdcff774c9196c70432edbdc90f18f9dc6e4885274f0a3f71ab8b05347",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "frontend/tools/ap06-transmux-probe.test.mjs",
+        "expectedSha256": "c56c8fbafce96b59e9c0dd49d1698f80a4a5fdb583c6a1151702cbf2a738bb42",
+        "observedSha256": "c56c8fbafce96b59e9c0dd49d1698f80a4a5fdb583c6a1151702cbf2a738bb42",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "frontend/tools/browser-memory-probe.mjs",
+        "expectedSha256": "34fcb1a24b73f2a1703f947ada6bb9663320f9fff61a7b3820edace6d072f366",
+        "observedSha256": "34fcb1a24b73f2a1703f947ada6bb9663320f9fff61a7b3820edace6d072f366",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "frontend/tools/mp4-resource-calibration-lib.mjs",
+        "expectedSha256": "3b4e92385579a269bf43b091619d595b0d8a2bbc1ebbdff6250d91c1ca9b0db2",
+        "observedSha256": "3b4e92385579a269bf43b091619d595b0d8a2bbc1ebbdff6250d91c1ca9b0db2",
+        "provenance": "original-worktree",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "tools/quality/run_ap06_mse_probe.py",
+        "expectedSha256": "107b667dcfcb29d87d56834acb7242855ec84c348490721cc5cad50ddd757c2d",
+        "observedSha256": "107b667dcfcb29d87d56834acb7242855ec84c348490721cc5cad50ddd757c2d",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "tools/quality/run_ap06_transmux_probe.py",
+        "expectedSha256": "f85e63ce08ceaf9c112374353a746e1fda17a8c3e49b46b01979fc0e0d0ba575",
+        "observedSha256": "c2474dc139078af9e5dd4c506a7a7c53ded7a7ba4dfdbf54d9c4a4c29b657bd9",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "HASH_MISMATCH"
+      },
+      {
+        "path": "tools/quality/run_ap06_transport_probe.py",
+        "expectedSha256": "39017cb1b3b89ff71d5ba0010b8b695402f2551cea92283ad8466b026816d581",
+        "observedSha256": "39017cb1b3b89ff71d5ba0010b8b695402f2551cea92283ad8466b026816d581",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "tools/quality/run_readiness_wave1.py",
+        "expectedSha256": "f778aab05a36aee981c850b0dd97a235e5cc2d3dff38691c1838e6de98e3b1c1",
+        "observedSha256": "f778aab05a36aee981c850b0dd97a235e5cc2d3dff38691c1838e6de98e3b1c1",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "VERIFIED"
+      },
+      {
+        "path": "tools/quality/test_run_ap06_transmux_probe.py",
+        "expectedSha256": "47f0299981f07303742445351e4aeb6b8ecf5b90c51a8a400e60b8f97dfe06c3",
+        "observedSha256": "47f0299981f07303742445351e4aeb6b8ecf5b90c51a8a400e60b8f97dfe06c3",
+        "provenance": "git-object:5fd79c9b90143c156287f1aa4d662dedfe326b54",
+        "status": "VERIFIED"
+      }
+    ],
+    "historicalMeasurements": [
+      {
+        "mode": "transmux-mse",
+        "rawSha256": "942fbbf286afb69d6a0878590b88fd892dbb17673b40dfaee0a56f0fc215965a",
+        "classification": "TRANSMUX_MSE_DOES_NOT_REPRODUCE",
+        "browserVersion": "151.0.7922.34",
+        "playbackSessions": 18,
+        "samples": 8
+      },
+      {
+        "mode": "crypto-transmux-mse",
+        "rawSha256": "04a0d74e9d3d4c26e51dcb357a99e9ffce34bf75723391cf968329abe49881ad",
+        "classification": "CRYPTO_TRANSMUX_MSE_DOES_NOT_REPRODUCE",
+        "browserVersion": "151.0.7922.34",
+        "playbackSessions": 18,
+        "samples": 8
+      }
+    ],
+    "unavailableAuthorities": [
+      "frontend/e2e-video/video-fixtures.ts",
+      "tools/quality/run_ap06_transmux_probe.py"
+    ]
+  },
+  "historicalToolingManifestSha256": "733b6963789fa9be18d914f6563946594a7d77be36be18df0c0f3d877bb4c52b",
+  "operationCounts": {
+    "chromiumMeasurementLaunches": 0,
+    "chromiumRuntimeIdentityChecks": 0,
+    "chromiumFileVersionInspections": 1,
+    "measurementRetries": 0,
+    "fixtureGenerationFfmpegProcesses": 0,
+    "ffmpegVersionProcesses": 2,
+    "workerBuilds": 0,
+    "productionBuilds": 0,
+    "packageInstallations": 0,
+    "httpServers": 0,
+    "nodeInventoryProcesses": 3,
+    "nodeTestCommands": 0,
+    "pythonTestCommands": 2,
+    "pythonPassingCases": 10,
+    "pythonTestsFirstImportFailures": 1
+  },
+  "tests": {
+    "python": {
+      "cases": 10,
+      "status": "PASS"
+    },
+    "node": {
+      "cases": 0,
+      "status": "NOT_RUN"
+    }
+  },
+  "cleanup": {
+    "status": "PASS",
+    "ownedBrowsers": 0,
+    "ownedServers": 0,
+    "temporaryFixturesCreated": 0
+  },
+  "limitations": [
+    "No experimental harness or R6 measurement: indispensable frozen runner and fixture source unavailable.",
+    "Historical R5-R2 conclusions are preserved, not rerun or extended.",
+    "The cause of candidate hash differences is unknown; LF, CRLF and BOM variants did not restore either frozen hash.",
+    "Successful gate unit tests do not validate streaming, scheduling, bootstrap or memory behavior."
+  ],
+  "nextBoundary": "R6.1 composite HTTP Range / incremental scheduler, after restoring both frozen authorities in a new campaign root",
+  "validation": {
+    "status": "PASS",
+    "productionFilesUnchanged": 419,
+    "historicalFilesUnchanged": 124,
+    "toolingHashes": "PASS",
+    "historicalRawHashes": "PASS",
+    "workerBundleHashes": "PASS",
+    "gitDiffCheck": "PASS",
+    "secretScan": {
+      "status": "PASS",
+      "filesScanned": 13,
+      "hits": 0
+    },
+    "originalWorktreeStatus": "CLEAN",
+    "cleanup": {
+      "ownedBrowsers": 0,
+      "ownedHttpServers": 0,
+      "temporaryFixtures": 0
+    },
+    "fixtureBytesValidation": "NOT_RUN: stopped before preparation"
+  }
+}
