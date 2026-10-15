@@ -49,9 +49,21 @@ class SecurityTrackACiTests(unittest.TestCase):
         self.assertEqual(workflow.count('IMGUR_CLIENT_ID=test-imgur-client-id'), 3,
                          'Each backend mock environment needs the required provider configuration')
         self.assertRegex(workflow, r'Build backend targets\s+run: \|\s+cmake --build backend/build-linux-ci')
-        install = workflow.split('- name: Install native dependencies', 1)[1].split('- name: Setup native PostgreSQL', 1)[0]
-        self.assertIn('New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE', install)
-        self.assertLess(install.index('New-Item'), install.index('vcpkg install'))
+
+        msvc = workflow.split('  backend-windows-msvc:', 1)[1].split('  backend-linux-coverage:', 1)[0]
+        self.assertIn('VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\\vcpkg-binary-cache', msvc)
+        self.assertIn('path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}', msvc)
+        self.assertIn("hashFiles('backend/vcpkg.json', 'backend/vcpkg-configuration.json')", msvc)
+        self.assertIn('- name: Prepare vcpkg binary cache', msvc)
+        self.assertIn('New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE', msvc)
+        self.assertIn("Join-Path $env:VCPKG_INSTALLATION_ROOT 'scripts\\buildsystems\\vcpkg.cmake'", msvc)
+        self.assertIn('-DCMAKE_TOOLCHAIN_FILE=', msvc)
+        self.assertIn('-DVCPKG_TARGET_TRIPLET=x64-windows', msvc)
+        self.assertIn('backend\\build-msvc\\vcpkg_installed\\x64-windows', msvc)
+        self.assertIn('savebox_server savebox_tests nanika_e2e_fixture --parallel 2', msvc)
+        self.assertIn('savebox_tests.exe --order rand --rng-seed 60102', msvc)
+        self.assertNotIn('- name: Install native dependencies', msvc)
+        self.assertNotIn('vcpkg install --x-manifest-root', msvc)
 
 
 if __name__ == '__main__':
