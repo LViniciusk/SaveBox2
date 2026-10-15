@@ -13,7 +13,7 @@
   "triage": {},
   "formal": {},
   "results": [],
-  "implementationHead": "3f9f2bdc4ac09ae8dd4306e8dad7d55a067df356",
+  "implementationHead": "0d0c546fc06e2aca023476ed9e59e9db24afe4f4",
   "redHead": "d964f9e13ddae4b301b107280ceca5bb7bf148e7",
   "baseHead": "b491ddfc64e99ea54ffccfaaa4d36043ecf6678f",
   "branch": "investigation/ap06-r10",
@@ -590,7 +590,7 @@
     "nodeSyntax": {
       "passed": 12
     },
-    "gitDiffCheck": "PASS",
+    "gitDiffCheck": "PASS_FULL_BASE_DIFF",
     "developmentChromium": {
       "passedCases": 6,
       "failed": true,
@@ -703,9 +703,24 @@
         "files": 7
       },
       {
+        "path": "manifests/delivery.json",
+        "sha256": "7c4e19aac5e952822dd70b9465995b6b0389302d9188a99226240d92861f4cf3",
+        "files": 1
+      },
+      {
+        "path": "manifests/prepared-implementation-v2.json",
+        "sha256": "da6fa28e6d998f945249af374c5bda937480a59971a1f0f917704ee296f2fd6e",
+        "files": 495
+      },
+      {
         "path": "manifests/prepared-implementation.json",
         "sha256": "e55b334033a1580c198267316de1698853c7aa2bca470b0acbd47a39bc09d51e",
         "files": 495
+      },
+      {
+        "path": "manifests/reports.json",
+        "sha256": "8aecb136d1cd4b25563de573c5646e824ed8fb9980761490fa116180a8e47ffa",
+        "files": 3
       },
       {
         "path": "manifests/stop-evidence.json",
@@ -820,7 +835,7 @@
         "sha256": "ca0bb8a14659c778313621f0b8ad97047f624c4370198633c66085eb86272f1c"
       }
     ],
-    "preparedSourceManifest": "manifests/prepared-implementation.json",
+    "preparedSourceManifest": "manifests/prepared-implementation-v2.json",
     "preparedSourceFiles": 495,
     "auditor": "tooling/prepared-source/tools/quality/ap06_authorities.py",
     "custodyAuditor": "tooling/ap06_key_custody_v2.py"
@@ -843,5 +858,18 @@
     "O preflight não registrou uma lista própria de PIDs Chromium. browser.close() retornou e uma consulta independente posterior encontrou zero chrome.exe; backend/PostgreSQL tiveram auditoria de PIDs próprios.",
     "Revisão externa pendente. CI normal do PR não substitui a integração seletiva e a campanha não executadas."
   ],
-  "nextBoundary": "Diagnosticar o preflight em uma futura execução explicitamente autorizada; não executar R11 nem corrigir produção automaticamente."
+  "nextBoundary": "Diagnosticar o preflight em uma futura execução explicitamente autorizada; não executar R11 nem corrigir produção automaticamente.",
+  "preflightImplementationHead": "3f9f2bdc4ac09ae8dd4306e8dad7d55a067df356",
+  "sourceRevision": {
+    "reason": "Full base diff check found one extra blank EOF line in the extracted Kasumi validation module",
+    "change": "Whitespace only, after failed development preflight; no measurement freeze existed",
+    "sourcePublication": {
+      "status": "PASS",
+      "files": 495,
+      "manifestSha256": "da6fa28e6d998f945249af374c5bda937480a59971a1f0f917704ee296f2fd6e"
+    },
+    "priorPublicationsPreserved": true,
+    "newChromium": 0,
+    "angularSourceOrBuildChanged": false
+  }
 }
