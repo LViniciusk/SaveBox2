@@ -9,19 +9,29 @@ import { writeJsonAtomic } from './browser-memory-probe.mjs';
 import { configureR9Page, initializeR9Page, TRANSPORTS } from './ap06-r9-probe.mjs';
 import { configureR10Page, initializeR10Page, R10_CONDITIONS } from './ap06-r10-probe.mjs';
 import { sampleRenderer } from './ap06-r10-memory.mjs';
-import { checkCase, networkGuardSnapshot, validateCleanNetwork, strictHttpFailure, validateHttpFailure, validatePreflightConsistency, cleanupContext } from './ap06-preflight.mjs';
+import { checkCase, networkGuardSnapshot, validateCleanNetwork, strictHttpFailure, validateHttpFailure, validatePreflightConsistency, cleanupContext, credentialAuthDelay } from './ap06-preflight.mjs';
 
 const r9=process.env.AP06_R9_CHECK==='1',r10=process.env.AP06_R10_CHECK==='1',backendExperiment=r9||r10;
 const conditions=r10?Object.keys(R10_CONDITIONS):r9?Object.keys(TRANSPORTS):['r8.0','r8.1','r8.2'];
 const configure=r10?configureR10Page:r9?configureR9Page:configureIntegrationPage;
-const initialize=r10?initializeR10Page:r9?initializeR9Page:initializeIntegrationPage;
+const initializeTransport=r10?initializeR10Page:r9?initializeR9Page:initializeIntegrationPage;
+const authAttempts=[],authReadyAt=performance.now()+60250;
+async function initialize(page,fixtures,condition){
+  if(r10){
+    const delay=credentialAuthDelay(authAttempts,performance.now(),authReadyAt);
+    result.preflight.authSchedule.push({condition,delayMs:delay,attempt:authAttempts.length+1});save();
+    if(delay>0)await new Promise(resolve=>setTimeout(resolve,delay));
+    authAttempts.push(performance.now());
+  }
+  return initializeTransport(page,fixtures,condition);
+}
 const output=process.env.AP06_R7_UNIT_OUTPUT;
 if(!output)throw new Error('OWNED_R7_UNIT_OUTPUT_REQUIRED');
 const fixtures=JSON.parse(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST,'utf8'));
 const paths=JSON.parse(process.env.AP06_R7_ALLOWED_PATHS),origin=process.env.AP06_R5_MEDIA_ORIGIN;
 const result={status:'FAIL',measurementBrowsers:0,unitBrowserLaunchAttempts:0,unitBrowserLaunches:0,browserClosed:false,
   cases:[],observations:{},boundaryCounters:{},transportProofs:{},rangeNetworks:{},rendererMemoryPreflight:{},negativeHttp:{},
-  preflight:{schema:1,failures:[],contexts:[]},sourceBufferChecks:[],
+  preflight:{schema:1,failures:[],contexts:[],authSchedule:[]},sourceBufferChecks:[],
   multiplexedContract:{fixtureHash:createHash('sha256').update(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST)).digest('hex'),
     workerHashes:{crypto:process.env.AP06_R5_CRYPTO_WORKER_SHA256,transmux:process.env.AP06_R5_TRANSMUX_WORKER_SHA256},initDataPerFixture:[1,1,1],initDataId:0},
   pageScriptSha256:createHash('sha256').update(integrationPageScript()).digest('hex'),appProducts:JSON.parse(process.env.AP06_R7_APP_PRODUCTS),

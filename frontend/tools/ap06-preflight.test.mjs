@@ -28,6 +28,13 @@ test('credential pacing respects native five/minute limit, initial API window an
   assert.equal(credentialAuthDelay([60250,60300,60350,60400,60450],120500,60250),0);
   assert.equal(credentialAuthDelay([60250,60300,60350,60400,60450,120500],120501,60250),49);
 });
+test('an auth 429 has an explicit status gate and actual/expected without copying the raw error message',async()=>{
+  const result={cases:[],preflight:{failures:[]}};
+  await assert.rejects(checkCase(result,()=>{},'r10.2','GET 403',async()=>{throw new Error('unit-secret');},async()=>({
+    gate:'bootstrap',raw:clean(),network:[{method:'POST',url:'http://127.0.0.1:42187/login',status:429}]})));
+  const f=result.preflight.failures[0];assert.equal(f.code,'R10_AUTH_BOOTSTRAP_HTTP_429');assert.equal(f.actual,429);assert.equal(f.expected,200);
+  assert.equal(JSON.stringify(result).includes('unit-secret'),false);
+});
 
 test('every positive guard reports actual/expected and preserves all simultaneous failures',()=>{
   assert.ok(Object.values(validateCleanNetwork(clean(),'r10.0')).every(n=>n===0));

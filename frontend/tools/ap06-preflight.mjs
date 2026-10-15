@@ -1,5 +1,10 @@
 import { parseRangeHeader } from '../experiments/ap06-r7/range-adapter.ts';
 
+export function credentialAuthDelay(attempts,now,readyAt) {
+  // Native auth permits five/minute; an initial full window also covers API preparation.
+  return Math.max(0,readyAt-now,attempts.length>=5?attempts.at(-5)+60250-now:0);
+}
+
 export function networkGuardSnapshot(raw) {
   return {pageErrors:raw.pageErrors,rejectedRequests:raw.network?.rejectedRequests,
     externalRequests:raw.network?.externalRequests,unexpectedRequests:raw.network?.unexpectedRequests,recoveryWarnings:raw.recoveryWarnings};
@@ -60,6 +65,7 @@ export async function cleanupContext({routes,observer,cdp,context},record) {
 }
 
 function failure(error,condition,gate,diagnostic) {
+  const auth=diagnostic.network?.find(row=>row.method==='POST'&&row.url==='http://127.0.0.1:42187/login'&&row.status!==200);
   const frames=[];
   for(const line of String(error.stack??'').split('\n').slice(1)) {
     const match=/\bat (?:([\w$.<>]+) \()?[^\r\n]*[\\/]([\w.-]+\.(?:mjs|js|ts)):(\d+):(\d+)\)?$/.exec(line.trim());
@@ -68,9 +74,10 @@ function failure(error,condition,gate,diagnostic) {
   const code=/^(?:R\d+_|INVALID_|ERR_)[A-Za-z0-9_]+$/.test(error.message)?error.message:
     /^[A-Z_]+$/.test(error.code??'')?error.code:'R10_PREFLIGHT_ACTION_FAILED';
   return {condition,gate:diagnostic.gate??gate,class:['Error','AssertionError','TypeError','TimeoutError'].includes(error.name)?error.name:'Error',
-    code,guard:error.guard??null,guards:error.counters??networkGuardSnapshot(diagnostic.raw??{}),
-    actual:typeof error.actual==='number'||typeof error.actual==='boolean'?error.actual:null,
-    expected:typeof error.expected==='number'||typeof error.expected==='boolean'?error.expected:null,
+    code:auth?`R10_AUTH_BOOTSTRAP_HTTP_${Number.isInteger(auth.status)?auth.status:'NO_RESPONSE'}`:code,
+    guard:auth?{condition,name:'authStatus',actual:auth.status,expected:200}:error.guard??null,guards:error.counters??networkGuardSnapshot(diagnostic.raw??{}),
+    actual:auth?auth.status:typeof error.actual==='number'||typeof error.actual==='boolean'?error.actual:null,
+    expected:auth?200:typeof error.expected==='number'||typeof error.expected==='boolean'?error.expected:null,
     lifecycle:diagnostic.lifecycle??null,resources:diagnostic.resources??null,network:diagnostic.network??[],frames};
 }
 
