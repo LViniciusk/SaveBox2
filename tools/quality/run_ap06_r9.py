@@ -31,6 +31,9 @@ def publish(wave, name, files):
     if wave.output.name == 'readiness-wave10-r3':
         name = name if name.startswith('r10-r3-') else 'r10-r3-'+name
         files = {'r10-r3/'+relative:source for relative,source in files.items()}
+    if wave.output.name == 'readiness-wave11':
+        name = name if name.startswith('r11-') else 'r11-'+name
+        files = {'r11/'+relative:source for relative,source in files.items()}
     try:
         return publish_snapshot(Path(config['AP06_AUTHORITY_ROOT']), config['identity'], name, files, wave.output/'pipeline')
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
@@ -139,7 +142,7 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
     if fixture_hash != unit['multiplexedContract']['fixtureHash']: raise WaveFailure('R9_CORPUS_CHANGED_SINCE_PREFLIGHT')
     tracked=wave.git('ls-files').splitlines()
     files={path:wave.root/path for path in tracked}
-    if wave.output.name == 'readiness-wave10-r3':
+    if wave.output.name in ('readiness-wave10-r3','readiness-wave11'):
         files['backend/include/crow_all.h'] = wave.root/'backend/include/crow_all.h'
     for path in products: files[path]=wave.root/path
     for name in ('savebox_server.exe','nanika_e2e_fixture.exe'):
@@ -151,8 +154,9 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
         path=wave.output/name;files[path.relative_to(wave.root).as_posix()]=path
     receipt=publish(wave,'implementation',{'tooling/source/'+name:path for name,path in files.items()})
     config=read(wave.output/'baseline/authority-config.local.json');authority=Path(config['AP06_AUTHORITY_ROOT'])
-    implementation_name = 'r10-r3-implementation' if wave.output.name == 'readiness-wave10-r3' else 'implementation'
-    freeze_name = 'r10-r3-freeze' if wave.output.name == 'readiness-wave10-r3' else 'freeze'
+    prefix = 'r10-r3-' if wave.output.name == 'readiness-wave10-r3' else 'r11-' if wave.output.name == 'readiness-wave11' else ''
+    implementation_name = prefix+'implementation'
+    freeze_name = prefix+'freeze'
     freeze={'campaign':'AP-06-R9-R2','status':'FROZEN','implementationHead':wave.git('rev-parse','HEAD').strip(),
         'implementationPublication':implementation_name,'freezePublication':freeze_name,
         'sourceHash':owner._tree_sha256(wave.root,'frontend/src'),'fixtureHash':fixture_hash,

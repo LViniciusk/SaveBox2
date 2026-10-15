@@ -489,7 +489,8 @@ export function ownershipSnapshot(counters) {
 export async function runTransmuxProbe({ pageScript = transmuxPageScript(), countersFactory = newTransmuxCounters,
   cleanupValidator = validateCleanupOwnership, functionalValidator = validateTransmuxOwnership, snapshot = ownershipSnapshot,
   launchOptions = {}, configurePage = null, initializePage = null, identity = {}, beforeRun = null, afterRun = null,
-  auxiliaryMetrics = null, repetitions = null, runLabel = null } = {}) {
+  auxiliaryMetrics = null, repetitions = null, runLabel = null, idleAfterTeardownMs = 0, naturalCloseDelayMs = 1000 } = {}) {
+  if (![0,30000].includes(idleAfterTeardownMs) || ![0,1000].includes(naturalCloseDelayMs)) throw new Error('INVALID_CHECKPOINT_TIMING');
   const expectedChromiumVersion = validateExpectedChromiumVersion(process.env.AP06_R5_CHROMIUM_VERSION);
   const { AP06_R5_MODE: mode, AP06_R5_STAGE: stage, AP06_R5_ARTIFACT_DIR: artifactDir,
     AP06_R5_MEDIA_ORIGIN: origin, AP06_R5_FIXTURE_MANIFEST: manifestPath,
@@ -572,7 +573,13 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
           await page.evaluate(({ fixture, mode }) => window.r5RunFixture(fixture, mode), { fixture, mode });
           run.playbackSessions++;
         }
-        await page.waitForTimeout(1000); await capture(`cycle-${cycle}-close`, cycle);
+        if (naturalCloseDelayMs) await page.waitForTimeout(naturalCloseDelayMs);
+        await capture(`cycle-${cycle}-close`, cycle);
+      }
+      if (idleAfterTeardownMs) {
+        await capture('post-teardown-settled',6);
+        await page.waitForTimeout(idleAfterTeardownMs);
+        await capture('idle-30s',6);
       }
       await capture('forced-GC-final', 6, 'forced-diagnostic');
       run.functionalStatus = 'PASS'; run.cleanupStatus = 'PASS';

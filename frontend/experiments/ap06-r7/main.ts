@@ -8,6 +8,8 @@ import { ShareService } from '../../src/app/features/drive/services/share.servic
 import { DriveFile } from '../../src/app/features/drive/state/drive.store';
 import { rangeAdapter, RangeCounters } from './range-adapter';
 import { configureR8, r8Contracts, r8File, r8Providers } from './r8-integration';
+import { runR11Stage } from '../../tools/ap06-r11-stage';
+import { DriveService } from '../../src/app/features/drive/services/drive.service';
 
 interface Fixture { id: number; name: string; bytes: number; dataOffset: number; ciphertextBytes: number; }
 type Mode = 'control' | 'service' | 'component' | 'store' | 'backend';
@@ -105,6 +107,14 @@ async function start(app: ApplicationRef): Promise<void> {
   window.r7Run = async fixture => {
     const c = observed();
     if (!mode || currentFile || root.mount.length) throw new Error('R7_SESSION_OVERLAP');
+    const r11 = (window as any).ap06R11Condition;
+    if (r11 === 'r11.2' || r11 === 'r11.3') {
+      const file = r8File(fixture)!;
+      window.r7SessionActive = true;
+      try { await runR11Stage(r11,fixture,file,app.injector.get(DriveService),kasumi,stream!); }
+      finally { file.shareFdk?.fill(0); await app.whenStable(); window.r7SessionActive=false; }
+      return;
+    }
     currentFile = r8File(fixture) ?? driveFile(fixture); window.r7SessionActive = true; c['initializeAttempts']++;
     const session: Session = { fixture: fixture.id, mode, mountedMs: performance.now(), canplayMs: null,
       playbackMs: null, closeMs: null, maxCurrentTime: 0, seeks: 0, muted: null, volume: null, playbackRate: null };

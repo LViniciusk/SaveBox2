@@ -57,7 +57,7 @@ export async function initializeBackendPage(page, fixtures, proofName) {
   return page.evaluate(name => window[name](), proofName);
 }
 
-export async function runBackendProbe({ condition, transport, configure, initialize, ...sampling }) {
+export async function runBackendProbe({ condition, transport, configure, initialize, experimentalIdentity = {}, ...sampling }) {
   const fixtures = JSON.parse(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST, 'utf8'));
   const paths = JSON.parse(process.env.AP06_R7_ALLOWED_PATHS), pageScript = integrationPageScript();
   await runTransmuxProbe({ pageScript, countersFactory: newIntegrationCounters,
@@ -69,7 +69,7 @@ export async function runBackendProbe({ condition, transport, configure, initial
       backendFileMapping: JSON.parse(process.env.AP06_R8_FILE_MAPPING), playwrightRoutingInstalled: true,
       localRequestsIntercepted: false, fullKasumiContainer: true,
       experimentalAppProducts: JSON.parse(process.env.AP06_R7_APP_PRODUCTS),
-      pageScriptSha256: createHash('sha256').update(pageScript).digest('hex') },
+      pageScriptSha256: createHash('sha256').update(sampling.pageScript ?? pageScript).digest('hex'), ...experimentalIdentity },
     configurePage: (page, context, raw) => configure(page, context, raw, process.env.AP06_R5_MEDIA_ORIGIN, paths, condition),
     initializePage: async (page, raw) => { raw.runs.at(-1).transportProof = await initialize(page, fixtures); },
     beforeRun: async (raw, output) => { authorityAction(['--verify-freeze'], raw, output); },

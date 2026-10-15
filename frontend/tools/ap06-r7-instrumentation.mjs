@@ -60,6 +60,7 @@ export function installIntegrationInstrumentation() {
     if (!c) throw new Error('R7_UNOBSERVED_WORKER');
     const record = { pending: 0, terminated: false }; workers.set(worker, record); c.workersCreated++;
     worker.addEventListener('message', event => {
+      window.r11ObserveWorkerResponse?.(event.data);
       if (record.pending) { record.pending--; c.pendingOperations--; c.workerMessagesReceived++; }
       if (event.data?.type === 'ERROR') c.workerErrors++;
     });
@@ -72,7 +73,7 @@ export function installIntegrationInstrumentation() {
     const record = workers.get(this), c = counters();
     const request = record && ['DECRYPT_CHUNK', 'BOOTSTRAP', 'TRANSMUX_CHUNK', 'SEEK'].includes(message?.type);
     const transfers = Array.isArray(transfer) ? transfer : transfer?.transfer || [];
-    const transferBytes = request && window.ap06R10Condition ? transfers.reduce((sum, buffer) =>
+    const transferBytes = request && (window.ap06R10Condition || window.ap06R11Condition) ? transfers.reduce((sum, buffer) =>
       sum + (buffer instanceof ArrayBuffer ? buffer.byteLength : 0), 0) : 0;
     if (request) { record.pending++; c.pendingOperations++; c.workerMessagesSent++; }
     try {
@@ -82,6 +83,8 @@ export function installIntegrationInstrumentation() {
         if (buffer instanceof ArrayBuffer && buffer.byteLength === 0) c.detachedTransfers++;
         else c.transferFailures++;
       }
+      if (request && window.ap06R11Condition) window.r11ObserveTransfer(transfers.length,transferBytes,
+        transfers.filter(buffer=>buffer instanceof ArrayBuffer && buffer.byteLength===0).length);
       return result;
     } catch (error) {
       if (request) { record.pending--; c.pendingOperations--; c.workerMessagesCancelled++; }

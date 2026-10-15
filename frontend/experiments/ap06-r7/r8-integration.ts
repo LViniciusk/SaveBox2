@@ -19,12 +19,14 @@ import { ThumbnailLoaderService } from '../../src/app/features/drive/services/th
 import { validatePartialResponse, validateBounds } from './range-adapter';
 import { directRange, DirectCounters, selectTransport } from './r9-transport';
 import { buildRangeAllowlist, inspectRangeRequest, R10RangeBackend, R10_RANGE_FILES, RangeAllowlist, selectR10Condition } from './r10-range-backend';
+import { selectR11 } from '../../tools/ap06-r11-contract.mjs';
 
 export interface R8Fixture { id: number; name: string; ciphertextBytes: number; }
 interface Runtime { username: string; password: string; fileIds: Record<string, number>; fdks?: Record<string, number[]>; }
 declare global { interface Window { r8RefreshStore: () => Promise<Record<string, number>>; } }
 export const r8Mode = (window as Window & { r8BootstrapMode?: string }).r8BootstrapMode ?? null;
-const r10Condition = selectR10Condition((window as Window & { ap06R10Condition?: unknown }).ap06R10Condition);
+const selectedR11 = selectR11((window as any).ap06R11Condition,(window as any).ap06R10Condition,(window as any).ap06R9Transport);
+const r10Condition = selectedR11 ? selectedR11 === 'r11.0' ? 'r10.0' : 'r10.1' : selectR10Condition((window as Window & { ap06R10Condition?: unknown }).ap06R10Condition);
 const requestedR9 = (window as Window & { ap06R9Transport?: unknown }).ap06R9Transport;
 if (r10Condition && requestedR9 !== undefined) throw new Error('R10_CONFLICTING_TRANSPORT_SELECTORS');
 const r9Transport = selectTransport(r10Condition ? r10Condition === 'r10.2' ? 'angular-fetch' : 'xhr' : requestedR9);
@@ -71,6 +73,7 @@ export const observeR8Http: HttpInterceptorFn = (request, next) => defer(() => {
     validateBounds(start, end, fixture.ciphertextBytes);
     validatePartialResponse({ status: event.status, headers: event.headers }, start, end, fixture.ciphertextBytes);
     if (event.body.size !== end - start + 1) throw new Error('TRUNCATED_RANGE_BODY');
+    if (selectedR11) (window as any).r11ObserveBlob(event.body);
     c()['http206Validated']++; c()['rangeBytesReceived'] += event.body.size;
     c()['rangeRequestsCompleted']++; settled = true;
   }, error: () => { if (range && !settled) { c()['rangeRequestsFailed']++; settled = true; } } }), finalize(() => {
