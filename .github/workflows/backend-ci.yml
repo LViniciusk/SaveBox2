@@ -36,10 +36,10 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \\
-            build-essential cmake pkg-config git \\
-            libasio-dev libssl-dev libsodium-dev \\
-            libcurl4-openssl-dev libpq-dev postgresql-client \\
+          sudo apt-get install -y \
+            build-essential cmake pkg-config git \
+            libasio-dev libssl-dev libsodium-dev \
+            libcurl4-openssl-dev libpq-dev postgresql-client \
             nlohmann-json3-dev catch2
       - name: Validate native CI architecture
         run: python3 -m unittest tools.quality.test_ci_native_portability
@@ -60,17 +60,17 @@ jobs:
           EOF
       - name: Configure Linux GCC
         run: |
-          cmake -S backend -B backend/build-linux-ci \\
-            -DBUILD_TESTS=ON \\
-            -DENABLE_COVERAGE=OFF \\
+          cmake -S backend -B backend/build-linux-ci \
+            -DBUILD_TESTS=ON \
+            -DENABLE_COVERAGE=OFF \
             -DCMAKE_BUILD_TYPE=Debug
           compiler_file=$(find backend/build-linux-ci -name CMakeCXXCompiler.cmake -print -quit)
           test -n "$compiler_file"
           grep -Eq 'CMAKE_CXX_COMPILER_ID.*GNU' "$compiler_file"
       - name: Build backend targets
         run: |
-          cmake --build backend/build-linux-ci \\
-            --target savebox_server savebox_tests nanika_e2e_fixture \\
+          cmake --build backend/build-linux-ci \
+            --target savebox_server savebox_tests nanika_e2e_fixture \
             --parallel 2
       - name: Run backend tests
         working-directory: backend/build-linux-ci
@@ -225,10 +225,10 @@ jobs:
       - name: Install coverage dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \\
-            build-essential cmake pkg-config git gcovr \\
-            libasio-dev libssl-dev libsodium-dev \\
-            libcurl4-openssl-dev libpq-dev postgresql-client \\
+          sudo apt-get install -y \
+            build-essential cmake pkg-config git gcovr \
+            libasio-dev libssl-dev libsodium-dev \
+            libcurl4-openssl-dev libpq-dev postgresql-client \
             nlohmann-json3-dev catch2
       - name: Create .env
         run: |
@@ -257,12 +257,12 @@ jobs:
       - name: Generate and enforce backend coverage
         working-directory: backend
         run: |
-          gcovr --root . \\
-            --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \\
-            --filter 'src/' \\
-            --exclude 'src/main.cpp' \\
-            --txt --html-details coverage.html \\
-            --json-summary coverage-summary.json \\
+          gcovr --root . \
+            --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \
+            --filter 'src/' \
+            --exclude 'src/main.cpp' \
+            --txt --html-details coverage.html \
+            --json-summary coverage-summary.json \
             --fail-under-line 50
       - name: Upload backend coverage report
         if: always()
