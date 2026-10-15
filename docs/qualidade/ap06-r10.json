@@ -1,0 +1,847 @@
+{
+  "campaign": "AP-06-R10",
+  "status": "BLOCKED_AP06_R10_INVALID_MEASUREMENT",
+  "ap06": "OPEN",
+  "reason": "PREFLIGHT_ASSERTION_3_NE_0",
+  "phase": "development-preflight",
+  "developmentBrowserLaunches": 1,
+  "developmentLaunchAttempts": 1,
+  "browserLaunches": 0,
+  "launchAttempts": 0,
+  "retries": 0,
+  "freezeCreated": false,
+  "triage": {},
+  "formal": {},
+  "results": [],
+  "implementationHead": "3f9f2bdc4ac09ae8dd4306e8dad7d55a067df356",
+  "redHead": "d964f9e13ddae4b301b107280ceca5bb7bf148e7",
+  "baseHead": "b491ddfc64e99ea54ffccfaaa4d36043ecf6678f",
+  "branch": "investigation/ap06-r10",
+  "base": "frontend",
+  "boundary": "RANGE_HTTP_BACKEND_RESPONSE_TO_BLOB_AND_RENDERER_OWNERSHIP",
+  "productionChanges": 0,
+  "freezeSha256": null,
+  "hypothesis": "Ranges via Angular FetchBackend seletivo podem deslocar ownership do browser para renderer mantendo Auth/Store em XHR.",
+  "conditions": {
+    "r10.0": {
+      "range": "XHR",
+      "otherHttp": "XHR"
+    },
+    "r10.1": {
+      "range": "Angular FetchBackend",
+      "otherHttp": "XHR"
+    },
+    "r10.2": {
+      "range": "Angular FetchBackend",
+      "otherHttp": "Angular FetchBackend",
+      "referenceOnly": true
+    }
+  },
+  "checkpoints": {
+    "CORPUS_GENERATED": "PASS",
+    "CORPUS_VERIFIED": "PASS",
+    "AUTHORITIES_PUBLISHED": "PASS",
+    "AUTHORITIES_READBACK_VERIFIED": "PASS",
+    "DEVELOPMENT_PREFLIGHT": "FAIL",
+    "IMPLEMENTATION_FROZEN": "NOT_REACHED",
+    "READY_FOR_MEASUREMENT": "NOT_REACHED"
+  },
+  "budget": {
+    "approved": true,
+    "authorization": "Current R10 task: 1 development Chromium, maximum 9 measurement Chromium, zero retries",
+    "developmentMaximum": 1,
+    "measurementMaximum": 9,
+    "measurementRetries": 0,
+    "consumedDevelopment": 1,
+    "consumedMeasurement": 0
+  },
+  "formalOrder": {
+    "planned": [
+      "r10.0",
+      "r10.1",
+      "r10.1",
+      "r10.0",
+      "r10.0",
+      "r10.1"
+    ],
+    "frozen": false,
+    "executed": false
+  },
+  "fixtureManifestSha256": "d7fd432cefac1fa57a03d67dbda980799e6905e04a9ca0e2ed9b3b9d45bdae0b",
+  "fixtures": [
+    {
+      "id": 0,
+      "name": "classic-faststart-av-30s",
+      "path": "video-0.mp4",
+      "bytes": 9629691,
+      "sha256": "9980042bb6376aed8a565ddd744c6b663fd284084bc92256e615e1028e84486b",
+      "container": "classic-mp4",
+      "layout": "faststart",
+      "durationSeconds": 30,
+      "bitrateKbps": 2400,
+      "width": 640,
+      "height": 360,
+      "supplementalCohort": true,
+      "moovOffset": 32,
+      "moovBytes": 16562,
+      "codec": "video/mp4; codecs=\"avc1.42c01e, mp4a.40.2\"",
+      "tracks": [
+        {
+          "type": "video",
+          "codec": "avc1.42c01e"
+        },
+        {
+          "type": "audio",
+          "codec": "mp4a.40.2"
+        }
+      ],
+      "chunkBytes": 4194304,
+      "chunkCount": 3,
+      "ffmpegVersion": "ffmpeg version 2024-02-04-git-7375a6ca7b-full_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers",
+      "generationCommand": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=640x360:rate=24:duration=30",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=880:sample_rate=48000:duration=30",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-threads",
+        "2",
+        "-b:v",
+        "2400k",
+        "-maxrate",
+        "2400k",
+        "-bufsize",
+        "4800k",
+        "-g",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-movflags",
+        "+faststart",
+        "<fixture>/video-0.mp4"
+      ],
+      "dataOffset": 114,
+      "expectedSize": 9629691,
+      "ciphertextBytes": 9629853,
+      "macBytesPerChunk": 16,
+      "lastChunkBytes": 1241083,
+      "roundTripSha256": "9980042bb6376aed8a565ddd744c6b663fd284084bc92256e615e1028e84486b",
+      "authenticatedMetadata": true,
+      "ciphertextSha256": "1dc1ac1ec4d1f8245175d9256f525e161cdb2eb52e5d46dcc137687bd4ab42f7"
+    },
+    {
+      "id": 1,
+      "name": "classic-faststart-video-35s",
+      "path": "video-1.mp4",
+      "bytes": 10743000,
+      "sha256": "cebc73609ab2a25de3c362fbff29e5faf43608743db45bf1410527d1c341349f",
+      "container": "classic-mp4",
+      "layout": "faststart",
+      "durationSeconds": 35,
+      "bitrateKbps": 2400,
+      "width": 640,
+      "height": 360,
+      "supplementalCohort": true,
+      "moovOffset": 32,
+      "moovBytes": 4437,
+      "codec": "video/mp4; codecs=\"avc1.42c01e\"",
+      "tracks": [
+        {
+          "type": "video",
+          "codec": "avc1.42c01e"
+        }
+      ],
+      "chunkBytes": 4194304,
+      "chunkCount": 3,
+      "ffmpegVersion": "ffmpeg version 2024-02-04-git-7375a6ca7b-full_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers",
+      "generationCommand": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=640x360:rate=24:duration=35",
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-threads",
+        "2",
+        "-b:v",
+        "2400k",
+        "-maxrate",
+        "2400k",
+        "-bufsize",
+        "4800k",
+        "-g",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "<fixture>/video-1.mp4"
+      ],
+      "dataOffset": 117,
+      "expectedSize": 10743000,
+      "ciphertextBytes": 10743165,
+      "macBytesPerChunk": 16,
+      "lastChunkBytes": 2354392,
+      "roundTripSha256": "cebc73609ab2a25de3c362fbff29e5faf43608743db45bf1410527d1c341349f",
+      "authenticatedMetadata": true,
+      "ciphertextSha256": "0646ee83f68ec0d2f45aa9753b2891c0833e843ba388d364d4fed7bb75ebdf1e"
+    },
+    {
+      "id": 2,
+      "name": "classic-faststart-av-35s",
+      "path": "video-2.mp4",
+      "bytes": 11179231,
+      "sha256": "fa219875eb1ebb4f6f3439ab627d6d55e08b3526a89973bc0d2690a50cf98487",
+      "container": "classic-mp4",
+      "layout": "faststart",
+      "durationSeconds": 35,
+      "bitrateKbps": 2400,
+      "width": 640,
+      "height": 360,
+      "supplementalCohort": true,
+      "moovOffset": 32,
+      "moovBytes": 19102,
+      "codec": "video/mp4; codecs=\"avc1.42c01e, mp4a.40.2\"",
+      "tracks": [
+        {
+          "type": "video",
+          "codec": "avc1.42c01e"
+        },
+        {
+          "type": "audio",
+          "codec": "mp4a.40.2"
+        }
+      ],
+      "chunkBytes": 4194304,
+      "chunkCount": 3,
+      "ffmpegVersion": "ffmpeg version 2024-02-04-git-7375a6ca7b-full_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers",
+      "generationCommand": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=640x360:rate=24:duration=35",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=880:sample_rate=48000:duration=35",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-threads",
+        "2",
+        "-b:v",
+        "2400k",
+        "-maxrate",
+        "2400k",
+        "-bufsize",
+        "4800k",
+        "-g",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-movflags",
+        "+faststart",
+        "<fixture>/video-2.mp4"
+      ],
+      "dataOffset": 114,
+      "expectedSize": 11179231,
+      "ciphertextBytes": 11179393,
+      "macBytesPerChunk": 16,
+      "lastChunkBytes": 2790623,
+      "roundTripSha256": "fa219875eb1ebb4f6f3439ab627d6d55e08b3526a89973bc0d2690a50cf98487",
+      "authenticatedMetadata": true,
+      "ciphertextSha256": "bdd54a0f3c1aa6a427b53f3c96826051d08984e6b9c5bb72b84c94bfa5bbadb7"
+    }
+  ],
+  "custody": {
+    "scope": "DPAPI CurrentUser",
+    "ciphertextSha256": "5a2c2d8a1fcb332f58b3143799571f80b4b573cbddfbfdf2077fc17638e31610",
+    "preflight": {
+      "status": "PASS",
+      "scope": "CurrentUser",
+      "independentProcess": true,
+      "worktreeRequired": false,
+      "protectedSha256": "5a2c2d8a1fcb332f58b3143799571f80b4b573cbddfbfdf2077fc17638e31610",
+      "fixtures": [
+        {
+          "id": 0,
+          "roundTripSha256": "9980042bb6376aed8a565ddd744c6b663fd284084bc92256e615e1028e84486b",
+          "ciphertextSha256": "1dc1ac1ec4d1f8245175d9256f525e161cdb2eb52e5d46dcc137687bd4ab42f7",
+          "authenticatedMetadata": true,
+          "chunkCount": 3,
+          "bytes": 9629691
+        },
+        {
+          "id": 1,
+          "roundTripSha256": "cebc73609ab2a25de3c362fbff29e5faf43608743db45bf1410527d1c341349f",
+          "ciphertextSha256": "0646ee83f68ec0d2f45aa9753b2891c0833e843ba388d364d4fed7bb75ebdf1e",
+          "authenticatedMetadata": true,
+          "chunkCount": 3,
+          "bytes": 10743000
+        },
+        {
+          "id": 2,
+          "roundTripSha256": "fa219875eb1ebb4f6f3439ab627d6d55e08b3526a89973bc0d2690a50cf98487",
+          "ciphertextSha256": "bdd54a0f3c1aa6a427b53f3c96826051d08984e6b9c5bb72b84c94bfa5bbadb7",
+          "authenticatedMetadata": true,
+          "chunkCount": 3,
+          "bytes": 11179231
+        }
+      ]
+    },
+    "afterCleanup": {
+      "status": "PASS",
+      "scope": "CurrentUser",
+      "independentProcess": true,
+      "worktreeRequired": false,
+      "protectedSha256": "5a2c2d8a1fcb332f58b3143799571f80b4b573cbddfbfdf2077fc17638e31610",
+      "fixtures": [
+        {
+          "id": 0,
+          "roundTripSha256": "9980042bb6376aed8a565ddd744c6b663fd284084bc92256e615e1028e84486b",
+          "ciphertextSha256": "1dc1ac1ec4d1f8245175d9256f525e161cdb2eb52e5d46dcc137687bd4ab42f7",
+          "authenticatedMetadata": true,
+          "chunkCount": 3,
+          "bytes": 9629691
+        },
+        {
+          "id": 1,
+          "roundTripSha256": "cebc73609ab2a25de3c362fbff29e5faf43608743db45bf1410527d1c341349f",
+          "ciphertextSha256": "0646ee83f68ec0d2f45aa9753b2891c0833e843ba388d364d4fed7bb75ebdf1e",
+          "authenticatedMetadata": true,
+          "chunkCount": 3,
+          "bytes": 10743000
+        },
+        {
+          "id": 2,
+          "roundTripSha256": "fa219875eb1ebb4f6f3439ab627d6d55e08b3526a89973bc0d2690a50cf98487",
+          "ciphertextSha256": "bdd54a0f3c1aa6a427b53f3c96826051d08984e6b9c5bb72b84c94bfa5bbadb7",
+          "authenticatedMetadata": true,
+          "chunkCount": 3,
+          "bytes": 11179231
+        }
+      ],
+      "afterCleanup": true,
+      "plaintextRuntimeAbsent": true,
+      "cwdWasDurableAuthority": true
+    },
+    "correction": {
+      "correction": "auditor disables bytecode before local imports; immutable revised tooling path",
+      "generatedCacheFileRemovedNonrecursively": true,
+      "initialReadback": "FAIL_CLOSED",
+      "publishedAuthoritiesRemovedOrOverwritten": false,
+      "reason": "unpublished Python import bytecode changed authority path set"
+    },
+    "plaintextDurableKeys": false,
+    "newDependencies": 0
+  },
+  "preflight": {
+    "status": "FAIL",
+    "failureClass": "AssertionError",
+    "failure": "Expected values to be strictly equal:\n\n3 !== 0\n",
+    "browserClosed": true,
+    "command": {
+      "counts": [],
+      "exitCode": 1,
+      "failureSignals": [
+        "FAILED",
+        "ERROR"
+      ],
+      "logPersisted": false,
+      "name": "angular-r10-unit",
+      "status": "FAIL",
+      "wallSeconds": 15.558
+    },
+    "cases": [
+      {
+        "name": "r10.0 original Angular DI and native API prototypes",
+        "status": "PASS"
+      },
+      {
+        "name": "r10.0 actual playback and repeated Angular mount/destroy",
+        "status": "PASS"
+      },
+      {
+        "name": "r10.0 original Store refresh and computed/effects settle without transfers",
+        "status": "PASS"
+      },
+      {
+        "name": "real service destroy aborts its RxJS Range and settles the initialization",
+        "status": "PASS"
+      },
+      {
+        "name": "real Store file identity rejects inconsistent authenticated container size",
+        "status": "PASS"
+      },
+      {
+        "name": "r10.0 controlled 403 fails through the original HTTP chain and drains",
+        "status": "PASS"
+      }
+    ],
+    "transportProofs": {
+      "r10.0": {
+        "xhrBackend": true,
+        "fetchBackend": false,
+        "selectiveBackend": false,
+        "xhrDelegate": false,
+        "fetchDelegate": false,
+        "originalRange": true,
+        "realAuth": true
+      }
+    },
+    "sourceBufferChecks": [
+      {
+        "condition": "r10.0",
+        "fixture": 0,
+        "tracks": 2,
+        "created": 1,
+        "released": 1
+      },
+      {
+        "condition": "r10.0",
+        "fixture": 1,
+        "tracks": 1,
+        "created": 1,
+        "released": 1
+      },
+      {
+        "condition": "r10.0",
+        "fixture": 2,
+        "tracks": 2,
+        "created": 1,
+        "released": 1
+      }
+    ],
+    "rendererMemoryPreflight": {
+      "r10.0": {
+        "heap": {
+          "status": "AVAILABLE",
+          "usedSize": 7732268,
+          "totalSize": 10604544,
+          "embedderHeapUsedSize": 3123560,
+          "backingStorageSize": 37588088,
+          "unavailable": {}
+        },
+        "dom": {
+          "status": "AVAILABLE",
+          "documents": 4,
+          "nodes": 774,
+          "jsEventListeners": 2046,
+          "unavailable": {}
+        }
+      }
+    },
+    "network": {
+      "condition": "r10.0",
+      "rangeRequests": 9,
+      "rangeTypes": [
+        "XHR"
+      ],
+      "statuses": [
+        206
+      ],
+      "bootstrap": [
+        {
+          "requestId": "22852.4",
+          "kind": "auth",
+          "method": "POST",
+          "type": "XHR",
+          "status": 200,
+          "finished": true,
+          "failed": false,
+          "fromDiskCache": false,
+          "fromServiceWorker": false,
+          "servedFromCache": false,
+          "encodedDataLength": 1439,
+          "headers": {
+            "cache-control": "no-store",
+            "content-length": "420",
+            "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+          }
+        },
+        {
+          "requestId": "22852.5",
+          "kind": "tree",
+          "method": "GET",
+          "type": "XHR",
+          "status": 200,
+          "finished": true,
+          "failed": false,
+          "fromDiskCache": false,
+          "fromServiceWorker": false,
+          "servedFromCache": false,
+          "encodedDataLength": 1189,
+          "headers": {
+            "content-length": "658",
+            "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+          }
+        },
+        {
+          "requestId": "22852.6",
+          "kind": "pending",
+          "method": "GET",
+          "type": "XHR",
+          "status": 200,
+          "finished": true,
+          "failed": false,
+          "fromDiskCache": false,
+          "fromServiceWorker": false,
+          "servedFromCache": false,
+          "encodedDataLength": 552,
+          "headers": {
+            "content-length": "22",
+            "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+          }
+        }
+      ],
+      "bodyBytes": 25559136,
+      "cdpEncodedDataLength": 25566279,
+      "workerTransferListBytesRendererToWorkers": 50332080,
+      "mseBytesAppended": 23690168,
+      "allThreeTransportsEqual": false,
+      "interpretation": "Development only; bytes measure different boundaries and are not memory or campaign deltas."
+    }
+  },
+  "scientificMetrics": {
+    "processPrivateCommitDeltas": null,
+    "heapTrajectories": null,
+    "backingStorageTrajectories": null,
+    "reason": "NO_MEASUREMENT_BROWSERS"
+  },
+  "tests": {
+    "status": "UNIT_PASS_PREFLIGHT_FAIL",
+    "node": {
+      "passed": 35,
+      "failed": 0
+    },
+    "python": {
+      "passed": 44,
+      "failed": 0,
+      "suites": {
+        "R8": 24,
+        "R9": 6,
+        "authorities": 7,
+        "R10": 7
+      }
+    },
+    "redCommit": "d964f9e13ddae4b301b107280ceca5bb7bf148e7",
+    "redNode": "red-node.txt",
+    "redPython": "red-python.txt",
+    "angularExperimentalBuilds": 1,
+    "angularExperimentalBuild": "PASS",
+    "nativeBuilds": 0,
+    "nativeReuse": "PASS",
+    "apiPreparation": {
+      "checks": 11,
+      "status": "PASS"
+    },
+    "ffprobe": {
+      "passed": 3
+    },
+    "kasumiRoundtrip": {
+      "passed": 3
+    },
+    "dpapiBeforeFreeze": "PASS",
+    "dpapiAfterCleanup": "PASS",
+    "pythonCompile": "PASS",
+    "nodeSyntax": {
+      "passed": 12
+    },
+    "gitDiffCheck": "PASS",
+    "developmentChromium": {
+      "passedCases": 6,
+      "failed": true,
+      "failure": "AssertionError: 3 !== 0",
+      "retry": false
+    },
+    "developmentCorrections": [
+      "Python validator fixture completeness",
+      "heap error-code assertion expectation"
+    ],
+    "notRun": [
+      "general builds",
+      "Docker",
+      "broad test suites",
+      "measurement Chromium"
+    ]
+  },
+  "versions": {
+    "node": "v24.21.0",
+    "python": "Python 3.14.3",
+    "angular": "20.3.31",
+    "playwright": "1.62.1",
+    "chromium": "151.0.7922.34",
+    "chromiumVerification": "single development browser version assertion passed",
+    "ffmpeg": "ffmpeg version 2024-02-04-git-7375a6ca7b-full_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers"
+  },
+  "nativeReuse": {
+    "status": "PASS",
+    "sourceImplementationHead": "443b7bf2b3a1bddbde81b13919185e7a62bf345a",
+    "backendGitTreeUnchanged": true,
+    "executables": {
+      ".quality/readiness-wave9-r2/tooling/backend-build/nanika_e2e_fixture.exe": "a0870595266a59524775073aef5eff0bfa54d9c26fc5d0c54f450a0fb3eddcfc",
+      ".quality/readiness-wave9-r2/tooling/backend-build/savebox_server.exe": "945018795b9b7588966133080f061289156d7cc702c4b909fa6a7a3196e55850"
+    },
+    "nativeBuilds": 0
+  },
+  "secretScan": {
+    "status": "PASS",
+    "files": 487,
+    "actualSyntheticSecretPatterns": 19,
+    "matches": 0,
+    "valuesRecorded": false
+  },
+  "cleanup": {
+    "status": "PASS",
+    "accounts": {
+      "status": "PASS",
+      "accounts": 2,
+      "results": [
+        {
+          "status": "PASS",
+          "fileIds": [],
+          "removedFileCount": 3
+        },
+        {
+          "status": "PASS",
+          "fileIds": [],
+          "removedFileCount": 0
+        }
+      ]
+    },
+    "runtime": {
+      "status": "PASS",
+      "ownedServerStopped": true,
+      "ownedPostgresStopped": true,
+      "ownedClusterStorageAndDotenvRemoved": true,
+      "personalServicesTouched": false
+    },
+    "pidAudit": {
+      "status": "PASS",
+      "ownedPids": [
+        15576,
+        28768
+      ],
+      "aliveOwnedPids": []
+    },
+    "chromium": {
+      "browserCloseReceipt": true,
+      "aliveChromePids": [],
+      "independentOwnedPidListRecorded": false
+    },
+    "plaintextFdkRemoved": true,
+    "privateCredentialsRemoved": true,
+    "durableAuthoritiesPreserved": true,
+    "historicalAuthoritiesTouched": false
+  },
+  "authorities": {
+    "alias": "AP06_AUTHORITY_ROOT (private R10 root)",
+    "preserved": true,
+    "measurementFreeze": false,
+    "independentAudit": {
+      "status": "PASS",
+      "verifiedPublications": 5,
+      "worktreeRequired": false
+    },
+    "manifests": [
+      {
+        "path": "manifests/corpus-publication.json",
+        "sha256": "474cf3ec6ada78fddec87b35ad2cf993b85a9858efd843cfa1ed5619dbe45a52",
+        "files": 7
+      },
+      {
+        "path": "manifests/custody-tooling-correction.json",
+        "sha256": "d666ae88e9406c020d66bda2f71c8623d709d52108a53d44007a70f6519fb818",
+        "files": 2
+      },
+      {
+        "path": "manifests/custody.json",
+        "sha256": "62934596e8f04e588c7469f8919fc30faf1b4ae439a43158d49bcf623c167d70",
+        "files": 7
+      },
+      {
+        "path": "manifests/prepared-implementation.json",
+        "sha256": "e55b334033a1580c198267316de1698853c7aa2bca470b0acbd47a39bc09d51e",
+        "files": 495
+      },
+      {
+        "path": "manifests/stop-evidence.json",
+        "sha256": "87f01427067374e1a4b3a7ffab1dd4d1edd072c57e26fdefabd32af2128c06ba",
+        "files": 21
+      }
+    ],
+    "evidence": [
+      {
+        "path": "evidence/stop/baseline/backend-authority.json",
+        "size": 1926,
+        "sha256": "9b11fdddf884c6231be3e39299a81e25af0f7af105da821de04fbf07751e06e6"
+      },
+      {
+        "path": "evidence/stop/baseline/budget.json",
+        "size": 278,
+        "sha256": "25cf04ebd95092e91331c741c65722784e57a499577e3b5172483ee462119ebd"
+      },
+      {
+        "path": "evidence/stop/baseline/custody-preflight-correction.json",
+        "size": 318,
+        "sha256": "7f735d5721b02e5fb1c104fa38cce9d299defd35ee37f04b61a84491f0bbfb07"
+      },
+      {
+        "path": "evidence/stop/baseline/custody-readback-after-cleanup.json",
+        "size": 1241,
+        "sha256": "c31736ba6d0a6b01e20aca3db28fdfec8bbe8e9a54eb2a7c7bbfde8ef9726b3b"
+      },
+      {
+        "path": "evidence/stop/baseline/custody-readback.json",
+        "size": 1144,
+        "sha256": "91271998312a471d336d12f12a24aaedebc7eb806cc99925b35d270224632cbe"
+      },
+      {
+        "path": "evidence/stop/baseline/formal-order.json",
+        "size": 152,
+        "sha256": "bda4c943e90ddd919090c151227c7caef5e54a8a352c64f281c6e599618a99df"
+      },
+      {
+        "path": "evidence/stop/baseline/historical-r9.json",
+        "size": 65688,
+        "sha256": "1c95de211d9d1b2cca8fa552a887d8249e7af61d86449207b3e46a96ef3a94b6"
+      },
+      {
+        "path": "evidence/stop/baseline/native-reuse.json",
+        "size": 476,
+        "sha256": "68889dd1ae95434747a45cf82912e98ac9cbaa88fc62d292d648e49c5b1361a7"
+      },
+      {
+        "path": "evidence/stop/baseline/prepared-implementation.json",
+        "size": 344,
+        "sha256": "577e7200cf9de0a2cd7775650fd971f3fbb2084aaff8ae792bd6b1d31cd050fb"
+      },
+      {
+        "path": "evidence/stop/baseline/red-node.txt",
+        "size": 7316,
+        "sha256": "37065b22cc99dfc3b36f7f0bfd9f44aa53596ba2962cc747e014684638fa5303"
+      },
+      {
+        "path": "evidence/stop/baseline/red-python.txt",
+        "size": 2522,
+        "sha256": "b215877abe9fe524e06bbeb3e149ce763ce30257cab6209bbc4dbc5eb761b224"
+      },
+      {
+        "path": "evidence/stop/baseline/secret-scan.json",
+        "size": 128,
+        "sha256": "be963dce2035a00d99e21da6b9f33edc80d97571399bd39147dce44d3698dfdf"
+      },
+      {
+        "path": "evidence/stop/baseline/task.md",
+        "size": 20394,
+        "sha256": "1e3aa68b8fbd77b0524591ac0b54ce54618f8937ecbb73ee7439b5b060624cd7"
+      },
+      {
+        "path": "evidence/stop/baseline/tests.json",
+        "size": 1203,
+        "sha256": "43a47ccdf4f8a00913236d2302a63e141c1af043038029740fd704c8b6915722"
+      },
+      {
+        "path": "evidence/stop/baseline/versions.json",
+        "size": 351,
+        "sha256": "e1a7337921c1ee8ea06bfcf8ed4fff6c6ad6c7609b221bc0317add2df6dc64fb"
+      },
+      {
+        "path": "evidence/stop/final/decision.json",
+        "size": 401,
+        "sha256": "ac912b507258f0f891b31c0c58802f609031436bbb522ced8776070431e917ae"
+      },
+      {
+        "path": "evidence/stop/pipeline/backend-account-cleanup.json",
+        "size": 231,
+        "sha256": "4518b1665c482abf9304472deaf83556c9ebd7cebd0193ef035a19b76f6e84b0"
+      },
+      {
+        "path": "evidence/stop/pipeline/backend-runtime-cleanup.json",
+        "size": 175,
+        "sha256": "bf851ec69f5ae3fe2a9a79cdf186d0aeb86c86ec1e6c0b4fb16b01f798af4a03"
+      },
+      {
+        "path": "evidence/stop/pipeline/commands/angular-r10-unit.json",
+        "size": 189,
+        "sha256": "0748ef2c61acbd1df61d20c0569fb44ba1a09f6e76cd6048f5e80ac1d869e5e6"
+      },
+      {
+        "path": "evidence/stop/pipeline/final-cleanup.json",
+        "size": 929,
+        "sha256": "06de8902ed3e682f72a5d5c487af43780c29ca64babb5b679ef2b3aed4f498e6"
+      },
+      {
+        "path": "evidence/stop/tooling/angular-unit-1.json",
+        "size": 15380,
+        "sha256": "ca0bb8a14659c778313621f0b8ad97047f624c4370198633c66085eb86272f1c"
+      }
+    ],
+    "preparedSourceManifest": "manifests/prepared-implementation.json",
+    "preparedSourceFiles": 495,
+    "auditor": "tooling/prepared-source/tools/quality/ap06_authorities.py",
+    "custodyAuditor": "tooling/ap06_key_custody_v2.py"
+  },
+  "priorResult": {
+    "campaign": "AP-06-R9-R2",
+    "status": "PASS_AP06_R9_R2_ANGULAR_FETCH_EFFECT_CONFIRMED",
+    "comparisonOnly": true,
+    "pr": "https://github.com/LViniciusk/SaveBox2/pull/24"
+  },
+  "limitations": [
+    "O preflight consumiu seu único Chromium e falhou; nenhuma condição foi congelada nem medida.",
+    "Somente r10.0 chegou ao navegador. DI/CDP reais de r10.1 e r10.2 não foram validados; testes unitários não os substituem.",
+    "A checagem final salvou apenas AssertionError: 3 !== 0. Não salvou stack nem os contadores finais de pageErrors/rede/recoveryWarnings; a asserção específica e a causa raiz permanecem indeterminadas.",
+    "O cenário controlado de 403 terminou antes da falha final. Não há evidência suficiente para atribuir a ele a falha.",
+    "Não existem baseline, seis fechamentos naturais ou diagnóstico de GC; deltas por processo e trajetórias auxiliares são indisponíveis.",
+    "Não foi derivada igualdade de workload entre os três transportes; os números do preflight XHR não autorizam extrapolação para a campanha.",
+    "DPAPI CurrentUser foi verificado no usuário atual. O SID inválido foi rejeitado em teste; não houve execução sob outra conta Windows.",
+    "A recuperação depende do perfil DPAPI Windows atual e da disponibilidade da autoridade privada; não é um backup portátil de chaves.",
+    "O preflight não registrou uma lista própria de PIDs Chromium. browser.close() retornou e uma consulta independente posterior encontrou zero chrome.exe; backend/PostgreSQL tiveram auditoria de PIDs próprios.",
+    "Revisão externa pendente. CI normal do PR não substitui a integração seletiva e a campanha não executadas."
+  ],
+  "nextBoundary": "Diagnosticar o preflight em uma futura execução explicitamente autorizada; não executar R11 nem corrigir produção automaticamente."
+}
