@@ -11,7 +11,7 @@ import time
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
-OUTPUT = ROOT / '.quality/readiness-wave8'
+OUTPUT = ROOT / os.environ.get('AP06_EXPERIMENT_ROOT', '.quality/readiness-wave8')
 BACKEND_PORT, APP_PORT = 42187, 42088
 
 def free_port(port=0):

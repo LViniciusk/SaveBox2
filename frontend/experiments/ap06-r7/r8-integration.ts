@@ -1,5 +1,5 @@
-import { ApplicationRef, signal } from '@angular/core';
-import { HttpEventType, HttpInterceptorFn, provideHttpClient, withInterceptors } from '@angular/common/http';
+import { ApplicationRef, inject, Injectable, signal } from '@angular/core';
+import { FetchBackend, HttpBackend, HttpXhrBackend, HttpEventType, HttpInterceptorFn, provideHttpClient, withFetch, withInterceptors } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { defer, finalize, firstValueFrom, of, tap } from 'rxjs';
 import { DriveStore, DriveFile } from '../../src/app/features/drive/state/drive.store';
@@ -17,11 +17,14 @@ import { StorageMoveEngineService } from '../../src/app/features/drive/storage-m
 import { DownloadEngineService } from '../../src/app/features/drive/services/download-engine.service';
 import { ThumbnailLoaderService } from '../../src/app/features/drive/services/thumbnail-loader.service';
 import { validatePartialResponse, validateBounds } from './range-adapter';
+import { directRange, DirectCounters, selectTransport } from './r9-transport';
 
 export interface R8Fixture { id: number; name: string; ciphertextBytes: number; }
-interface Runtime { username: string; password: string; fileIds: Record<string, number>; }
+interface Runtime { username: string; password: string; fileIds: Record<string, number>; fdks?: Record<string, number[]>; }
 declare global { interface Window { r8RefreshStore: () => Promise<Record<string, number>>; } }
 export const r8Mode = (window as Window & { r8BootstrapMode?: string }).r8BootstrapMode ?? null;
+const r9Transport = selectTransport((window as Window & { ap06R9Transport?: unknown }).ap06R9Transport);
+if (r9Transport && r8Mode !== 'backend') throw new Error('R9_REAL_BACKEND_REQUIRED');
 const realStore = r8Mode === 'store' || r8Mode === 'backend';
 const backend = r8Mode === 'backend';
 let fixtures: R8Fixture[] = [], runtime: Runtime | undefined, store: DriveStore | null = null;
@@ -29,6 +32,15 @@ const c = () => window.r5Counters.observed;
 const unexpected = () => { c()['unexpectedPeripheralOperations']++; throw new Error('R8_UNEXPECTED_PERIPHERAL_OPERATION'); };
 const peripheral = new Proxy({}, { get: (_, key) => key === 'then' ? undefined : unexpected });
 const expectedId = (fixture: R8Fixture) => backend ? runtime!.fileIds[String(fixture.id)] : fixture.id;
+
+@Injectable()
+class R9DirectDriveService extends DriveService {
+  private readonly session = inject(AuthService);
+  override downloadFileRange(id: number, start: number, end: number) {
+    return directRange(id, start, end, fixtures.map(row => ({ id: expectedId(row), ciphertextBytes: row.ciphertextBytes })),
+      () => this.session.getToken(), c() as unknown as DirectCounters);
+  }
+}
 
 // Observe the original HttpClient chain after JWT attachment, without replacing its transport.
 export const observeR8Http: HttpInterceptorFn = (request, next) => defer(() => {
@@ -63,8 +75,9 @@ export const observeR8Http: HttpInterceptorFn = (request, next) => defer(() => {
 });
 
 export function r8Providers(controlledRange: (id: number, start: number, end: number) => unknown) {
-  return [provideRouter([]), provideHttpClient(withInterceptors([jwtInterceptor, errorInterceptor, observeR8Http])),
-    { provide: DriveService, ...(backend ? { useClass: DriveService } : { useValue: {
+  return [provideRouter([]), provideHttpClient(...(r9Transport === 'angular-fetch' ? [withFetch()] : []),
+    withInterceptors([jwtInterceptor, errorInterceptor, observeR8Http])),
+    { provide: DriveService, ...(backend ? { useClass: r9Transport === 'direct-fetch' ? R9DirectDriveService : DriveService } : { useValue: {
       downloadFileRange: controlledRange,
       getTree: () => of({ folders: [], has_more: false, files: fixtures.map(row => ({ id: row.id,
         encrypted_name: row.name + '.mp4', size_bytes: row.ciphertextBytes, encrypted_fdk: 'synthetic-bypassed',
@@ -84,6 +97,22 @@ export async function configureR8(app: ApplicationRef, values: R8Fixture[], sele
   if (selected !== r8Mode) throw new Error('R8_MODE_DI_MISMATCH');
   if (backend) {
     if (!runtime || Object.keys(runtime.fileIds).sort().join() !== '0,1,2') throw new Error('R8_BACKEND_MAPPING_MISSING');
+    if (r9Transport) {
+      if (!runtime.fdks || Object.keys(runtime.fdks).sort().join() !== '0,1,2' ||
+          Object.values(runtime.fdks).some(key => key.length !== 32 || key.some(byte => !Number.isInteger(byte) || byte < 0 || byte > 255))) {
+        throw new Error('R9_PRIVATE_KEYS_REQUIRED');
+      }
+      c()['directAuthorizedRanges'] = 0;
+      const http = app.injector.get(HttpBackend), drive = app.injector.get(DriveService);
+      const proof = { transport: r9Transport, xhrBackend: http instanceof HttpXhrBackend, fetchBackend: http instanceof FetchBackend,
+        originalRange: drive.downloadFileRange === DriveService.prototype.downloadFileRange,
+        directRange: drive instanceof R9DirectDriveService, realAuth: app.injector.get(AuthService) instanceof AuthService };
+      if (proof.fetchBackend !== (r9Transport === 'angular-fetch') || proof.xhrBackend !== (r9Transport !== 'angular-fetch') ||
+          proof.originalRange !== (r9Transport !== 'direct-fetch') || proof.directRange !== (r9Transport === 'direct-fetch')) {
+        throw new Error('R9_HTTP_DI_PROOF_FAILED');
+      }
+      Object.assign(window, { r9TransportProof: () => proof });
+    }
     const auth = app.injector.get(AuthService);
     c()['authAttempts']++;
     const authenticated = await firstValueFrom(auth.loginWithCredentials(runtime.username, runtime.password));
@@ -125,7 +154,8 @@ export function r8File(fixture: R8Fixture): DriveFile | null {
   c()['storeFileResolved']++;
   if (backend) c()['backendFileIdMatches']++;
   return { ...file, forceOriginal: true,
-    shareFdk: Uint8Array.from({ length: 32 }, (_, i) => (i + 1 + fixture.id * 37) % 256) };
+    shareFdk: r9Transport ? Uint8Array.from(runtime!.fdks![String(fixture.id)]) :
+      Uint8Array.from({ length: 32 }, (_, i) => (i + 1 + fixture.id * 37) % 256) };
 }
 
 export function r8Contracts() {
