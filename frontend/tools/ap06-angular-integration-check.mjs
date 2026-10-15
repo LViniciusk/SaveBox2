@@ -21,9 +21,9 @@ async function initialize(page,fixtures,condition){
     const delay=credentialAuthDelay(authAttempts,performance.now(),authReadyAt);
     result.preflight.authSchedule.push({condition,delayMs:delay,attempt:authAttempts.length+1});save();
     if(delay>0)await new Promise(resolve=>setTimeout(resolve,delay));
-    authAttempts.push(performance.now());
   }
-  return initializeTransport(page,fixtures,condition);
+  try{return await initializeTransport(page,fixtures,condition);}
+  finally{if(r10)authAttempts.push(performance.now());}
 }
 const output=process.env.AP06_R7_UNIT_OUTPUT;
 if(!output)throw new Error('OWNED_R7_UNIT_OUTPUT_REQUIRED');
