@@ -9,6 +9,7 @@ import stat
 import subprocess
 
 _VERIFIED_ACLS = {}
+CAMPAIGNS = {'AP-06-R9-R2': '.owned-ap06-r9-r2', 'AP-06-R10': '.owned-ap06-r10'}
 
 
 def windows_descriptor(path):
@@ -76,29 +77,33 @@ def private_permissions(path, create=False):
             raise ValueError('AUTHORITY_PERMISSIONS_SHARED')
 
 
-def initialize(root, identity):
+def initialize(root, identity, campaign='AP-06-R9-R2'):
+    if campaign not in CAMPAIGNS: raise ValueError('AUTHORITY_INVALID_CAMPAIGN')
     root = checked_path(root)
     if len(identity) != 64 or any(c not in '0123456789abcdef' for c in identity):
         raise ValueError('AUTHORITY_INVALID_IDENTITY')
     if root.exists():
-        validate_owned_destination(root, identity)
+        validate_owned_destination(root, identity, campaign=campaign)
         return
     root.parent.mkdir(parents=True, exist_ok=True)
     checked_path(root.parent)
     root.mkdir()
     private_permissions(root, create=True)
-    (root / '.owned-ap06-r9-r2').write_text(identity, encoding='ascii')
+    (root / CAMPAIGNS[campaign]).write_text(identity, encoding='ascii')
     with (root / 'authority.json').open('x', encoding='utf-8') as stream:
-        json.dump({'campaign': 'AP-06-R9-R2', 'identity': identity, 'schema': 1}, stream)
+        json.dump({'campaign': campaign, 'identity': identity, 'schema': 1}, stream)
     validate_owned_destination(root, identity)
 
 
-def validate_owned_destination(root, identity):
+def validate_owned_destination(root, identity, campaign=None):
     root = checked_path(root)
-    marker = checked_path(root / '.owned-ap06-r9-r2')
     authority = checked_path(root / 'authority.json')
+    metadata = json.loads(authority.read_text())
+    campaign = metadata.get('campaign') if campaign is None else campaign
+    if campaign not in CAMPAIGNS: raise ValueError('AUTHORITY_INVALID_CAMPAIGN')
+    marker = checked_path(root / CAMPAIGNS[campaign])
     if (not marker.is_file() or marker.read_text(encoding='ascii') != identity or
-            json.loads(authority.read_text()) != {'campaign': 'AP-06-R9-R2', 'identity': identity, 'schema': 1}):
+            metadata != {'campaign': campaign, 'identity': identity, 'schema': 1}):
         raise ValueError('AUTHORITY_OWNERSHIP_MISMATCH')
     private_permissions(root)
     return root
@@ -178,11 +183,12 @@ def verify_publication(root, identity, name):
     validate_owned_destination(root, identity)
     manifest = json.loads(receipt_path(root, name).read_text())
     verify_files(root, manifest)
-    expected = {'.owned-ap06-r9-r2', 'authority.json'}
+    campaign = json.loads((Path(root)/'authority.json').read_text())['campaign']
+    expected = {CAMPAIGNS[campaign], 'authority.json'}
     for receipt in (Path(root)/'manifests').glob('*.json'):
         checked_path(receipt)
         data = json.loads(receipt.read_text())
-        if isinstance(data, dict) and data.get('campaign') == 'AP-06-R9-R2' and 'files' in data:
+        if isinstance(data, dict) and data.get('campaign') == campaign and 'files' in data:
             expected.add(receipt.relative_to(root).as_posix())
             expected.update(item['path'] for item in data['files'])
         elif receipt == receipt_path(root, name):
@@ -202,7 +208,8 @@ def publish_snapshot(authority_root, identity, name, files, temporary_parent):
     import tempfile
     with tempfile.TemporaryDirectory(prefix='publication-', dir=temporary_parent) as temporary:
         stage = Path(temporary)
-        manifest = {'campaign': 'AP-06-R9-R2', 'files': []}
+        validate_owned_destination(authority_root, identity)
+        manifest = {'campaign': json.loads((Path(authority_root)/'authority.json').read_text())['campaign'], 'files': []}
         for relative, source in sorted(files.items()):
             target = stage / relative_path(relative)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -219,10 +226,11 @@ if __name__ == '__main__':
     parser.add_argument('--expected-freeze-sha256')
     args = parser.parse_args()
     validate_owned_destination(args.root, args.identity)
+    campaign = json.loads((args.root/'authority.json').read_text())['campaign']
     count = 0
     for path in (args.root/'manifests').glob('*.json'):
         data = json.loads(path.read_text())
-        if isinstance(data, dict) and data.get('campaign') == 'AP-06-R9-R2' and 'files' in data:
+        if isinstance(data, dict) and data.get('campaign') == campaign and 'files' in data:
             verify_publication(args.root, args.identity, path.stem); count += 1
     if args.expected_freeze_sha256 and sha256(args.root/'freeze/freeze.json') != args.expected_freeze_sha256:
         raise ValueError('AUTHORITY_FREEZE_SEAL_MISMATCH')

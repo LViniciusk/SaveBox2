@@ -10,11 +10,11 @@ import { writeJsonAtomic } from './browser-memory-probe.mjs';
 
 export const TRANSPORTS = { 'r9-r2.0': 'xhr', 'r9-r2.1': 'angular-fetch', 'r9-r2.2': 'direct-fetch' };
 
-function authorityAction(args, raw, output) {
+export function authorityAction(args, raw, output) {
   try {
     execFileSync(process.env.WAVE1_PYTHON, [process.env.AP06_R9_PUBLISHER, ...args], { windowsHide: true, stdio: 'pipe' });
   } catch (error) {
-    const codes = String(error.stderr ?? '').match(/(?:AUTHORITY|R9)_[A-Z_0-9]+/g);
+    const codes = String(error.stderr ?? '').match(/(?:AUTHORITY|R9|R10|CUSTODY|DPAPI)_[A-Z_0-9]+/g);
     raw.checkpointFailure = codes?.at(-1) ?? 'R9_AUTHORITY_HELPER_FAILED';
     writeJsonAtomic(output, raw);
     throw new Error(raw.checkpointFailure);
@@ -24,9 +24,13 @@ function authorityAction(args, raw, output) {
 export async function configureR9Page(page, context, raw, origin, paths, condition) {
   if (!TRANSPORTS[condition]) throw new Error('R9_INVALID_CONDITION');
   await page.addInitScript(transport => { window.ap06R9Transport = transport; }, TRANSPORTS[condition]);
+  return configureBackendObservation(page,context,raw,origin,paths);
+}
+
+export async function configureBackendObservation(page, context, raw, origin, paths, options) {
   await configureIntegrationPage(page, context, raw, origin, paths, 'r8.2');
   const mapping = JSON.parse(process.env.AP06_R8_FILE_MAPPING);
-  const observer = await observeRangeNetwork(context, page, mapping);
+  const observer = await observeRangeNetwork(context, page, mapping, options);
   const run = raw.runs?.at(-1) ?? raw;
   run.rangeNetwork = observer.data;
   const logPath = process.env.AP06_R9_BACKEND_LOG;
@@ -43,34 +47,40 @@ export async function configureR9Page(page, context, raw, origin, paths, conditi
   };
 }
 
-export async function initializeR9Page(page, fixtures) {
+export const initializeR9Page = (page, fixtures) => initializeBackendPage(page,fixtures,'r9TransportProof');
+
+export async function initializeBackendPage(page, fixtures, proofName) {
   const runtime = JSON.parse(readFileSync(process.env.AP06_R8_PRIVATE_CONFIG, 'utf8'));
   runtime.fdks = JSON.parse(readFileSync(process.env.AP06_R9_PRIVATE_KEYS, 'utf8'));
   try { await initializeIntegrationPage(page, fixtures, 'r8.2', runtime); }
   finally { runtime.password = ''; for (const key of Object.values(runtime.fdks)) key.fill(0); }
-  return page.evaluate(() => window.r9TransportProof());
+  return page.evaluate(name => window[name](), proofName);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const condition = process.env.AP06_R6_CONDITION;
-  if (!TRANSPORTS[condition]) throw new Error('R9_INVALID_CONDITION');
+export async function runBackendProbe({ condition, transport, configure, initialize, ...sampling }) {
   const fixtures = JSON.parse(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST, 'utf8'));
   const paths = JSON.parse(process.env.AP06_R7_ALLOWED_PATHS), pageScript = integrationPageScript();
   await runTransmuxProbe({ pageScript, countersFactory: newIntegrationCounters,
     cleanupValidator: validateIntegrationCleanup, functionalValidator: validateIntegrationFunctional,
     snapshot: integrationSnapshot, launchOptions: { args: AUTOPLAY_ARGS },
     identity: { angularOrBackendUsed: true, backendUsed: true, videoStreamServiceUsed: true, driveStoreUsed: true,
-      videoPlayerComponentUsed: true, autoplayArgs: AUTOPLAY_ARGS, transport: TRANSPORTS[condition],
+      videoPlayerComponentUsed: true, autoplayArgs: AUTOPLAY_ARGS, transport,
       backendAuthoritySha256: process.env.AP06_R8_BACKEND_AUTHORITY_SHA256,
       backendFileMapping: JSON.parse(process.env.AP06_R8_FILE_MAPPING), playwrightRoutingInstalled: true,
       localRequestsIntercepted: false, fullKasumiContainer: true,
       experimentalAppProducts: JSON.parse(process.env.AP06_R7_APP_PRODUCTS),
       pageScriptSha256: createHash('sha256').update(pageScript).digest('hex') },
-    configurePage: (page, context, raw) => configureR9Page(page, context, raw, process.env.AP06_R5_MEDIA_ORIGIN, paths, condition),
-    initializePage: async (page, raw) => { raw.runs.at(-1).transportProof = await initializeR9Page(page, fixtures); },
+    configurePage: (page, context, raw) => configure(page, context, raw, process.env.AP06_R5_MEDIA_ORIGIN, paths, condition),
+    initializePage: async (page, raw) => { raw.runs.at(-1).transportProof = await initialize(page, fixtures); },
     beforeRun: async (raw, output) => { authorityAction(['--verify-freeze'], raw, output); },
     afterRun: async (raw, output) => {
       authorityAction(['--verify-freeze'], raw, output);
       authorityAction(['--publish-raw', output, '--snapshot', `${raw.stage}-${condition}-${raw.runs.length}`], raw, output);
-    } });
+    }, ...sampling });
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const condition = process.env.AP06_R6_CONDITION;
+  if (!TRANSPORTS[condition]) throw new Error('R9_INVALID_CONDITION');
+  await runBackendProbe({condition,transport:TRANSPORTS[condition],configure:configureR9Page,initialize:initializeR9Page});
 }

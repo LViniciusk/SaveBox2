@@ -25,5 +25,6 @@ test('invalid numbers and disconnected essential session cannot pass as unavaila
     await assert.rejects(sampleRenderer(session({...heap,backingStorageSize:value})),/INVALID/);
   }
   await assert.rejects(sampleRenderer(session(heap,{...dom,nodes:1.5})),/INVALID/);
+  await assert.rejects(sampleRenderer(session({...heap,usedSize:50})),/INVALID_HEAP_SIZE_RELATION/);
   await assert.rejects(sampleRenderer({send:async()=>{throw new Error('Target closed');}}),/Target closed/);
 });

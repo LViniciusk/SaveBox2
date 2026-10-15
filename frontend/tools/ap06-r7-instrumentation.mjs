@@ -7,7 +7,7 @@ export function newIntegrationCounters() {
     'destroyCalls', 'componentsMounted', 'componentsDestroyed', 'rangeRequestsStarted', 'rangeRequestsCompleted',
     'rangeRequestsAborted', 'rangeRequestsFailed', 'rangeBytesReceived', 'activeRanges', 'maxActiveRanges', 'metadataRequests',
     'workersCreated', 'workersTerminated', 'workerMessagesSent', 'workerMessagesReceived', 'workerMessagesCancelled',
-    'workerErrors', 'detachedTransfers', 'transferFailures', 'mediaSourcesCreated', 'mediaSourcesClosed', 'sourceBuffersCreated',
+    'workerErrors', 'detachedTransfers', 'workerTransferBytesSent', 'transferFailures', 'mediaSourcesCreated', 'mediaSourcesClosed', 'sourceBuffersCreated',
     'sourceBuffersReleased', 'objectUrlsCreated', 'objectUrlsRevoked', 'pendingOperations', 'pendingAppends',
     'bytesAppended', 'timersLive', 'experimentalListeners', 'unhandledRejections', 'gcRemoveCalls',
     'storeLoadStarted', 'storeLoadCompleted', 'storeFileResolved', 'storeEffectsSettled',
@@ -72,9 +72,12 @@ export function installIntegrationInstrumentation() {
     const record = workers.get(this), c = counters();
     const request = record && ['DECRYPT_CHUNK', 'BOOTSTRAP', 'TRANSMUX_CHUNK', 'SEEK'].includes(message?.type);
     const transfers = Array.isArray(transfer) ? transfer : transfer?.transfer || [];
+    const transferBytes = request && window.ap06R10Condition ? transfers.reduce((sum, buffer) =>
+      sum + (buffer instanceof ArrayBuffer ? buffer.byteLength : 0), 0) : 0;
     if (request) { record.pending++; c.pendingOperations++; c.workerMessagesSent++; }
     try {
       const result = Reflect.apply(post, this, arguments);
+      if (request) c.workerTransferBytesSent += transferBytes;
       if (request) for (const buffer of transfers) {
         if (buffer instanceof ArrayBuffer && buffer.byteLength === 0) c.detachedTransfers++;
         else c.transferFailures++;

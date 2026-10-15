@@ -6,17 +6,21 @@ import { integrationPageScript, configureIntegrationPage, initializeIntegrationP
 import { newIntegrationCounters, validateIntegrationCleanup, validateIntegrationFunctional } from './ap06-r7-instrumentation.mjs';
 import { writeJsonAtomic } from './browser-memory-probe.mjs';
 import { configureR9Page, initializeR9Page, TRANSPORTS } from './ap06-r9-probe.mjs';
+import { configureR10Page, initializeR10Page, R10_CONDITIONS } from './ap06-r10-probe.mjs';
+import { sampleRenderer } from './ap06-r10-memory.mjs';
 
 const r9 = process.env.AP06_R9_CHECK === '1';
-const configure = r9 ? configureR9Page : configureIntegrationPage;
-const initialize = r9 ? initializeR9Page : initializeIntegrationPage;
+const r10 = process.env.AP06_R10_CHECK === '1';
+const backendExperiment = r9 || r10;
+const configure = r10 ? configureR10Page : r9 ? configureR9Page : configureIntegrationPage;
+const initialize = r10 ? initializeR10Page : r9 ? initializeR9Page : initializeIntegrationPage;
 
 const output = process.env.AP06_R7_UNIT_OUTPUT;
 if (!output) throw new Error('OWNED_R7_UNIT_OUTPUT_REQUIRED');
 const fixtures = JSON.parse(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST, 'utf8'));
 const paths = JSON.parse(process.env.AP06_R7_ALLOWED_PATHS), origin = process.env.AP06_R5_MEDIA_ORIGIN;
 const result = { status: 'FAIL', measurementBrowsers: 0, unitBrowserLaunchAttempts: 0, unitBrowserLaunches: 0, cases: [], observations: {},
-  boundaryCounters: {}, transportProofs: {}, rangeNetworks: {},
+  boundaryCounters: {}, transportProofs: {}, rangeNetworks: {}, rendererMemoryPreflight: {},
   multiplexedContract: { fixtureHash: createHash('sha256').update(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST)).digest('hex'),
     workerHashes: { crypto: process.env.AP06_R5_CRYPTO_WORKER_SHA256, transmux: process.env.AP06_R5_TRANSMUX_WORKER_SHA256 },
     initDataPerFixture: [1, 1, 1], initDataId: 0 }, sourceBufferChecks: [],
@@ -33,9 +37,9 @@ try {
   result.unitBrowserLaunchAttempts++; save();
   browser = await chromium.launch({ args: AUTOPLAY_ARGS }); result.unitBrowserLaunches++; save();
   assert.equal(browser.version(), '151.0.7922.34');
-  for (const condition of r9 ? Object.keys(TRANSPORTS) : ['r8.0', 'r8.1', 'r8.2']) {
+  for (const condition of r10 ? Object.keys(R10_CONDITIONS) : r9 ? Object.keys(TRANSPORTS) : ['r8.0', 'r8.1', 'r8.2']) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block' });
-    let closeObservation, observation;
+    let closeObservation, observation, listenerSession;
     try {
       const page = await context.newPage(), raw = {};
       observation = raw;
@@ -47,11 +51,12 @@ try {
       }, { counters: newIntegrationCounters(), crypto: readFileSync(process.env.AP06_R5_CRYPTO_WORKER, 'utf8'),
         transmux: readFileSync(process.env.AP06_R5_TRANSMUX_WORKER, 'utf8') });
       const proof = await initialize(page, fixtures, condition);
-      if (r9) result.transportProofs[condition] = proof;
+      if (backendExperiment) result.transportProofs[condition] = proof;
       await check(condition + ' original Angular DI and native API prototypes', async () => {
         assert.ok(Object.values(await page.evaluate(() => ({ ...window.r7Contracts(), ...window.r7InstrumentationContracts() }))).every(Boolean));
       });
       const cdp = await context.newCDPSession(page);
+      listenerSession = cdp;
       async function windowListeners() {
         const { result: object } = await cdp.send('Runtime.evaluate', { expression: 'window', objectGroup: 'r7-unit-listeners' });
         try {
@@ -79,6 +84,7 @@ try {
         assert.equal(state.counters.observed.playbackCompleted, 3);
         assert.equal(state.counters.observed.workersCreated, 6);
         assert.ok(state.counters.observed.detachedTransfers > 0);
+        if (r10) assert.ok(state.counters.observed.workerTransferBytesSent > 0);
         assert.ok(state.counters.sessions.every(session => session.maxCurrentTime > 1.5 && session.maxCurrentTime < 10 && session.seeks === 0));
         assert.ok(state.counters.sessions.every(session => session.muted === false && session.volume === 1 && session.playbackRate === 1));
         assert.equal(await windowListeners(), listenersBefore);
@@ -92,7 +98,7 @@ try {
         }
         assert.equal(state.counters.observed.unexpectedPeripheralOperations, 0);
         assert.equal(state.counters.observed.outstandingSubscriptions, 0);
-        if (condition === 'r8.2' || r9) {
+        if (condition === 'r8.2' || backendExperiment) {
           assert.equal(state.counters.observed.authAttempts, 1);
           assert.equal(state.counters.observed.authSuccesses, 1);
           assert.equal(state.counters.observed.backendFileIdMatches, 3);
@@ -108,7 +114,13 @@ try {
         assert.equal(observation.rangeNetwork.requests.length, result.boundaryCounters[condition].rangeRequestsCompleted);
         assert.equal(observation.backendTraffic.rows.length, observation.rangeNetwork.requests.length);
         assert.ok(observation.rangeNetwork.requests.every(row => row.finished && !row.failed && row.status === 206 &&
-          row.type === (condition === 'r9-r2.0' ? 'XHR' : 'Fetch') && !row.fromDiskCache && !row.fromServiceWorker));
+          row.type === (condition === 'r9-r2.0' || condition === 'r10.0' ? 'XHR' : 'Fetch') && !row.fromDiskCache && !row.fromServiceWorker));
+        if (r10) {
+          result.rendererMemoryPreflight[condition] = await sampleRenderer(cdp);
+          const rows=observation.rangeNetwork.bootstrapRequests;
+          assert.deepEqual(rows.map(row=>row.kind).sort(),['auth','pending','tree']);
+          assert.ok(rows.every(row=>row.type===R10_CONDITIONS[condition].otherType && row.status===200 && row.finished));
+        }
         save();
       }
       if (condition !== 'r8.0') {
@@ -123,7 +135,7 @@ try {
           validateIntegrationCleanup(state.counters, state.media);
         });
       }
-      if (condition === 'r8.2' || r9) {
+      if (condition === 'r8.2' || backendExperiment) {
         await check('real service destroy aborts its RxJS Range and settles the initialization', async () => {
           const cancelled = await page.evaluate(async fixture => {
             const pending = window.r7Run(fixture); pending.catch(() => {});
@@ -144,23 +156,34 @@ try {
           assert.equal(state.counters.observed.storeFileResolved, 4);
         });
       }
+      if (r10) await check(condition + ' controlled 403 fails through the original HTTP chain and drains', async () => {
+        const mapping=JSON.parse(process.env.AP06_R8_FILE_MAPPING);
+        const url=`http://127.0.0.1:42187/files/${mapping[0].fileId}/download`;
+        await context.route(url,route=>route.fulfill({status:403,body:'{}',headers:{
+          'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Credentials':'true','Content-Type':'application/json'}}));
+        await assert.rejects(page.evaluate(fixture=>window.r7Run(fixture),fixtures[0]));
+        const state=await page.evaluate(()=>({counters:window.r5Counters,media:document.querySelectorAll('video,audio').length}));
+        validateIntegrationCleanup(state.counters,state.media);
+        await context.unroute(url);
+      });
       assert.equal(raw.pageErrors, 0); assert.equal(raw.network.rejectedRequests, 0);
       assert.equal(raw.network.externalRequests, 0); assert.equal(raw.network.unexpectedRequests, 0);
       assert.equal(raw.recoveryWarnings, 0);
-    } finally { if (closeObservation) await closeObservation(); await context.close(); }
+    } finally { if (closeObservation) await closeObservation(); if (listenerSession) await listenerSession.detach(); await context.close(); }
   }
   await check('original Store swallowed HTTP error is rejected by initial readiness validation', async () => {
     const context = await browser.newContext({ serviceWorkers: 'block' });
     try {
       const page = await context.newPage(), raw = {};
-      const close = await configure(page, context, raw, origin, paths, r9 ? 'r9-r2.0' : 'r8.2');
+      const negativeCondition=r10 ? 'r10.0' : r9 ? 'r9-r2.0' : 'r8.2';
+      const close = await configure(page, context, raw, origin, paths, negativeCondition);
       await context.route('**/tree?*', route => route.fulfill({ status: 500, body: '{}',
         headers: { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Credentials': 'true',
           'Access-Control-Allow-Headers': 'Authorization, Content-Type' } }));
       await page.addInitScript({ content: integrationPageScript() });
       await page.goto(origin);
       await page.evaluate(counters => { window.r5Counters = counters; }, newIntegrationCounters());
-      await assert.rejects(initialize(page, fixtures, r9 ? 'r9-r2.0' : 'r8.2'), /R8_STORE_LOAD_FAILED/);
+      await assert.rejects(initialize(page, fixtures, negativeCondition), /R8_STORE_LOAD_FAILED/);
       const state = await page.evaluate(() => ({ counters: window.r5Counters, media: document.querySelectorAll('video,audio').length }));
       assert.equal(state.counters.observed.storeLoadStarted, 1);
       assert.equal(state.counters.observed.storeLoadCompleted, 0);

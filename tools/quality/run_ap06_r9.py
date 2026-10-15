@@ -2,6 +2,7 @@
 import argparse
 from collections import Counter
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -42,7 +43,7 @@ def media_files(wave):
 
 def verify_freeze(wave, freeze):
     config = read(wave.output/'baseline/authority-config.local.json')
-    for name in ('corpus-publication', 'implementation', 'freeze'):
+    for name in ('corpus-publication', 'implementation', 'freeze', *freeze.get('extraPublications',[])):
         try: verify_publication(Path(config['AP06_AUTHORITY_ROOT']), config['identity'], name)
         except (OSError, ValueError, subprocess.CalledProcessError) as error:
             raise AuthorityFailure('R9_AUTHORITY_READBACK_FAILED_' + (str(error) if isinstance(error, ValueError) else type(error).__name__)) from error
@@ -56,14 +57,14 @@ def verify_freeze(wave, freeze):
         raise WaveFailure('R9_IMPLEMENTATION_HEAD_CHANGED')
 
 
-def runtime_environment(wave, directory, condition, stage='triage', freeze=None):
-    env, assets = environment(wave, directory, 'r8.2', stage, freeze, output=OUTPUT)
+def runtime_environment(wave, directory, condition, stage='triage', freeze=None, output=OUTPUT, publisher=None):
+    env, assets = environment(wave, directory, 'r8.2', stage, freeze, output=output)
     backend = read(wave.output/'baseline/backend-runtime.local.json')
     config = read(wave.output/'baseline/authority-config.local.json')
-    env.update(AP06_EXPERIMENT_ROOT=OUTPUT, AP06_R6_CONDITION=condition,
+    env.update(AP06_EXPERIMENT_ROOT=output, AP06_R6_CONDITION=condition,
         AP06_R9_PRIVATE_KEYS=str(Path(config['privateRuntime'])/'fdks.local.json'),
         AP06_R9_BACKEND_LOG=str(Path(backend['cwd'])/'process.log'),
-        AP06_R9_PUBLISHER=str(wave.root/'tools/quality/run_ap06_r9.py'))
+        AP06_R9_PUBLISHER=str(publisher or wave.root/'tools/quality/run_ap06_r9.py'))
     authority = read(wave.output/'baseline/backend-authority.json')
     env['AP06_R8_FILE_MAPPING'] = json.dumps(authority['fileMapping'])
     return env, assets
@@ -73,14 +74,14 @@ def network_sequence(rows):
     return [[row['fixture'], row['range']] for row in rows]
 
 
-def validate_network(run, condition, expected, fixtures, mapping):
+def validate_network(run, condition, expected, fixtures, mapping, expected_type=None):
     data = run['rangeNetwork']; rows = data['requests']
     if (not data['enabledBeforeNavigation'] or not data['listenersDetached'] or not data['sessionDetached'] or
             not data['routingInstalled'] or data['httpCache'] != 'disabled by Playwright routing' or
             data['explicitCacheIntervention'] or data['duplicateRequestIds'] or
             network_sequence(rows) != expected or len({row['requestId'] for row in rows}) != len(rows)):
         raise WaveFailure('R9_CDP_NETWORK_PROTOCOL_INVALID')
-    expected_type = 'XHR' if condition == CONDITIONS[0] else 'Fetch'
+    expected_type = expected_type or ('XHR' if condition == CONDITIONS[0] else 'Fetch')
     ids = {row['fixture']: row['fileId'] for row in mapping}
     sizes = {row['id']: row['ciphertextBytes'] for row in fixtures}
     received = 0
@@ -90,7 +91,7 @@ def validate_network(run, condition, expected, fixtures, mapping):
         if (not 0 <= start <= end < sizes[row['fixture']] or row['fileId'] != ids[row['fixture']] or
                 row['status'] != 206 or row['type'] != expected_type or not row['finished'] or row['failed'] or
                 row['fromDiskCache'] is not False or row['fromServiceWorker'] is not False or row['servedFromCache'] or
-                type(row['encodedDataLength']) not in (int, float) or row['encodedDataLength'] < 0 or
+                type(row['encodedDataLength']) not in (int, float) or not math.isfinite(row['encodedDataLength']) or row['encodedDataLength'] < 0 or
                 row['headers'].get('content-range') != f"bytes {start}-{end}/{sizes[row['fixture']]}" or
                 row['headers'].get('content-length') != str(length)):
             raise WaveFailure('R9_CDP_RANGE_RESPONSE_INVALID')
@@ -121,12 +122,13 @@ def validate_condition(raw, condition, stage, freeze, fixtures):
     return classification
 
 
-def freeze_implementation(wave):
+def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r9-probe.mjs', runner_path=None,
+                          extra_files=(), extra_publications=(), protocol=None):
     target=wave.output/'tooling/freeze.json'
     if target.exists() or wave.git('status','--porcelain').strip(): raise WaveFailure('R9_FREEZE_REQUIRES_CLEAN_COMMITTED_IMPLEMENTATION')
     unit=read(wave.output/'tooling/angular-unit-1.json')
     if unit['status'] != 'PASS' or unit['unitBrowserLaunches'] != 1: raise WaveFailure('R9_UNIT_NOT_READY')
-    assets, products, workers=build_products(wave.root,OUTPUT)
+    assets, products, workers=build_products(wave.root,output)
     if products != unit['appProducts'] or unit['multiplexedContract']['workerHashes'] != {kind:row['sha256'] for kind,row in workers.items()}:
         raise WaveFailure('R9_APP_CHANGED_SINCE_NATIVE_PREFLIGHT')
     fixture_hash=sha256(wave.output/'fixtures/manifest.json')
@@ -139,13 +141,13 @@ def freeze_implementation(wave):
     for path in (wave.output/'fixtures').rglob('*'):
         if path.is_file(): files[path.relative_to(wave.root).as_posix()]=path
     for name in ('baseline/budget.json','baseline/workload.json','baseline/backend-authority.json','baseline/historical-r9.json',
-                 'baseline/versions.json','baseline/tests.json','baseline/task.md','tooling/angular-unit-1.json','tooling/kasumi.cjs'):
+                 'baseline/versions.json','baseline/tests.json','baseline/task.md','tooling/angular-unit-1.json','tooling/kasumi.cjs',*extra_files):
         path=wave.output/name;files[path.relative_to(wave.root).as_posix()]=path
     receipt=publish(wave,'implementation',{'tooling/source/'+name:path for name,path in files.items()})
     config=read(wave.output/'baseline/authority-config.local.json');authority=Path(config['AP06_AUTHORITY_ROOT'])
     freeze={'campaign':'AP-06-R9-R2','status':'FROZEN','implementationHead':wave.git('rev-parse','HEAD').strip(),
         'sourceHash':owner._tree_sha256(wave.root,'frontend/src'),'fixtureHash':fixture_hash,
-        'harnessHash':sha256(wave.root/'frontend/tools/ap06-r9-probe.mjs'),'runnerHash':sha256(Path(__file__)),
+        'harnessHash':sha256(wave.root/harness),'runnerHash':sha256(Path(runner_path or __file__)),
         'appProducts':products,'workers':workers,'pageScriptSha256':unit['pageScriptSha256'],
         'multiplexedContract':unit['multiplexedContract'],'backendAuthoritySha256':sha256(wave.output/'baseline/backend-authority.json'),
         'backendFileMapping':read(wave.output/'baseline/backend-authority.json')['fileMapping'],
@@ -153,6 +155,9 @@ def freeze_implementation(wave):
         'publicationHashes':{'corpus-publication':sha256(authority/'manifests/corpus-publication.json'),'implementation':receipt['manifestSha256']},
         'chromiumVersion':VERSION,'budget':read(wave.output/'baseline/budget.json'),
         'checkpoints':dict.fromkeys(CHECKPOINTS,'PASS')}
+    freeze['extraPublications']=list(extra_publications)
+    freeze['publicationHashes'].update({name:sha256(authority/'manifests'/f'{name}.json') for name in extra_publications})
+    freeze.update(protocol or {})
     wave.save('tooling/freeze.json',freeze)
     publish(wave,'freeze',{'freeze/freeze.json':target})
     verify_freeze(wave,freeze)
@@ -206,30 +211,32 @@ def unit_browser(wave):
     print(json.dumps({'status':'PASS','developmentChromium':result['unitBrowserLaunches'], 'checks':len(result['cases'])}), flush=True)
 
 
-def measure(wave, condition, stage, freeze, ledger):
-    requested = 3 if stage == 'formal' else 1
-    check_budget(read(wave.output/'baseline/budget.json'), sum(row['reservedAttempts'] for row in ledger), requested)
-    verify_freeze(wave, freeze)
-    directory = wave.output/stage/condition; directory.mkdir(exist_ok=False)
+def measure(wave, condition, stage, freeze, ledger, *, requested=None, directory_name=None, budget_fn=check_budget,
+            verify_fn=verify_freeze, environment_fn=runtime_environment, validate_fn=validate_condition, probe='tools/ap06-r9-probe.mjs'):
+    requested = requested if requested is not None else 3 if stage == 'formal' else 1
+    budget_fn(read(wave.output/'baseline/budget.json'), sum(row['reservedAttempts'] for row in ledger), requested)
+    verify_fn(wave, freeze)
+    name=directory_name or condition
+    directory = wave.output/stage/name; directory.mkdir(exist_ok=False)
     entry = {'condition':condition,'stage':stage,'reservedAttempts':requested,'launchAttempts':0,'browserLaunches':0}
     ledger.append(entry); wave.save('pipeline/launch-ledger.json', ledger)
     publish(wave, f'ledger-reserved-{len(ledger)}', {f'evidence/ledger-reserved-{len(ledger)}.json':wave.output/'pipeline/launch-ledger.json'})
-    env, assets = runtime_environment(wave, directory, condition, stage, freeze)
+    env, assets = environment_fn(wave, directory, condition, stage, freeze)
     failure = None
     with media_server(media_files(wave), True, 'application/octet-stream', assets, port=42088) as (origin, stats):
         env['AP06_R5_MEDIA_ORIGIN'] = origin
-        try: wave.command(stage+'-'+condition, [wave.node,'tools/ap06-r9-probe.mjs'],wave.root/'frontend',env)
+        try: wave.command(stage+'-'+name, [wave.node,probe],wave.root/'frontend',env)
         except WaveFailure as error: failure = error
         raw_path = directory/(CRYPTO+'.raw.json')
         if raw_path.exists():
             raw = read(raw_path)
             entry.update(launchAttempts=raw['launchAttempts'],browserLaunches=raw['browserLaunches'],rawSha256=sha256(raw_path))
-            publish(wave, stage+'-'+condition+'-complete', {f'evidence/{stage}/{condition}/complete.raw.json':raw_path})
+            publish(wave, stage+'-'+name+'-complete', {f'evidence/{stage}/{name}/complete.raw.json':raw_path})
         else: raise failure or WaveFailure('R9_RAW_MISSING')
         wave.save('pipeline/launch-ledger.json', ledger)
-        wave.save(f'{stage}/{condition}/transport.json', stats)
+        wave.save(f'{stage}/{name}/transport.json', stats)
     publish(wave, f'ledger-finished-{len(ledger)}', {f'evidence/ledger-finished-{len(ledger)}.json':wave.output/'pipeline/launch-ledger.json'})
-    verify_freeze(wave, freeze)
+    verify_fn(wave, freeze)
     if failure:
         if raw.get('checkpointFailure'):
             reason=raw['checkpointFailure']
@@ -237,11 +244,11 @@ def measure(wave, condition, stage, freeze, ledger):
             raise WaveFailure(reason)
         reasons=[run.get('failureClass') for run in raw['runs'] if run.get('failureClass')]
         raise WaveFailure(','.join(reasons) if reasons else str(failure))
-    classification = validate_condition(raw, condition, stage, freeze, read(wave.output/'fixtures/manifest.json'))
+    classification = validate_fn(raw, condition, stage, freeze, read(wave.output/'fixtures/manifest.json'))
     result = {'condition':condition,'stage':stage,'status':'VALID','classification':classification,
-        'rawSha256':sha256(raw_path),'individualRuns':individual_deltas(raw),'summary':raw['summary']}
-    wave.save(f'{stage}/{condition}/decision.json',result)
-    publish(wave,stage+'-'+condition+'-decision',{f'evidence/{stage}/{condition}/decision.json':directory/'decision.json'})
+        'rawSha256':sha256(raw_path),'rawPath':raw_path.relative_to(wave.output).as_posix(),'individualRuns':individual_deltas(raw),'summary':raw['summary']}
+    wave.save(f'{stage}/{name}/decision.json',result)
+    publish(wave,stage+'-'+name+'-decision',{f'evidence/{stage}/{name}/decision.json':directory/'decision.json'})
     return result
 
 

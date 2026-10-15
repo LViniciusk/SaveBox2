@@ -18,16 +18,21 @@ import { DownloadEngineService } from '../../src/app/features/drive/services/dow
 import { ThumbnailLoaderService } from '../../src/app/features/drive/services/thumbnail-loader.service';
 import { validatePartialResponse, validateBounds } from './range-adapter';
 import { directRange, DirectCounters, selectTransport } from './r9-transport';
+import { buildRangeAllowlist, inspectRangeRequest, R10RangeBackend, R10_RANGE_FILES, RangeAllowlist, selectR10Condition } from './r10-range-backend';
 
 export interface R8Fixture { id: number; name: string; ciphertextBytes: number; }
 interface Runtime { username: string; password: string; fileIds: Record<string, number>; fdks?: Record<string, number[]>; }
 declare global { interface Window { r8RefreshStore: () => Promise<Record<string, number>>; } }
 export const r8Mode = (window as Window & { r8BootstrapMode?: string }).r8BootstrapMode ?? null;
-const r9Transport = selectTransport((window as Window & { ap06R9Transport?: unknown }).ap06R9Transport);
+const r10Condition = selectR10Condition((window as Window & { ap06R10Condition?: unknown }).ap06R10Condition);
+const requestedR9 = (window as Window & { ap06R9Transport?: unknown }).ap06R9Transport;
+if (r10Condition && requestedR9 !== undefined) throw new Error('R10_CONFLICTING_TRANSPORT_SELECTORS');
+const r9Transport = selectTransport(r10Condition ? r10Condition === 'r10.2' ? 'angular-fetch' : 'xhr' : requestedR9);
 if (r9Transport && r8Mode !== 'backend') throw new Error('R9_REAL_BACKEND_REQUIRED');
 const realStore = r8Mode === 'store' || r8Mode === 'backend';
 const backend = r8Mode === 'backend';
 let fixtures: R8Fixture[] = [], runtime: Runtime | undefined, store: DriveStore | null = null;
+let r10Allowlist: RangeAllowlist;
 const c = () => window.r5Counters.observed;
 const unexpected = () => { c()['unexpectedPeripheralOperations']++; throw new Error('R8_UNEXPECTED_PERIPHERAL_OPERATION'); };
 const peripheral = new Proxy({}, { get: (_, key) => key === 'then' ? undefined : unexpected });
@@ -44,6 +49,8 @@ class R9DirectDriveService extends DriveService {
 
 // Observe the original HttpClient chain after JWT attachment, without replacing its transport.
 export const observeR8Http: HttpInterceptorFn = (request, next) => defer(() => {
+  const measured = r10Condition ? inspectRangeRequest(request, r10Allowlist) : null;
+  if (measured) request = request.clone({ redirect: 'error' });
   const range = request.headers.get('Range');
   if (range && (!request.headers.has('Authorization') || !request.withCredentials)) throw new Error('R8_JWT_INTERCEPTOR_MISSING');
   let settled = false;
@@ -56,6 +63,7 @@ export const observeR8Http: HttpInterceptorFn = (request, next) => defer(() => {
   }
   return next(request).pipe(tap({ next: event => {
     if (!range || event.type !== HttpEventType.Response) return;
+    if (measured && event.url !== measured.url) throw new Error('R10_REDIRECT_RESPONSE_FORBIDDEN');
     const fixture = fixtures.find(row => request.url.endsWith(`/files/${expectedId(row)}/download`));
     const match = /^bytes=(\d+)-(\d+)$/.exec(range);
     if (!fixture || !match || !(event.body instanceof Blob)) throw new Error('R8_HTTP_RANGE_IDENTITY_INVALID');
@@ -77,6 +85,8 @@ export const observeR8Http: HttpInterceptorFn = (request, next) => defer(() => {
 export function r8Providers(controlledRange: (id: number, start: number, end: number) => unknown) {
   return [provideRouter([]), provideHttpClient(...(r9Transport === 'angular-fetch' ? [withFetch()] : []),
     withInterceptors([jwtInterceptor, errorInterceptor, observeR8Http])),
+    ...(r10Condition === 'r10.1' ? [FetchBackend, { provide: R10_RANGE_FILES, useValue: () => r10Allowlist },
+      { provide: HttpBackend, useClass: R10RangeBackend }] : []),
     { provide: DriveService, ...(backend ? { useClass: r9Transport === 'direct-fetch' ? R9DirectDriveService : DriveService } : { useValue: {
       downloadFileRange: controlledRange,
       getTree: () => of({ folders: [], has_more: false, files: fixtures.map(row => ({ id: row.id,
@@ -97,6 +107,7 @@ export async function configureR8(app: ApplicationRef, values: R8Fixture[], sele
   if (selected !== r8Mode) throw new Error('R8_MODE_DI_MISMATCH');
   if (backend) {
     if (!runtime || Object.keys(runtime.fileIds).sort().join() !== '0,1,2') throw new Error('R8_BACKEND_MAPPING_MISSING');
+    if (r10Condition) r10Allowlist = buildRangeAllowlist(fixtures.map(row => ({ id: expectedId(row), ciphertextBytes: row.ciphertextBytes })));
     if (r9Transport) {
       if (!runtime.fdks || Object.keys(runtime.fdks).sort().join() !== '0,1,2' ||
           Object.values(runtime.fdks).some(key => key.length !== 32 || key.some(byte => !Number.isInteger(byte) || byte < 0 || byte > 255))) {
@@ -104,6 +115,18 @@ export async function configureR8(app: ApplicationRef, values: R8Fixture[], sele
       }
       c()['directAuthorizedRanges'] = 0;
       const http = app.injector.get(HttpBackend), drive = app.injector.get(DriveService);
+      if (r10Condition) {
+        const selected = http instanceof R10RangeBackend;
+        const proof = { xhrBackend: http instanceof HttpXhrBackend, fetchBackend: http instanceof FetchBackend,
+          selectiveBackend: selected, xhrDelegate: selected && http.xhr instanceof HttpXhrBackend && http.xhr === app.injector.get(HttpXhrBackend),
+          fetchDelegate: selected && http.fetchBackend instanceof FetchBackend && http.fetchBackend === app.injector.get(FetchBackend),
+          originalRange: drive.downloadFileRange === DriveService.prototype.downloadFileRange,
+          realAuth: app.injector.get(AuthService) instanceof AuthService };
+        if (!proof.originalRange || !proof.realAuth || proof.xhrBackend !== (r10Condition === 'r10.0') ||
+            proof.fetchBackend !== (r10Condition === 'r10.2') || proof.selectiveBackend !== (r10Condition === 'r10.1') ||
+            selected && (!proof.xhrDelegate || !proof.fetchDelegate)) throw new Error('R10_DI_CONTRACT_FAILED');
+        Object.assign(window, { r10TransportProof: () => proof });
+      } else {
       const proof = { transport: r9Transport, xhrBackend: http instanceof HttpXhrBackend, fetchBackend: http instanceof FetchBackend,
         originalRange: drive.downloadFileRange === DriveService.prototype.downloadFileRange,
         directRange: drive instanceof R9DirectDriveService, realAuth: app.injector.get(AuthService) instanceof AuthService };
@@ -112,6 +135,7 @@ export async function configureR8(app: ApplicationRef, values: R8Fixture[], sele
         throw new Error('R9_HTTP_DI_PROOF_FAILED');
       }
       Object.assign(window, { r9TransportProof: () => proof });
+      }
     }
     const auth = app.injector.get(AuthService);
     c()['authAttempts']++;

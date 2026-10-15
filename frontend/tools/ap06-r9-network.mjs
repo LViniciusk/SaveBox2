@@ -21,16 +21,29 @@ export function backendTraffic(text, fileIds) {
     responseBodyBytes: null, byteMetric: 'unavailable: native streaming log does not report body bytes' };
 }
 
-export async function observeRangeNetwork(context, page, mapping) {
+export async function observeRangeNetwork(context, page, mapping, { bootstrapHttp = false } = {}) {
   const session = await context.newCDPSession(page);
   const allowed = new Map(mapping.map(row => [`http://127.0.0.1:42187/files/${row.fileId}/download`, row]));
   const data = { enabledBeforeNavigation: false, listenersDetached: false, sessionDetached: false,
     routingInstalled: true, httpCache: 'disabled by Playwright routing', explicitCacheIntervention: false,
     duplicateRequestIds: 0, requests: [] };
   const requests = new Map();
+  const bootstrap = new Map([
+    ['http://127.0.0.1:42187/login', { kind:'auth',method:'POST' }],
+    ['http://127.0.0.1:42187/tree?file_limit=100&file_offset=0', { kind:'tree',method:'GET' }],
+    ['http://127.0.0.1:42187/pending-uploads', { kind:'pending',method:'GET' }],
+  ]);
+  if (bootstrapHttp) data.bootstrapRequests = [];
   const handlers = {
     'Network.requestWillBeSent': ({ requestId, request, type }) => {
       const fixture = allowed.get(request.url), range = header(request.headers, 'range');
+      const other = bootstrapHttp ? bootstrap.get(request.url) : null;
+      if (other && request.method === other.method) {
+        if (requests.has(requestId)) { data.duplicateRequestIds++; return; }
+        const row = { requestId,kind:other.kind,method:request.method,type,status:null,finished:false,failed:false,
+          fromDiskCache:null,fromServiceWorker:null,servedFromCache:false,encodedDataLength:null,headers:{} };
+        requests.set(requestId,row); data.bootstrapRequests.push(row); return;
+      }
       if (!fixture || request.method !== 'GET' || !range) return;
       if (requests.has(requestId)) { data.duplicateRequestIds++; return; }
       const row = { requestId, fixture: fixture.fixture, fileId: fixture.fileId, range, type,

@@ -12,6 +12,7 @@ from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / os.environ.get('AP06_EXPERIMENT_ROOT', '.quality/readiness-wave8')
+EXPERIMENT_ID = 'r10' if OUTPUT.name == 'readiness-wave10' else 'r8'
 BACKEND_PORT, APP_PORT = 42187, 42088
 
 def free_port(port=0):
@@ -41,7 +42,7 @@ def serve():
         previous = json.loads((OUTPUT/'baseline/backend-runtime.local.json').read_text())
         runtime = Path(previous['cwd']); storage = Path(previous['storagePath']); identity = previous['storageId']
         assert runtime.resolve().is_relative_to(OUTPUT.resolve()) and not runtime.is_symlink()
-        assert (runtime/'.owned-r8').read_text() == identity and storage == runtime/'storage'
+        assert (runtime/('.owned-'+EXPERIMENT_ID)).read_text() == identity and storage == runtime/'storage'
         verify_storage(storage, identity)
         env = dict(os.environ, **previous['environment'])
         port = int(env['DB_PORT']); database = env['DB_NAME']; password = env['DB_PASSWORD']
@@ -96,7 +97,7 @@ def serve():
         log.close()
         verify_storage(storage, identity)
         assert runtime.resolve().is_relative_to(OUTPUT.resolve()) and not runtime.is_symlink()
-        assert (runtime/'.owned-r8').read_text() == identity
+        assert (runtime/('.owned-'+EXPERIMENT_ID)).read_text() == identity
         shutil.rmtree(runtime)
         save(OUTPUT/'pipeline/backend-runtime-cleanup.json',{'status':'PASS','ownedServerStopped':True,
             'ownedPostgresStopped':True,'ownedClusterStorageAndDotenvRemoved':True,'personalServicesTouched':False})
@@ -105,13 +106,13 @@ def serve():
 def create_runtime():
     identity = secrets.token_hex(32)
     runtime = OUTPUT / 'pipeline' / ('runtime-' + secrets.token_hex(8))
-    runtime.mkdir(); (runtime / '.owned-r8').write_text(identity)
+    runtime.mkdir(); (runtime / ('.owned-'+EXPERIMENT_ID)).write_text(identity)
     assert runtime.resolve().is_relative_to(OUTPUT.resolve()) and not runtime.is_symlink()
     storage = runtime / 'storage'; storage.mkdir()
     (storage / '.nanika-e2e-storage-id').write_text(identity)
     verify_storage(storage, identity)
     port = free_port()
-    database = 'nanika_e2e_r8_' + secrets.token_hex(8)
+    database = 'nanika_e2e_'+EXPERIMENT_ID+'_' + secrets.token_hex(8)
     assert isolated_database(database)
     password = secrets.token_urlsafe(32)
     env = dict(os.environ, DB_USER='nanika_e2e', DB_PASSWORD=password, DB_NAME=database,

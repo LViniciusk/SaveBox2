@@ -488,7 +488,8 @@ export function ownershipSnapshot(counters) {
 
 export async function runTransmuxProbe({ pageScript = transmuxPageScript(), countersFactory = newTransmuxCounters,
   cleanupValidator = validateCleanupOwnership, functionalValidator = validateTransmuxOwnership, snapshot = ownershipSnapshot,
-  launchOptions = {}, configurePage = null, initializePage = null, identity = {}, beforeRun = null, afterRun = null } = {}) {
+  launchOptions = {}, configurePage = null, initializePage = null, identity = {}, beforeRun = null, afterRun = null,
+  auxiliaryMetrics = null, repetitions = null, runLabel = null } = {}) {
   const expectedChromiumVersion = validateExpectedChromiumVersion(process.env.AP06_R5_CHROMIUM_VERSION);
   const { AP06_R5_MODE: mode, AP06_R5_STAGE: stage, AP06_R5_ARTIFACT_DIR: artifactDir,
     AP06_R5_MEDIA_ORIGIN: origin, AP06_R5_FIXTURE_MANIFEST: manifestPath,
@@ -517,9 +518,11 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
   const output = `${artifactDir}/${mode}.raw.json`;
   const flush = () => writeJsonAtomic(output, raw);
   flush();
-  for (let repetition = 1; repetition <= (stage === 'triage' ? 1 : 3); repetition++) {
+  const count = repetitions ?? (stage === 'triage' ? 1 : 3);
+  if (![1,3].includes(count) || runLabel && count !== 1) throw new Error('INVALID_INDEPENDENT_RUN_COUNT');
+  for (let repetition = 1; repetition <= count; repetition++) {
     if (beforeRun) await beforeRun(raw, output);
-    const runId = `${stage}-${process.env.AP06_R6_CONDITION || mode}-r${repetition}`;
+    const runId = runLabel ?? `${stage}-${process.env.AP06_R6_CONDITION || mode}-r${repetition}`;
     const run = { runId, mode, functionalStatus: 'FAIL', cleanupStatus: 'FAIL', browserVersion: null,
       playbackSessions: 0, extendedForPlateau: false, samples: [] };
     raw.runs.push(run); raw.launchAttempts++; flush();
@@ -545,6 +548,7 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
       const browserCdp = await browser.newBrowserCDPSession();
       const capture = async (phase, cycle, gc = 'natural') => {
         if (gc === 'forced-diagnostic') await cdp.send('HeapProfiler.collectGarbage');
+        const auxiliary = auxiliaryMetrics ? await auxiliaryMetrics(cdp) : null;
         const sample = await collectRawMetrics(cdp, { runId, scenarioId: mode, fixtureId: 'ABC-classic-MP4-corpus',
           mode, cycle, fixture: 'ABC-classic-MP4-corpus', phase, gc, browserVersion: run.browserVersion,
           sourceHash: process.env.AP06_R5_SOURCE_HASH, fixtureHash: manifestHash, harnessHash: process.env.AP06_R5_HARNESS_HASH,
@@ -554,7 +558,7 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
           const { stdout } = await exec(process.env.WAVE1_PYTHON,
             [process.env.WAVE1_RUNNER, '--process-sample', processInfo.map(process => process.id).join(',')], { windowsHide: true });
           return groupProcessMetrics(JSON.parse(stdout), processInfo);
-        });
+        }, auxiliary);
         const state = await page.evaluate(() => ({ counters: { ...window.r5Counters }, mediaNodes: document.querySelectorAll('video,audio').length }));
         sample.counters = state.counters; sample.mediaNodes = state.mediaNodes;
         sample.ownership = snapshot(state.counters);

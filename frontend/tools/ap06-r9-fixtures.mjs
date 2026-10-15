@@ -8,7 +8,7 @@ import { prepareFixtureCorpus } from './ap06-transmux-probe.mjs';
 
 const out = resolve(process.env.AP06_EXPERIMENT_ROOT ?? '');
 const runtime = resolve(process.env.AP06_R9_PRIVATE_RUNTIME ?? '');
-assert.ok(out.endsWith('readiness-wave9-r2') && runtime.startsWith(out + '\\'));
+assert.ok(['readiness-wave9-r2','readiness-wave10'].some(name => out.endsWith(name)) && runtime.startsWith(out + '\\'));
 const plain = join(out, 'fixtures/plain'), cipher = join(out, 'fixtures/cipher');
 mkdirSync(plain); mkdirSync(cipher);
 const bundle = join(out, 'tooling/kasumi.cjs');

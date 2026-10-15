@@ -127,7 +127,7 @@ def validate_condition(raw, condition, stage, freeze, fixtures):
         {'r8.0': 'component', 'r8.1': 'store', 'r8.2': 'backend'}[condition])
 
 
-def validate_integration_condition(raw, condition, stage, freeze, fixtures, mode, direct_fetch=False):
+def validate_integration_condition(raw, condition, stage, freeze, fixtures, mode, direct_fetch=False, expected_runs=None):
     expected_source_buffers(fixtures, 0)
     if freeze.get('multiplexedContract') != {'fixtureHash': freeze['fixtureHash'],
             'workerHashes': {kind: row['sha256'] for kind, row in freeze['workers'].items()},
@@ -138,7 +138,7 @@ def validate_integration_condition(raw, condition, stage, freeze, fixtures, mode
         'videoPlayerComponentUsed': True, 'backendUsed': mode == 'backend',
         'localRequestsIntercepted': False, 'fullKasumiContainer': True}
     validate_raw(raw, stage, CRYPTO, freeze['sourceHash'], freeze['fixtureHash'], freeze['harnessHash'],
-        freeze['runnerHash'], VERSION, control_lifecycle=False, identity_expectations=identities)
+        freeze['runnerHash'], VERSION, control_lifecycle=False, identity_expectations=identities, expected_runs=expected_runs)
     if raw.get('condition') != condition or raw.get('autoplayArgs') != AUTOPLAY:
         raise WaveFailure('R8_CONDITION_OR_PROTOCOL_CHANGED')
     if raw.get('driveStoreUsed') is not (mode != 'component'):
