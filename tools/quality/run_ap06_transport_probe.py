@@ -41,7 +41,7 @@ def byte_range(value, size, strict=False):
 
 
 @contextlib.contextmanager
-def media_server(files, strict_ranges=False, content_type='video/mp4', assets=None):
+def media_server(files, strict_ranges=False, content_type='video/mp4', assets=None, port=0):
     """Explicit URL map only. No directory traversal, static root, or external bind."""
     files = dict(files)
     assets = dict(assets or {})
@@ -113,7 +113,7 @@ def media_server(files, strict_ranges=False, content_type='video/mp4', assets=No
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
                     with lock: stats['cancelledTransfers'] += 1
 
-    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', port), Handler)
     if strict_ranges: server.daemon_threads = False
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     try: yield f'http://127.0.0.1:{server.server_port}', stats

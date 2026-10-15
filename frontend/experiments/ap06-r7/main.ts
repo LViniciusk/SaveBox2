@@ -4,13 +4,13 @@ import { VideoStreamService } from '../../src/app/features/drive/services/video-
 import { VideoPlayerComponent } from '../../src/app/features/drive/components/video-player/video-player.component';
 import { KasumiCryptoService } from '../../src/app/core/crypto/kasumi-crypto.service';
 import { CryptoService } from '../../src/app/core/crypto/crypto.service';
-import { DriveService } from '../../src/app/features/drive/services/drive.service';
 import { ShareService } from '../../src/app/features/drive/services/share.service';
-import { DriveFile, DriveStore } from '../../src/app/features/drive/state/drive.store';
+import { DriveFile } from '../../src/app/features/drive/state/drive.store';
 import { rangeAdapter, RangeCounters } from './range-adapter';
+import { configureR8, r8Contracts, r8File, r8Providers } from './r8-integration';
 
 interface Fixture { id: number; name: string; bytes: number; dataOffset: number; ciphertextBytes: number; }
-type Mode = 'control' | 'service' | 'component';
+type Mode = 'control' | 'service' | 'component' | 'store' | 'backend';
 interface Observed extends RangeCounters { [name: string]: number; }
 interface Session { fixture: number; mode: Mode; mountedMs: number; canplayMs: number | null;
   playbackMs: number | null; closeMs: number | null; maxCurrentTime: number; seeks: number;
@@ -19,7 +19,7 @@ declare global {
   interface Window {
     r5Counters: { observed: Observed; sessions: Session[] };
     r7Ready: boolean; r7SessionActive: boolean;
-    r7Configure: (fixtures: Fixture[], mode: Mode) => Promise<void>;
+    r7Configure: (fixtures: Fixture[], mode: Mode, runtime?: any) => Promise<void>;
     r7ReadEnvelope: (fixture: Fixture) => Promise<{ fdk: Uint8Array; baseNonce: Uint8Array }>;
     r7ControlFixture: (fixture: Fixture) => Promise<void>;
     r7WaitPlayback: (video: HTMLVideoElement, seconds: number, signal: AbortSignal) => Promise<void>;
@@ -76,14 +76,15 @@ async function start(app: ApplicationRef): Promise<void> {
   const kasumi = app.injector.get(KasumiCryptoService);
   await kasumi.hashName('r7-startup-only');
   let stream: VideoStreamService | null = null;
-  window.r7Configure = async (fixtures, selected) => {
-    if (mode || !['control', 'service', 'component'].includes(selected)) throw new Error('R7_ALREADY_CONFIGURED');
+  window.r7Configure = async (fixtures, selected, runtime) => {
+    if (mode || !['control', 'service', 'component', 'store', 'backend'].includes(selected)) throw new Error('R7_ALREADY_CONFIGURED');
     mode = selected;
     adapter = rangeAdapter(fixtures, observed());
+    await configureR8(app, fixtures, selected, runtime);
     if (mode !== 'control') stream = app.injector.get(VideoStreamService);
     await app.whenStable();
   };
-  window.r7Contracts = () => ({ kasumiReal: kasumi instanceof KasumiCryptoService,
+  window.r7Contracts = () => ({ ...r8Contracts(), kasumiReal: kasumi instanceof KasumiCryptoService,
     streamReal: mode === 'control' ? stream === null : stream instanceof VideoStreamService,
     rootEmpty: root.mount.length === 0, localOnly: currentFile === null ||
       currentFile.storageProvider === 'local' && !currentFile.shareUuid && currentFile.forceOriginal === true });
@@ -104,7 +105,7 @@ async function start(app: ApplicationRef): Promise<void> {
   window.r7Run = async fixture => {
     const c = observed();
     if (!mode || currentFile || root.mount.length) throw new Error('R7_SESSION_OVERLAP');
-    currentFile = driveFile(fixture); window.r7SessionActive = true; c['initializeAttempts']++;
+    currentFile = r8File(fixture) ?? driveFile(fixture); window.r7SessionActive = true; c['initializeAttempts']++;
     const session: Session = { fixture: fixture.id, mode, mountedMs: performance.now(), canplayMs: null,
       playbackMs: null, closeMs: null, maxCurrentTime: 0, seeks: 0, muted: null, volume: null, playbackRate: null };
     let started = false, initialized = false, completed = false;
@@ -126,8 +127,8 @@ async function start(app: ApplicationRef): Promise<void> {
     const destroyHost = () => {
       if (!ref) return;
       ref.destroy(); root.mount.clear();
-      c['componentsDestroyed'] += mode === 'component' ? 2 : 1;
-      if (mode === 'component') c['destroyCalls']++;
+      c['componentsDestroyed'] += mode === 'service' ? 1 : 2;
+      if (mode !== 'service') c['destroyCalls']++;
       ref = null;
     };
     window.r7CancelSession = destroyHost;
@@ -135,7 +136,7 @@ async function start(app: ApplicationRef): Promise<void> {
       if (mode === 'control') {
         await window.r7ControlFixture(fixture); initialized = true;
       } else {
-        const count = mode === 'component' ? 2 : 1;
+        const count = mode === 'service' ? 1 : 2;
         ref = mode === 'service' ? root.mount.createComponent(ServiceHost) : root.mount.createComponent(PlayerHost);
         c['componentsMounted'] += count;
         ref.changeDetectorRef.detectChanges();
@@ -145,7 +146,7 @@ async function start(app: ApplicationRef): Promise<void> {
           if (stream!.error()) throw new Error('R7_SERVICE_INITIALIZATION_FAILED');
           const video = ref!.location.nativeElement.querySelector('video') as HTMLVideoElement | null;
           return !!video && video.readyState >= 2 && video.buffered.length > 0 &&
-            (mode !== 'component' || !(ref!.instance as PlayerHost).player.isInitialLoad());
+            (mode === 'service' || !(ref!.instance as PlayerHost).player.isInitialLoad());
         }, 'R7_READINESS_TIMEOUT');
         if (initialization) await initialization;
         initialized = true;
@@ -180,8 +181,7 @@ async function start(app: ApplicationRef): Promise<void> {
 }
 
 void bootstrapApplication(Root, { providers: [provideZonelessChangeDetection(),
-  { provide: DriveService, useValue: { downloadFileRange: (id: number, start: number, end: number) => adapter.downloadFileRange(id, start, end) } },
-  { provide: CryptoService, useValue: { decryptName: forbidden, isVaultUnlocked: forbidden } },
+  ...r8Providers((id, start, end) => adapter.downloadFileRange(id, start, end)),
+  { provide: CryptoService, useValue: { decryptName: forbidden, isVaultUnlocked: () => false } },
   { provide: ShareService, useValue: { downloadSharedFileRange: forbidden } },
-  { provide: DriveStore, useValue: { files: forbidden } },
 ] }).then(start).catch(error => { console.error(error); throw error; });

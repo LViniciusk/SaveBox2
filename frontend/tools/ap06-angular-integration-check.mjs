@@ -11,6 +11,7 @@ if (!output) throw new Error('OWNED_R7_UNIT_OUTPUT_REQUIRED');
 const fixtures = JSON.parse(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST, 'utf8'));
 const paths = JSON.parse(process.env.AP06_R7_ALLOWED_PATHS), origin = process.env.AP06_R5_MEDIA_ORIGIN;
 const result = { status: 'FAIL', measurementBrowsers: 0, unitBrowserLaunchAttempts: 0, unitBrowserLaunches: 0, cases: [], observations: {},
+  boundaryCounters: {},
   multiplexedContract: { fixtureHash: createHash('sha256').update(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST)).digest('hex'),
     workerHashes: { crypto: process.env.AP06_R5_CRYPTO_WORKER_SHA256, transmux: process.env.AP06_R5_TRANSMUX_WORKER_SHA256 },
     initDataPerFixture: [1, 1, 1], initDataId: 0 }, sourceBufferChecks: [],
@@ -27,11 +28,11 @@ try {
   result.unitBrowserLaunchAttempts++; save();
   browser = await chromium.launch({ args: AUTOPLAY_ARGS }); result.unitBrowserLaunches++; save();
   assert.equal(browser.version(), '151.0.7922.34');
-  for (const condition of ['r7.0', 'r7.1', 'r7.2']) {
+  for (const condition of ['r8.0', 'r8.1', 'r8.2']) {
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block' });
     try {
       const page = await context.newPage(), raw = {};
-      await configureIntegrationPage(page, context, raw, origin, paths);
+      await configureIntegrationPage(page, context, raw, origin, paths, condition);
       await page.addInitScript({ content: integrationPageScript() });
       await page.goto(origin);
       await page.evaluate(({ counters, crypto, transmux }) => {
@@ -65,17 +66,47 @@ try {
         }
         const state = await page.evaluate(() => ({ counters: window.r5Counters, media: document.querySelectorAll('video,audio').length }));
         result.observations[condition] = state.counters.sessions; save();
+        result.boundaryCounters[condition] = state.counters.observed; save();
         validateIntegrationFunctional(state.counters, state.media);
         assert.equal(state.counters.observed.playbackCompleted, 3);
         assert.equal(state.counters.observed.workersCreated, 6);
         assert.ok(state.counters.observed.detachedTransfers > 0);
         assert.ok(state.counters.sessions.every(session => session.maxCurrentTime > 1.5 && session.maxCurrentTime < 10 && session.seeks === 0));
-        assert.ok(state.counters.sessions.every(session => session.muted === (condition !== 'r7.2') && session.volume === 1 && session.playbackRate === 1));
+        assert.ok(state.counters.sessions.every(session => session.muted === false && session.volume === 1 && session.playbackRate === 1));
         assert.equal(await windowListeners(), listenersBefore);
-        if (condition !== 'r7.0') assert.equal(state.counters.observed.componentsMounted, condition === 'r7.2' ? 6 : 3);
-        if (condition === 'r7.2') assert.ok(state.counters.sessions.every(session => session.playbackMs - session.canplayMs >= 450));
+        assert.equal(state.counters.observed.componentsMounted, 6);
+        assert.ok(state.counters.sessions.every(session => session.playbackMs - session.canplayMs >= 450));
+        if (condition !== 'r8.0') {
+          assert.equal(state.counters.observed.storeLoadStarted, 1);
+          assert.equal(state.counters.observed.storeLoadCompleted, 1);
+          assert.equal(state.counters.observed.storeFileResolved, 3);
+          assert.equal(state.counters.observed.storeEffectsSettled, 1);
+        }
+        assert.equal(state.counters.observed.unexpectedPeripheralOperations, 0);
+        assert.equal(state.counters.observed.outstandingSubscriptions, 0);
+        if (condition === 'r8.2') {
+          assert.equal(state.counters.observed.authAttempts, 1);
+          assert.equal(state.counters.observed.authSuccesses, 1);
+          assert.equal(state.counters.observed.backendFileIdMatches, 3);
+          assert.equal(state.counters.observed.http206Validated, state.counters.observed.rangeRequestsCompleted);
+          assert.equal(state.counters.observed.jwtRangesValidated, state.counters.observed.rangeRequestsStarted);
+          assert.equal(await page.evaluate(() => [...Object.values(localStorage), ...Object.values(sessionStorage)]
+            .some(value => /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\./.test(value))), false);
+        }
       });
-      if (condition === 'r7.1') {
+      if (condition !== 'r8.0') {
+        await check(condition + ' original Store refresh and computed/effects settle without transfers', async () => {
+          const before = await windowListeners();
+          for (let index = 0; index < 2; index++) {
+            assert.deepEqual(await page.evaluate(() => window.r8RefreshStore()),
+              { files: 3, visibleFiles: 3, transfers: 0, thumbnails: 0, outstandingSubscriptions: 0 });
+          }
+          assert.equal(await windowListeners(), before);
+          const state = await page.evaluate(() => ({ counters: window.r5Counters, media: document.querySelectorAll('video,audio').length }));
+          validateIntegrationCleanup(state.counters, state.media);
+        });
+      }
+      if (condition === 'r8.2') {
         await check('real service destroy aborts its RxJS Range and settles the initialization', async () => {
           const cancelled = await page.evaluate(async fixture => {
             const pending = window.r7Run(fixture); pending.catch(() => {});
@@ -89,11 +120,11 @@ try {
           validateIntegrationCleanup(state.counters, state.media);
           assert.ok(state.counters.observed.rangeRequestsAborted >= 1);
         });
-        await check('real service error signal rejects inconsistent authenticated container size', async () => {
+        await check('real Store file identity rejects inconsistent authenticated container size', async () => {
           await assert.rejects(page.evaluate(fixture => window.r7Run(fixture), { ...fixtures[0], ciphertextBytes: fixtures[0].ciphertextBytes - 1 }));
           const state = await page.evaluate(() => ({ counters: window.r5Counters, media: document.querySelectorAll('video,audio').length }));
           validateIntegrationCleanup(state.counters, state.media);
-          assert.ok(state.counters.observed.initializeFailures >= 1);
+          assert.equal(state.counters.observed.storeFileResolved, 4);
         });
       }
       assert.equal(raw.pageErrors, 0); assert.equal(raw.network.rejectedRequests, 0);
@@ -101,6 +132,25 @@ try {
       assert.equal(raw.recoveryWarnings, 0);
     } finally { await context.close(); }
   }
+  await check('original Store swallowed HTTP error is rejected by initial readiness validation', async () => {
+    const context = await browser.newContext({ serviceWorkers: 'block' });
+    try {
+      const page = await context.newPage(), raw = {};
+      await configureIntegrationPage(page, context, raw, origin, paths, 'r8.2');
+      await context.route('**/tree?*', route => route.fulfill({ status: 500, body: '{}',
+        headers: { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Credentials': 'true',
+          'Access-Control-Allow-Headers': 'Authorization, Content-Type' } }));
+      await page.addInitScript({ content: integrationPageScript() });
+      await page.goto(origin);
+      await page.evaluate(counters => { window.r5Counters = counters; }, newIntegrationCounters());
+      await assert.rejects(initializeIntegrationPage(page, fixtures, 'r8.2'), /R8_STORE_LOAD_FAILED/);
+      const state = await page.evaluate(() => ({ counters: window.r5Counters, media: document.querySelectorAll('video,audio').length }));
+      assert.equal(state.counters.observed.storeLoadStarted, 1);
+      assert.equal(state.counters.observed.storeLoadCompleted, 0);
+      assert.equal(state.counters.observed.workersCreated, 0);
+      validateIntegrationCleanup(state.counters, state.media);
+    } finally { await context.close(); }
+  });
   result.status = 'PASS';
 } catch (error) {
   result.failureClass = error.name; result.failure = error.message; process.exitCode = 1;

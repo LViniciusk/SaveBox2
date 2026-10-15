@@ -118,7 +118,7 @@
             "browser": "experiments/ap06-r7/main.ts",
             "tsConfig": "experiments/ap06-r7/tsconfig.json",
             "index": "experiments/ap06-r7/index.html",
-            "outputPath": "../.quality/readiness-wave7/tooling/app",
+            "outputPath": "../.quality/readiness-wave8/tooling/app",
             "optimization": true,
             "sourceMap": false,
             "outputHashing": "all",
@@ -126,7 +126,7 @@
             "fileReplacements": [
               {
                 "replace": "src/environments/environment.ts",
-                "with": "src/environments/environment.prod.ts"
+                "with": "experiments/ap06-r7/environment.r8.ts"
               }
             ]
           }

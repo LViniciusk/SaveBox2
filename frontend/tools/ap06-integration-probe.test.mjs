@@ -8,7 +8,7 @@ import { rangeAdapter, validateBounds, validatePartialResponse } from '../experi
 import { buildKasumi, loadKasumi, validateContainer } from './ap06-r7-fixtures.mjs';
 import { disposableCryptoMaterial } from './ap06-mse-probe.mjs';
 import { newIntegrationCounters, integrationSnapshot, validateIntegrationCleanup, validateIntegrationFunctional } from './ap06-r7-instrumentation.mjs';
-import { configureIntegrationPage, integrationPageScript, AUTOPLAY_ARGS } from './ap06-integration-probe.mjs';
+import { configureIntegrationPage, integrationPageScript, AUTOPLAY_ARGS, MODES } from './ap06-integration-probe.mjs';
 import { handleTransmuxReady } from '../src/app/features/drive/workers/stream-transmux-ready.ts';
 
 test('real ready handler multiplexes the frozen AV/video/AV cohort into one initData id=0 each', () => {
@@ -30,6 +30,20 @@ test('real ready handler multiplexes the frozen AV/video/AV cohort into one init
   }
   assert.equal(sourceBuffers, 3);
   assert.equal(sourceBuffers * 6, 18);
+});
+
+test('R8 bootstraps the DI mode before the app and permits only exact backend URLs', async () => {
+  assert.deepEqual(MODES, { 'r8.0': 'component', 'r8.1': 'store', 'r8.2': 'backend' });
+  let mode, pattern; const events = new Map(), raw = {};
+  await configureIntegrationPage({ on() {}, addInitScript: async (_, value) => { mode = value; } },
+    { route: async value => { pattern = value; }, on: (key, action) => events.set(key, action) }, raw,
+    'http://127.0.0.1:42088', ['/', 'http://127.0.0.1:42187/files/101/download'], 'r8.2');
+  assert.equal(mode, 'backend');
+  assert.equal(pattern.test('http://127.0.0.1:42187/files/101/download'), false);
+  for (const url of ['http://127.0.0.1:42187/files/102/download', 'http://localhost:42187/files/101/download',
+    'http://127.0.0.1:421870/files/101/download', 'https://production.test/files/101/download']) assert.equal(pattern.test(url), true);
+  events.get('request')({ url: () => 'http://127.0.0.1:42187/files/101/download' });
+  assert.equal(raw.network.externalRequests, 0); assert.equal(raw.network.unexpectedRequests, 0);
 });
 
 const fixtures = [0, 1, 2].map(id => ({ id, ciphertextBytes: 100 }));
