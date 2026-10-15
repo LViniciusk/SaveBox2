@@ -5,6 +5,8 @@ import secrets
 import tempfile
 import unittest
 from unittest.mock import patch
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import ap06_authorities as authorities
 from ap06_key_custody import protect, unprotect, custody_context
@@ -42,6 +44,21 @@ def r10_raw(condition='r10.0',stage='triage'):
 
 
 class R10Decisions(unittest.TestCase):
+    def test_r2_reserves_its_only_development_attempt_before_launch_and_forbids_retry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);output=root/'.quality/readiness-wave10-r2'
+            for name in ('tooling','baseline','pipeline'):(output/name).mkdir(parents=True,exist_ok=True)
+            (output/'baseline/prechecks.json').write_text('{"status":"PASS"}')
+            wave=SimpleNamespace(root=root,output=output,node='node',git=lambda *args:'' if args[0]=='status' else 'synthetic-head')
+            wave.save=lambda *args:None
+            def command(*args):
+                self.assertTrue((output/'pipeline/development-reservation.json').is_file())
+                raise WaveFailure('SYNTHETIC_LAUNCH_FAILURE')
+            wave.command=command
+            with patch.object(r10,'environment',return_value=({},{})),patch.object(r10,'publish'),patch.object(r10,'media_files',return_value={}),patch.object(r10,'media_server',return_value=nullcontext(('http://127.0.0.1',{}))):
+                with self.assertRaisesRegex(WaveFailure,'SYNTHETIC_LAUNCH_FAILURE'):r10.unit_browser(wave)
+                with self.assertRaises(FileExistsError):r10.unit_browser(wave)
+
     def test_real_protocol_validator_accepts_all_three_triages_and_single_formal_browsers(self):
         for condition,stage in [('r10.0','triage'),('r10.1','triage'),('r10.2','triage'),('r10.0','formal'),('r10.1','formal')]:
             data,freeze,fixtures=r10_raw(condition,stage)

@@ -1,5 +1,5 @@
 import { ApplicationRef, inject, Injectable, signal } from '@angular/core';
-import { FetchBackend, HttpBackend, HttpXhrBackend, HttpEventType, HttpInterceptorFn, provideHttpClient, withFetch, withInterceptors } from '@angular/common/http';
+import { FetchBackend, HttpBackend, HttpXhrBackend, HttpErrorResponse, HttpEventType, HttpInterceptorFn, provideHttpClient, withFetch, withInterceptors } from '@angular/common/http';
 import { provideRouter } from '@angular/router';
 import { defer, finalize, firstValueFrom, of, tap } from 'rxjs';
 import { DriveStore, DriveFile } from '../../src/app/features/drive/state/drive.store';
@@ -143,6 +143,19 @@ export async function configureR8(app: ApplicationRef, values: R8Fixture[], sele
     runtime.password = ''; // The original AuthService retains the JWT in RAM only.
     if (!authenticated || !auth.getToken()) throw new Error('R8_AUTHENTICATION_FAILED');
     c()['authSuccesses']++;
+    if (r10Condition) Object.assign(window, { r10NegativeRange: async () => {
+      const state = app.injector.get(AppStateService);
+      state.unlock();
+      const lockedBefore = state.isLocked();
+      try {
+        await firstValueFrom(app.injector.get(DriveService).downloadFileRange(expectedId(fixtures[0]), 0, 1023));
+        return { rejected: false };
+      } catch (error: unknown) {
+        return { rejected: true, angularHttpError: error instanceof HttpErrorResponse,
+          status: error instanceof HttpErrorResponse ? error.status : null, lockedBefore,
+          lockedAfter: state.isLocked(), authenticated: !!auth.getToken() };
+      }
+    } });
   } else app.injector.get(AppStateService).lock();
   if (realStore) {
     store = app.injector.get(DriveStore);

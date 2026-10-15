@@ -21,7 +21,7 @@ export function backendTraffic(text, fileIds) {
     responseBodyBytes: null, byteMetric: 'unavailable: native streaming log does not report body bytes' };
 }
 
-export async function observeRangeNetwork(context, page, mapping, { bootstrapHttp = false } = {}) {
+export async function observeRangeNetwork(context, page, mapping, { bootstrapHttp = false, optionsHttp = false } = {}) {
   const session = await context.newCDPSession(page);
   const allowed = new Map(mapping.map(row => [`http://127.0.0.1:42187/files/${row.fileId}/download`, row]));
   const data = { enabledBeforeNavigation: false, listenersDetached: false, sessionDetached: false,
@@ -34,19 +34,25 @@ export async function observeRangeNetwork(context, page, mapping, { bootstrapHtt
     ['http://127.0.0.1:42187/pending-uploads', { kind:'pending',method:'GET' }],
   ]);
   if (bootstrapHttp) data.bootstrapRequests = [];
+  if (optionsHttp) data.optionsRequests = [];
   const handlers = {
     'Network.requestWillBeSent': ({ requestId, request, type }) => {
       const fixture = allowed.get(request.url), range = header(request.headers, 'range');
       const other = bootstrapHttp ? bootstrap.get(request.url) : null;
+      if (optionsHttp && request.method === 'OPTIONS' && (fixture || other)) {
+        if (requests.has(requestId)) { data.duplicateRequestIds++; return; }
+        const row = {requestId,method:'OPTIONS',url:request.url,type,status:null,finished:false,failed:false};
+        requests.set(requestId,row);data.optionsRequests.push(row);return;
+      }
       if (other && request.method === other.method) {
         if (requests.has(requestId)) { data.duplicateRequestIds++; return; }
-        const row = { requestId,kind:other.kind,method:request.method,type,status:null,finished:false,failed:false,
+        const row = { requestId,kind:other.kind,method:request.method,url:request.url,type,status:null,finished:false,failed:false,
           fromDiskCache:null,fromServiceWorker:null,servedFromCache:false,encodedDataLength:null,headers:{} };
         requests.set(requestId,row); data.bootstrapRequests.push(row); return;
       }
       if (!fixture || request.method !== 'GET' || !range) return;
       if (requests.has(requestId)) { data.duplicateRequestIds++; return; }
-      const row = { requestId, fixture: fixture.fixture, fileId: fixture.fileId, range, type,
+      const row = { requestId, method:request.method,url:request.url,fixture: fixture.fixture, fileId: fixture.fileId, range, type,
         status: null, fromDiskCache: null, fromServiceWorker: null, servedFromCache: false,
         encodedDataLength: null, finished: false, failed: false, headers: {} };
       requests.set(requestId, row); data.requests.push(row);
@@ -65,10 +71,12 @@ export async function observeRangeNetwork(context, page, mapping, { bootstrapHtt
     'Network.requestServedFromCache': ({ requestId }) => { const row = requests.get(requestId); if (row) row.servedFromCache = true; },
   };
   for (const [event, handler] of Object.entries(handlers)) session.on(event, handler);
-  await session.send('Network.enable'); data.enabledBeforeNavigation = true;
-  return { data, close: async () => {
+  const close = async () => {
     for (const [event, handler] of Object.entries(handlers)) session.off(event, handler);
     data.listenersDetached = true; requests.clear();
     await session.detach(); data.sessionDetached = true;
-  } };
+  };
+  try { await session.send('Network.enable'); data.enabledBeforeNavigation = true; }
+  catch (error) { try { await close(); } catch (cleanupError) { throw new AggregateError([error,cleanupError],'R10_CDP_SETUP_AND_CLEANUP_FAILED'); } throw error; }
+  return { data, close };
 }

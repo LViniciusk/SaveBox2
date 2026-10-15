@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { networkGuardSnapshot, validateCleanNetwork, checkCase, strictHttpFailure,
-  validateHttpFailure, validatePreflightConsistency } from './ap06-preflight.mjs';
+  validateHttpFailure, validatePreflightConsistency, cleanupContext } from './ap06-preflight.mjs';
 import { observeRangeNetwork } from './ap06-r9-network.mjs';
 import { writeJsonAtomic } from './browser-memory-probe.mjs';
 
@@ -64,13 +64,15 @@ test('PENDING is persisted before execution, failure is atomic, bounded stack/di
   } finally {rmSync(dir,{recursive:true});}
 });
 test('PASS consistency rejects failures, missing conditions, pending cases and unfinished cleanup',()=>{
-  const receipt={cases:[{status:'PASS'}],browserClosed:true,preflight:{failures:[],contexts:[{condition:'r10.0',scenario:'positive',closed:true,
+  const receipt={cases:[{status:'PASS'}],browserClosed:true,preflight:{failures:[],contexts:[{condition:'r8.0',scenario:'positive',closed:true,
     routesRemoved:true,listenersDetached:true,sessionDetached:true,cleanupStatus:'PASS',guards:networkGuardSnapshot(clean())}]}};
-  validatePreflightConsistency(receipt,['r10.0']);
+  validatePreflightConsistency(receipt,['r8.0']);
   for(const change of [r=>r.preflight.failures.push({}),r=>r.cases[0].status='PENDING',r=>r.browserClosed=false,
     r=>r.preflight.contexts[0].closed=false,r=>r.preflight.contexts[0].cleanupStatus='FAIL',r=>r.preflight.contexts=[]]){
-    const r=structuredClone(receipt);change(r);assert.throws(()=>validatePreflightConsistency(r,['r10.0']));
+    const r=structuredClone(receipt);change(r);assert.throws(()=>validatePreflightConsistency(r,['r8.0']));
   }
+  const missing=structuredClone(receipt);missing.preflight.contexts[0].condition='r10.0';
+  assert.throws(()=>validatePreflightConsistency(missing,['r10.0']),/NEGATIVE_CONDITIONS_MISSING/);
 });
 test('observer OPTIONS is isolated and listener cleanup survives Network.enable/detach exceptions',async()=>{
   const sessions=[];
@@ -84,4 +86,11 @@ test('observer OPTIONS is isolated and listener cleanup survives Network.enable/
   const bad=new EventEmitter();let detached=false;bad.send=async()=>{throw new Error('enable failed');};bad.detach=async()=>{detached=true;};
   await assert.rejects(observeRangeNetwork({newCDPSession:async()=>bad},{},[]));
   assert.equal(bad.eventNames().length,0);assert.equal(detached,true);
+});
+test('unroute/detach exceptions still close the context and cannot report complete cleanup',async()=>{
+  const calls=[],record={};const handler=()=>{};
+  const errors=await cleanupContext({routes:[[url,handler]],observer:async()=>{calls.push('observer');throw Error('unit failure');},
+    cdp:{detach:async()=>{calls.push('detach');}},context:{unroute:async(u,h)=>{assert.equal(u,url);assert.equal(h,handler);calls.push('unroute');throw Error('unit failure');},close:async()=>calls.push('close')}},record);
+  assert.deepEqual(calls,['unroute','observer','detach','close']);assert.equal(errors.length,2);
+  assert.equal(record.routesRemoved,false);assert.equal(record.closed,true);
 });

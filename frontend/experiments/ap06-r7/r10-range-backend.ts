@@ -1,6 +1,6 @@
 import { inject, Injectable, InjectionToken } from '@angular/core';
 import { FetchBackend, HttpBackend, HttpRequest, HttpXhrBackend } from '@angular/common/http';
-import { validateBounds } from './range-adapter';
+import { parseRangeHeader } from './range-adapter';
 
 export type R10Condition = 'r10.0' | 'r10.1' | 'r10.2';
 export function selectR10Condition(value: unknown): R10Condition | null {
@@ -28,12 +28,10 @@ export function inspectRangeRequest(request: Pick<HttpRequest<unknown>, 'method'
   const range = request.headers.get('Range');
   if (range === null && OTHER_HTTP.has(`${request.method} ${request.urlWithParams}`)) return null;
   const file = files.get(request.urlWithParams);
-  const match = range === null ? null : /^bytes=(0|[1-9]\d*)-(0|[1-9]\d*)$/.exec(range);
-  if (!file || !match || request.method !== 'GET' || !request.headers.get('Authorization') || !request.withCredentials) {
+  if (!file || range === null || request.method !== 'GET' || !request.headers.get('Authorization') || !request.withCredentials) {
     throw new Error('R10_FORBIDDEN_HTTP_BOUNDARY');
   }
-  const start = Number(match[1]), end = Number(match[2]);
-  validateBounds(start, end, file.ciphertextBytes);
+  const { start, end } = parseRangeHeader(range, file.ciphertextBytes);
   return { id: file.id, start, end, total: file.ciphertextBytes, url: request.urlWithParams };
 }
 

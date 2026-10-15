@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSync } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-import { firstValueFrom, of } from 'rxjs';
+import { firstValueFrom, of, throwError } from 'rxjs';
 
 const bundle = buildSync({ stdin: { contents: "import '@angular/compiler'; export * from './experiments/ap06-r7/r10-range-backend.ts';",
   resolveDir: fileURLToPath(new URL('../', import.meta.url)) }, bundle: true, platform: 'node', format: 'esm', write: false });
@@ -53,4 +53,11 @@ test('selective backend delegates only authorized Ranges to Fetch and preserves 
   assert.equal(calls[0][1],range);assert.equal(calls[1][1],login);
   assert.throws(()=>R10RangeBackend.prototype.handle.call(backend,request(undefined,'bytes=0-999')));
   assert.equal(calls.length,2);
+});
+test('selective transport errors propagate once without XHR fallback or hidden retry', async()=>{
+  let fetchCalls=0,xhrCalls=0;
+  const error=new Error('synthetic transport failure');
+  const backend={allowlist:()=>allowlist,fetchBackend:{handle:()=>{fetchCalls++;return throwError(()=>error);}},xhr:{handle:()=>{xhrCalls++;return of('unexpected');}}};
+  await assert.rejects(firstValueFrom(R10RangeBackend.prototype.handle.call(backend,request())),e=>e===error);
+  assert.equal(fetchCalls,1);assert.equal(xhrCalls,0);
 });

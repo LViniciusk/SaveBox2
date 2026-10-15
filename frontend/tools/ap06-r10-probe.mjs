@@ -9,7 +9,7 @@ export const R10_CONDITIONS = { 'r10.0':{transport:'xhr',rangeType:'XHR',otherTy
 export async function configureR10Page(page, context, raw, origin, paths, condition) {
   if (!R10_CONDITIONS[condition]) throw new Error('R10_INVALID_CONDITION');
   await page.addInitScript(value => { window.ap06R10Condition=value; },condition);
-  return configureBackendObservation(page,context,raw,origin,paths,{bootstrapHttp:true});
+  return configureBackendObservation(page,context,raw,origin,paths,{bootstrapHttp:true,optionsHttp:true});
 }
 
 export const initializeR10Page = (page,fixtures) => initializeBackendPage(page,fixtures,'r10TransportProof');

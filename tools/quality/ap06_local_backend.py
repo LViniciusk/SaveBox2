@@ -12,7 +12,7 @@ from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / os.environ.get('AP06_EXPERIMENT_ROOT', '.quality/readiness-wave8')
-EXPERIMENT_ID = 'r10' if OUTPUT.name == 'readiness-wave10' else 'r8'
+EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2'}.get(OUTPUT.name,'r8')
 BACKEND_PORT, APP_PORT = 42187, 42088
 
 def free_port(port=0):
