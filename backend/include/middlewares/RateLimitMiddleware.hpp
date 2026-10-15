@@ -16,6 +16,9 @@
 
 #include "database/DatabasePool.hpp"
 #include "utils/ClientIp.hpp"
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+#include "utils/Ap06LocalRuntime.hpp"
+#endif
 #include "crow_all.h"
 
 struct RateLimitMiddleware {
@@ -49,6 +52,9 @@ struct RateLimitMiddleware {
     };
 
     void init(DatabasePool& pool, bool trust_forwarded = false) {
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+        verified_isolated_test_runtime_ = false;
+#endif
         pool_ = &pool;
         trust_forwarded_ = trust_forwarded;
 
@@ -61,7 +67,17 @@ struct RateLimitMiddleware {
         next_ban_refresh_ = std::chrono::steady_clock::now() + BAN_CACHE_REFRESH_INTERVAL;
     }
 
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+    void init_ap06_local(DatabasePool& pool, const Ap06LocalRuntime&) {
+        init(pool, false);
+        verified_isolated_test_runtime_ = true;
+    }
+#endif
+
     void before_handle(crow::request& req, crow::response& res, context&) {
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+        if (verified_isolated_test_runtime_ && ClientIp::is_actual_loopback_peer(req)) return;
+#endif
         if (req.method == crow::HTTPMethod::Options) return;
         const auto now_steady = std::chrono::steady_clock::now();
         const auto now_system = std::chrono::system_clock::now();
@@ -360,6 +376,9 @@ private:
     std::chrono::steady_clock::time_point next_ban_refresh_{};
     DatabasePool* pool_ = nullptr;
     bool trust_forwarded_ = false;
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+    bool verified_isolated_test_runtime_ = false;
+#endif
     std::shared_timed_mutex mutex_;
     std::atomic<int64_t> ddos_panic_until_epoch{0};
 };

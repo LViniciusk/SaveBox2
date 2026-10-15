@@ -2,6 +2,7 @@
 import argparse
 import json
 import math
+import os
 import re
 from pathlib import Path
 import sys
@@ -127,20 +128,21 @@ def unit_browser(wave):
     if target.exists() or (wave.output/'tooling/freeze.json').exists(): raise WaveFailure('R10_DEVELOPMENT_BROWSER_LIMIT')
     env,assets=environment(wave,wave.output/'tooling','r10.0')
     env.update(AP06_R10_CHECK='1',AP06_R7_UNIT_OUTPUT=str(target))
-    if wave.output.name=='readiness-wave10-r2':
+    r3=wave.output.name=='readiness-wave10-r3'
+    if wave.output.name in ('readiness-wave10-r2','readiness-wave10-r3'):
         if wave.git('status','--porcelain').strip(): raise WaveFailure('R10_R2_COMMITTED_IMPLEMENTATION_REQUIRED')
         if read(wave.output/'baseline/prechecks.json')['status']!='PASS': raise WaveFailure('R10_R2_PRECHECKS_NOT_READY')
         with (wave.output/'pipeline/development-reservation.json').open('x') as stream:
-            json.dump({'campaign':'AP-06-R10-R2','developmentMaximum':1,'measurementMaximum':0,'retries':0,
+            json.dump({'campaign':'AP-06-R10-R3' if r3 else 'AP-06-R10-R2','developmentMaximum':1,'measurementMaximum':9 if r3 else 0,'retries':0,
                 'implementationHead':wave.git('rev-parse','HEAD').strip()},stream)
-        publish(wave,'r10-r2-development-reserved',{'evidence/r10-r2/development-reservation.json':wave.output/'pipeline/development-reservation.json'})
+        publish(wave,'development-reserved' if r3 else 'r10-r2-development-reserved',{'evidence/development-reservation.json' if r3 else 'evidence/r10-r2/development-reservation.json':wave.output/'pipeline/development-reservation.json'})
     with media_server(media_files(wave),True,'application/octet-stream',assets,port=42088) as (origin,stats):
         env['AP06_R5_MEDIA_ORIGIN']=origin
         try:wave.command('angular-r10-unit',[wave.node,'tools/ap06-angular-integration-check.mjs'],wave.root/'frontend',env)
         finally:
             wave.save('pipeline/angular-unit-transport.json',stats)
-            if wave.output.name=='readiness-wave10-r2' and target.exists():
-                publish(wave,'r10-r2-preflight-complete',{'evidence/r10-r2/preflight.raw.json':target})
+            if wave.output.name in ('readiness-wave10-r2','readiness-wave10-r3') and target.exists():
+                publish(wave,'preflight-complete' if r3 else 'r10-r2-preflight-complete',{'evidence/preflight.raw.json' if r3 else 'evidence/r10-r2/preflight.raw.json':target})
     unit=read(target)
     if unit['status']!='PASS' or unit['unitBrowserLaunches']!=1: raise WaveFailure('R10_PREFLIGHT_FAILED')
     fixtures=read(wave.output/'fixtures/manifest.json');mapping=read(wave.output/'baseline/backend-authority.json')['fileMapping']
@@ -157,14 +159,27 @@ def unit_browser(wave):
         raise WaveFailure('R10_TRANSPORT_WORKLOAD_DIFFERS')
     wave.save('baseline/workload.json',{'rangesPerCycle':sequences[0],'requestsPerCycle':len(sequences[0]),'bytesPerCycle':totals[0],
         'cycles':6,'workerTransferBytesSentPerCycle':transfer_totals[0],'derivedBeforeFreeze':True,'allThreeTransportsEqual':True})
+    if r3:
+        wave.save('baseline/preflight-ready.json',{'status':'PASS_AP06_R10_R3_PREFLIGHT_READY','developmentChromium':1,'retries':0})
+        publish(wave,'preflight-ready',{'evidence/preflight-ready.json':wave.output/'baseline/preflight-ready.json'})
     print(json.dumps({'status':'PASS','developmentChromium':1,'checks':len(unit['cases'])}),flush=True)
 
 
 def freeze(wave):
     if read(wave.output/'baseline/custody-readback.json')['status']!='PASS': raise WaveFailure('R10_CUSTODY_NOT_READY')
-    freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r10-probe.mjs',runner_path=__file__,
-        extra_files=('baseline/custody-readback.json','baseline/formal-order.json','baseline/native-reuse.json','baseline/red-node.txt','baseline/red-python.txt','baseline/custody-preflight-correction.json'),
-        extra_publications=('custody','custody-tooling-correction'),protocol={'campaign':'AP-06-R10','conditions':CONDITIONS,
+    r3=wave.output.name=='readiness-wave10-r3'
+    if r3 and read(wave.output/'baseline/preflight-ready.json')['status']!='PASS_AP06_R10_R3_PREFLIGHT_READY':
+        raise WaveFailure('R10_R3_PREFLIGHT_NOT_READY')
+    extra=('baseline/prechecks.json','baseline/experimental-backend.json','baseline/startup-rejections.json',
+        'baseline/listener-isolation.json','baseline/network-bypass.json','baseline/network-spoof-guard.json',
+        'baseline/postgres-toolchain.json','baseline/backend-isolation.json','baseline/production-scope.json','baseline/acl-readback.json',
+        'baseline/native-production.xml','baseline/native-experimental.xml',
+        'baseline/red-cpp.txt','tooling/prepare.py','tooling/prechecks.py','tooling/check-production.py',
+        'tooling/backend-build/nanika_ap06_local_server.exe','tooling/backend-build/nanika_ap06_tests.exe',
+        'tooling/backend-build/CMakeCache.txt','tooling/backend-build/compile_commands.json') if r3 else ('baseline/native-reuse.json','baseline/custody-preflight-correction.json')
+    freeze_implementation(wave,output=wave.output.relative_to(wave.root).as_posix(),harness='frontend/tools/ap06-r10-probe.mjs',runner_path=__file__,
+        extra_files=('baseline/custody-readback.json','baseline/formal-order.json','baseline/red-node.txt','baseline/red-python.txt',*extra),
+        extra_publications=('custody','custody-tooling-correction'),protocol={'campaign':'AP-06-R10-R3' if r3 else 'AP-06-R10','conditions':CONDITIONS,
             'formalOrder':list(FORMAL_ORDER),'measurementOrder':[list(row) for row in SCHEDULE]})
 
 
@@ -195,6 +210,8 @@ def campaign_run(wave):
         decision={'status':'BLOCKED_AP06_R10_INVALID_MEASUREMENT','reason':str(error) if isinstance(error,(ValueError,WaveFailure)) else type(error).__name__}
     decision.update(ap06='OPEN',results=results,triage=triage,formal=formal,retries=0,
         browserLaunches=sum(row['browserLaunches'] for row in ledger),launchAttempts=sum(row['launchAttempts'] for row in ledger))
+    if wave.output.name=='readiness-wave10-r3':
+        decision['status']=decision['status'].replace('AP06_R10_','AP06_R10_R3_')
     wave.save('final/decision.json',decision);publish(wave,'campaign-decision',{'evidence/campaign-decision.json':wave.output/'final/decision.json'})
     print(json.dumps({key:value for key,value in decision.items() if key not in ('results','triage','formal')}),flush=True)
     return 0 if decision['status'].startswith('PASS_') else 1
@@ -203,12 +220,22 @@ def campaign_run(wave):
 def main():
     parser=argparse.ArgumentParser(description=__doc__);actions=parser.add_mutually_exclusive_group(required=True)
     for option in ('unit-browser','r2-unit-browser','freeze','verify-freeze','validated-campaign'):actions.add_argument('--'+option,action='store_true')
-    actions.add_argument('--publish-raw',type=Path);parser.add_argument('--snapshot');args=parser.parse_args()
+    actions.add_argument('--publish-raw',type=Path);parser.add_argument('--snapshot');parser.add_argument('--r3',action='store_true');args=parser.parse_args()
     wave=Wave(Path(__file__).resolve().parents[2]);wave.output=wave.root/OUTPUT
     if args.r2_unit_browser: wave.output=wave.root/'.quality/readiness-wave10-r2'
+    if args.r3 or os.environ.get('AP06_EXPERIMENT_ROOT')=='.quality/readiness-wave10-r3':
+        wave.output=wave.root/'.quality/readiness-wave10-r3'
     with tempfile.TemporaryDirectory(prefix='r10-logs-',dir=wave.output/'pipeline') as temporary:
         wave.temp=Path(temporary)
-        if args.unit_browser or args.r2_unit_browser:unit_browser(wave);return 0
+        if args.unit_browser or args.r2_unit_browser:
+            try:unit_browser(wave)
+            except Exception as error:
+                if wave.output.name=='readiness-wave10-r3':
+                    wave.save('final/decision.json',{'campaign':'AP-06-R10-R3','status':'BLOCKED_AP06_R10_R3_PREFLIGHT_FAILED',
+                        'ap06':'OPEN','reason':str(error) if isinstance(error,WaveFailure) else type(error).__name__,'retries':0})
+                    publish(wave,'preflight-stop',{'evidence/preflight-stop.json':wave.output/'final/decision.json'})
+                raise
+            return 0
         if args.freeze:freeze(wave);return 0
         if args.verify_freeze:verify_freeze(wave,read(wave.output/'tooling/freeze.json'));return 0
         if args.publish_raw:

@@ -1,10 +1,5 @@
 import { parseRangeHeader } from '../experiments/ap06-r7/range-adapter.ts';
 
-export function credentialAuthDelay(attempts,now,readyAt) {
-  // Native auth permits five/minute; an initial full window also covers API preparation.
-  return Math.max(0,readyAt-now,attempts.length>=5?attempts.at(-5)+60250-now:0);
-}
-
 export function networkGuardSnapshot(raw) {
   return {pageErrors:raw.pageErrors,rejectedRequests:raw.network?.rejectedRequests,
     externalRequests:raw.network?.externalRequests,unexpectedRequests:raw.network?.unexpectedRequests,recoveryWarnings:raw.recoveryWarnings};

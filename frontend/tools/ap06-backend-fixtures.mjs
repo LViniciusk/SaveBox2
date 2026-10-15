@@ -98,6 +98,16 @@ if (process.argv.includes('--cleanup')) {
   save('baseline/backend-authority.json', { status: 'PASS', fileMapping: mapping, checks: tests,
     authentication: 'original credential endpoint; JWT retained only in memory', preparationOutsideMeasurement: true,
     ciphertextReencrypted: false, publicUploadEndpoints: true, backendOrigin: config.backendOrigin });
+  if (out.endsWith('readiness-wave10-r3')) {
+    for (let i=0;i<20;i++) token=await login(accounts[0]);
+    const row=mapping[0],expected=readFileSync(join(out,'fixtures/cipher','video-0.bin')).subarray(0,16);
+    for (let i=0;i<5002;i++) {
+      const response=await request(`/files/${row.fileId}/download`,{headers:{Range:'bytes=0-15'}},token);
+      assert.equal(response.status,206);assert.deepEqual(Buffer.from(await response.arrayBuffer()),expected);
+    }
+    save('baseline/network-bypass.json',{status:'PASS',legitimateLogins:20,authenticatedRanges:5002,
+      rangeBytesEach:16,unexpected429:0,unexpectedBan:0,actualPeer:'127.0.0.1',productionPolicyUnchanged:true});
+  }
   token = ''; foreignToken = '';
   console.log(JSON.stringify({ status: 'PASS', files: mapping.length, checks: tests.length }));
 }

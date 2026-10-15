@@ -28,6 +28,9 @@ class AuthorityFailure(WaveFailure):
 
 def publish(wave, name, files):
     config = read(wave.output/'baseline/authority-config.local.json')
+    if wave.output.name == 'readiness-wave10-r3':
+        name = name if name.startswith('r10-r3-') else 'r10-r3-'+name
+        files = {'r10-r3/'+relative:source for relative,source in files.items()}
     try:
         return publish_snapshot(Path(config['AP06_AUTHORITY_ROOT']), config['identity'], name, files, wave.output/'pipeline')
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
@@ -43,7 +46,8 @@ def media_files(wave):
 
 def verify_freeze(wave, freeze):
     config = read(wave.output/'baseline/authority-config.local.json')
-    for name in ('corpus-publication', 'implementation', 'freeze', *freeze.get('extraPublications',[])):
+    for name in ('corpus-publication', freeze.get('implementationPublication','implementation'),
+                 freeze.get('freezePublication','freeze'), *freeze.get('extraPublications',[])):
         try: verify_publication(Path(config['AP06_AUTHORITY_ROOT']), config['identity'], name)
         except (OSError, ValueError, subprocess.CalledProcessError) as error:
             raise AuthorityFailure('R9_AUTHORITY_READBACK_FAILED_' + (str(error) if isinstance(error, ValueError) else type(error).__name__)) from error
@@ -135,6 +139,8 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
     if fixture_hash != unit['multiplexedContract']['fixtureHash']: raise WaveFailure('R9_CORPUS_CHANGED_SINCE_PREFLIGHT')
     tracked=wave.git('ls-files').splitlines()
     files={path:wave.root/path for path in tracked}
+    if wave.output.name == 'readiness-wave10-r3':
+        files['backend/include/crow_all.h'] = wave.root/'backend/include/crow_all.h'
     for path in products: files[path]=wave.root/path
     for name in ('savebox_server.exe','nanika_e2e_fixture.exe'):
         path=wave.output/'tooling/backend-build'/name;files[path.relative_to(wave.root).as_posix()]=path
@@ -145,14 +151,17 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
         path=wave.output/name;files[path.relative_to(wave.root).as_posix()]=path
     receipt=publish(wave,'implementation',{'tooling/source/'+name:path for name,path in files.items()})
     config=read(wave.output/'baseline/authority-config.local.json');authority=Path(config['AP06_AUTHORITY_ROOT'])
+    implementation_name = 'r10-r3-implementation' if wave.output.name == 'readiness-wave10-r3' else 'implementation'
+    freeze_name = 'r10-r3-freeze' if wave.output.name == 'readiness-wave10-r3' else 'freeze'
     freeze={'campaign':'AP-06-R9-R2','status':'FROZEN','implementationHead':wave.git('rev-parse','HEAD').strip(),
+        'implementationPublication':implementation_name,'freezePublication':freeze_name,
         'sourceHash':owner._tree_sha256(wave.root,'frontend/src'),'fixtureHash':fixture_hash,
         'harnessHash':sha256(wave.root/harness),'runnerHash':sha256(Path(runner_path or __file__)),
         'appProducts':products,'workers':workers,'pageScriptSha256':unit['pageScriptSha256'],
         'multiplexedContract':unit['multiplexedContract'],'backendAuthoritySha256':sha256(wave.output/'baseline/backend-authority.json'),
         'backendFileMapping':read(wave.output/'baseline/backend-authority.json')['fileMapping'],
         'workload':read(wave.output/'baseline/workload.json'),'files':{name:sha256(path) for name,path in files.items()},
-        'publicationHashes':{'corpus-publication':sha256(authority/'manifests/corpus-publication.json'),'implementation':receipt['manifestSha256']},
+        'publicationHashes':{'corpus-publication':sha256(authority/'manifests/corpus-publication.json'),implementation_name:receipt['manifestSha256']},
         'chromiumVersion':VERSION,'budget':read(wave.output/'baseline/budget.json'),
         'checkpoints':dict.fromkeys(CHECKPOINTS,'PASS')}
     freeze['extraPublications']=list(extra_publications)

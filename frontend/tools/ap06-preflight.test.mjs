@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { networkGuardSnapshot, validateCleanNetwork, checkCase, strictHttpFailure,
-  validateHttpFailure, validatePreflightConsistency, cleanupContext, credentialAuthDelay } from './ap06-preflight.mjs';
+  validateHttpFailure, validatePreflightConsistency, cleanupContext } from './ap06-preflight.mjs';
 import { observeRangeNetwork } from './ap06-r9-network.mjs';
 import { writeJsonAtomic } from './browser-memory-probe.mjs';
 
@@ -19,15 +19,11 @@ const negative=()=>({enabledBeforeNavigation:true,listenersDetached:true,session
   requests:[{requestId:'a',method:'GET',url,type:'XHR',status:403,finished:true,failed:false,range:'bytes=0-9'}],
   optionsRequests:[{requestId:'o',method:'OPTIONS',url,type:'Preflight',status:204,finished:true,failed:false}]});
 
-test('credential pacing respects native five/minute limit, initial API window and never retries',()=>{
-  const source=readFileSync(new URL('../../backend/include/middlewares/RateLimitMiddleware.hpp',import.meta.url),'utf8');
-  assert.match(source,/AUTH_LIMIT = 5/);assert.match(source,/now_steady - client.window_start >= std::chrono::minutes\(1\)/);
-  assert.equal(credentialAuthDelay([],0,60250),60250);
-  assert.equal(credentialAuthDelay([60250,60300,60350,60400],61000,60250),0);
-  assert.equal(credentialAuthDelay([60250,60300,60350,60400,60450],61000,60250),59500);
-  assert.equal(credentialAuthDelay([60250,60300,60350,60400,60450],120500,60250),0);
-  assert.equal(credentialAuthDelay([60250,60300,60350,60400,60450,120500],120501,60250),49);
+test('R10 laboratory preflight has no credential pacing or artificial auth delay',()=>{
+  const source=readFileSync(new URL('./ap06-angular-integration-check.mjs',import.meta.url),'utf8');
+  for(const name of ['credentialAuthDelay','authReadyAt','authSchedule'])assert.equal(source.includes(name),false);
 });
+
 test('an auth 429 has an explicit status gate and actual/expected without copying the raw error message',async()=>{
   const result={cases:[],preflight:{failures:[]}};
   await assert.rejects(checkCase(result,()=>{},'r10.2','GET 403',async()=>{throw new Error('unit-secret');},async()=>({
