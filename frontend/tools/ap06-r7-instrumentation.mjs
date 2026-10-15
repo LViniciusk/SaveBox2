@@ -10,6 +10,9 @@ export function newIntegrationCounters() {
     'workerErrors', 'detachedTransfers', 'transferFailures', 'mediaSourcesCreated', 'mediaSourcesClosed', 'sourceBuffersCreated',
     'sourceBuffersReleased', 'objectUrlsCreated', 'objectUrlsRevoked', 'pendingOperations', 'pendingAppends',
     'bytesAppended', 'timersLive', 'experimentalListeners', 'unhandledRejections', 'gcRemoveCalls',
+    'storeLoadStarted', 'storeLoadCompleted', 'storeFileResolved', 'storeEffectsSettled',
+    'authAttempts', 'authSuccesses', 'http206Validated', 'jwtRangesValidated',
+    'backendFileIdMatches', 'unexpectedPeripheralOperations', 'outstandingSubscriptions',
   ].map(key => [key, 0])), sessions: [] };
 }
 
@@ -19,7 +22,8 @@ export function integrationSnapshot(counters) {
     observedMediaSourcesLive: c.mediaSourcesCreated - c.mediaSourcesClosed,
     observedSourceBuffersLive: c.sourceBuffersCreated - c.sourceBuffersReleased,
     observedObjectUrlsLive: c.objectUrlsCreated - c.objectUrlsRevoked,
-    componentsLive: c.componentsMounted - c.componentsDestroyed, pendingOperations: c.pendingOperations,
+    componentsLive: c.componentsMounted - c.componentsDestroyed, outstandingSubscriptions: c.outstandingSubscriptions,
+    pendingOperations: c.pendingOperations,
     observedPendingAppends: c.pendingAppends, timersLive: c.timersLive, experimentalListeners: c.experimentalListeners };
 }
 

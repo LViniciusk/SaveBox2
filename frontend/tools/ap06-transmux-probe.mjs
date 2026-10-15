@@ -583,7 +583,16 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
         }
       } catch { cleanupOk = false; }
       if (browser) {
-        try { await browser.close(); }
+        try {
+          await browser.close();
+          if (process.env.AP06_R8_PID_AUDITOR && run.samples.length) {
+            const pids = [...new Set(run.samples.flatMap(sample => sample.processMemory.processes.map(row => row.pid)))];
+            const { stdout } = await exec(process.env.WAVE1_PYTHON,
+              [process.env.AP06_R8_PID_AUDITOR, '--closed-pids', pids.join(',')], { windowsHide: true });
+            run.processExitAudit = JSON.parse(stdout);
+            if (run.processExitAudit.status !== 'PASS') cleanupOk = false;
+          }
+        }
         catch { cleanupOk = false; }
       }
       run.cleanupStatus = cleanupOk ? 'PASS' : 'FAIL';

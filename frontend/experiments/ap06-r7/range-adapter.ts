@@ -13,7 +13,7 @@ export function validateBounds(start: number, end: number, total: number): void 
   }
 }
 
-export function validatePartialResponse(response: Response, start: number, end: number, total: number): void {
+export function validatePartialResponse(response: { status: number; headers: { get(name: string): string | null } }, start: number, end: number, total: number): void {
   validateBounds(start, end, total);
   if (response.status !== 206 || response.headers.get('Content-Range') !== `bytes ${start}-${end}/${total}` ||
       response.headers.get('Content-Length') !== String(end - start + 1)) throw new Error('INVALID_RANGE_RESPONSE');
