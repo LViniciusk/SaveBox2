@@ -69,8 +69,8 @@ def claim_stage(output, condition, stage):
     return path
 
 
-def build_products(root):
-    app = root / OUTPUT / 'tooling/app'
+def build_products(root, output=OUTPUT):
+    app = root / output / 'tooling/app'
     assets = {'/': (app / 'browser/index.html', 'text/html; charset=utf-8')}
     for path in (app / 'browser').iterdir():
         if path.suffix in ('.js', '.css'):
@@ -123,6 +123,11 @@ def expected_source_buffers(fixtures, cycle):
 
 
 def validate_condition(raw, condition, stage, freeze, fixtures):
+    return validate_integration_condition(raw, condition, stage, freeze, fixtures,
+        {'r8.0': 'component', 'r8.1': 'store', 'r8.2': 'backend'}[condition])
+
+
+def validate_integration_condition(raw, condition, stage, freeze, fixtures, mode, direct_fetch=False):
     expected_source_buffers(fixtures, 0)
     if freeze.get('multiplexedContract') != {'fixtureHash': freeze['fixtureHash'],
             'workerHashes': {kind: row['sha256'] for kind, row in freeze['workers'].items()},
@@ -130,15 +135,15 @@ def validate_condition(raw, condition, stage, freeze, fixtures):
         raise WaveFailure('R8_MULTIPLEXED_CONTRACT_NOT_VERIFIED')
     identities = {'playwrightRoutingInstalled': True, 'fetchInterceptionInstalled': False,
         'videoStreamServiceUsed': True, 'angularOrBackendUsed': True,
-        'videoPlayerComponentUsed': True, 'backendUsed': condition == 'r8.2',
+        'videoPlayerComponentUsed': True, 'backendUsed': mode == 'backend',
         'localRequestsIntercepted': False, 'fullKasumiContainer': True}
     validate_raw(raw, stage, CRYPTO, freeze['sourceHash'], freeze['fixtureHash'], freeze['harnessHash'],
         freeze['runnerHash'], VERSION, control_lifecycle=False, identity_expectations=identities)
     if raw.get('condition') != condition or raw.get('autoplayArgs') != AUTOPLAY:
         raise WaveFailure('R8_CONDITION_OR_PROTOCOL_CHANGED')
-    if raw.get('driveStoreUsed') is not (condition != 'r8.0'):
+    if raw.get('driveStoreUsed') is not (mode != 'component'):
         raise WaveFailure('R8_STORE_BOUNDARY_CHANGED')
-    if condition == 'r8.2' and (raw.get('backendAuthoritySha256') != freeze['backendAuthoritySha256'] or
+    if mode == 'backend' and (raw.get('backendAuthoritySha256') != freeze['backendAuthoritySha256'] or
             raw.get('backendFileMapping') != freeze['backendFileMapping']):
         raise WaveFailure('R8_BACKEND_AUTHORITY_CHANGED')
     if raw.get('experimentalAppProducts') != freeze['appProducts'] or raw.get('pageScriptSha256') != freeze['pageScriptSha256']:
@@ -181,14 +186,14 @@ def validate_condition(raw, condition, stage, freeze, fixtures):
                 'sourceBuffersCreated': buffers, 'sourceBuffersReleased': buffers}
             if any(c.get(key) != value for key, value in expected.items()):
                 raise WaveFailure('R8_OBSERVED_LIFECYCLE_INCOMPLETE')
-            store_used, backend_used = int(condition != 'r8.0'), int(condition == 'r8.2')
+            store_used, backend_used = int(mode != 'component'), int(mode == 'backend')
             expected_r8 = {'storeLoadStarted': store_used, 'storeLoadCompleted': store_used,
                 'storeEffectsSettled': store_used, 'storeFileResolved': sessions * store_used,
                 'authAttempts': backend_used, 'authSuccesses': backend_used,
                 'backendFileIdMatches': sessions * backend_used, 'outstandingSubscriptions': 0,
                 'unexpectedPeripheralOperations': 0,
                 'http206Validated': c.get('rangeRequestsCompleted') if backend_used else 0,
-                'jwtRangesValidated': c.get('rangeRequestsStarted') if backend_used else 0}
+                'jwtRangesValidated': c.get('rangeRequestsStarted') if backend_used and not direct_fetch else 0}
             if any(c.get(key) != value for key, value in expected_r8.items()):
                 raise WaveFailure('R8_STORE_AUTH_OR_HTTP_CONTRACT_INVALID')
             if any(c.get(key) != 0 for key in ('initializeFailures', 'playbackFailures', 'rangeRequestsFailed',
@@ -202,7 +207,7 @@ def validate_condition(raw, condition, stage, freeze, fixtures):
             rows = sample['counters'].get('sessions', [])
             if len(rows) != sessions or [row.get('fixture') for row in rows] != list(range(3)) * cycle:
                 raise WaveFailure('R8_SESSION_IDENTITIES_INCOMPLETE')
-            selected = {'r8.0': 'component', 'r8.1': 'store', 'r8.2': 'backend'}[condition]
+            selected = mode
             for row in rows:
                 times = [row.get(key) for key in ('mountedMs', 'canplayMs', 'playbackMs', 'closeMs', 'maxCurrentTime')]
                 if (row.get('mode') != selected or any(type(value) not in (int, float) or not math.isfinite(value) for value in times) or
@@ -220,8 +225,8 @@ def validate_condition(raw, condition, stage, freeze, fixtures):
     return checked_classification(raw['summary'])
 
 
-def environment(wave, directory, condition='r8.0', stage='triage', freeze=None):
-    assets, products, workers = build_products(wave.root)
+def environment(wave, directory, condition='r8.0', stage='triage', freeze=None, output=OUTPUT):
+    assets, products, workers = build_products(wave.root, output)
     manifest = wave.output / 'fixtures/manifest.json'
     env = dict(wave.env, AP06_R5_MODE=CRYPTO, AP06_R5_STAGE=stage, AP06_R5_ARTIFACT_DIR=str(directory),
         AP06_R5_FIXTURE_MANIFEST=str(manifest), AP06_R5_CHROMIUM_VERSION=VERSION, AP06_R6_CONDITION=condition,

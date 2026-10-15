@@ -49,9 +49,9 @@ export async function configureIntegrationPage(page, context, raw, origin, allow
   });
 }
 
-export async function initializeIntegrationPage(page, fixtures, condition) {
+export async function initializeIntegrationPage(page, fixtures, condition, runtimeOverride) {
   await page.waitForFunction(() => window.r7Ready === true, null, { timeout: 20000 });
-  const runtime = condition === 'r8.2' ? JSON.parse(readFileSync(process.env.AP06_R8_PRIVATE_CONFIG, 'utf8')) : undefined;
+  const runtime = runtimeOverride ?? (condition === 'r8.2' ? JSON.parse(readFileSync(process.env.AP06_R8_PRIVATE_CONFIG, 'utf8')) : undefined);
   await page.evaluate(async ({ fixtures, mode, runtime }) => {
     await window.r7Configure(fixtures, mode, runtime);
     window.r5RunFixture = fixture => window.r7Run(fixture);

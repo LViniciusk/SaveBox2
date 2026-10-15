@@ -488,7 +488,7 @@ export function ownershipSnapshot(counters) {
 
 export async function runTransmuxProbe({ pageScript = transmuxPageScript(), countersFactory = newTransmuxCounters,
   cleanupValidator = validateCleanupOwnership, functionalValidator = validateTransmuxOwnership, snapshot = ownershipSnapshot,
-  launchOptions = {}, configurePage = null, initializePage = null, identity = {} } = {}) {
+  launchOptions = {}, configurePage = null, initializePage = null, identity = {}, beforeRun = null, afterRun = null } = {}) {
   const expectedChromiumVersion = validateExpectedChromiumVersion(process.env.AP06_R5_CHROMIUM_VERSION);
   const { AP06_R5_MODE: mode, AP06_R5_STAGE: stage, AP06_R5_ARTIFACT_DIR: artifactDir,
     AP06_R5_MEDIA_ORIGIN: origin, AP06_R5_FIXTURE_MANIFEST: manifestPath,
@@ -518,18 +518,19 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
   const flush = () => writeJsonAtomic(output, raw);
   flush();
   for (let repetition = 1; repetition <= (stage === 'triage' ? 1 : 3); repetition++) {
+    if (beforeRun) await beforeRun(raw, output);
     const runId = `${stage}-${process.env.AP06_R6_CONDITION || mode}-r${repetition}`;
     const run = { runId, mode, functionalStatus: 'FAIL', cleanupStatus: 'FAIL', browserVersion: null,
       playbackSessions: 0, extendedForPlateau: false, samples: [] };
     raw.runs.push(run); raw.launchAttempts++; flush();
-    let browser = null, page = null, pageInitialized = false;
+    let browser = null, page = null, pageInitialized = false, closeObservation = null;
     try {
       browser = await chromium.launch(launchOptions); raw.browserLaunches++; flush();
       run.browserVersion = browser.version();
       if (run.browserVersion !== expectedChromiumVersion) throw new Error('CHROMIUM_VERSION_MISMATCH');
       const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block' });
       page = await context.newPage();
-      if (configurePage) await configurePage(page, context, raw);
+      if (configurePage) closeObservation = await configurePage(page, context, raw);
       await page.addInitScript({ content: pageScript });
       await page.goto(origin);
       await page.evaluate(({ counters, transmux, crypto }) => {
@@ -582,6 +583,9 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
           cleanupValidator(state.counters, state.mediaNodes, mode);
         }
       } catch { cleanupOk = false; }
+      if (closeObservation) {
+        try { await closeObservation(); } catch { cleanupOk = false; }
+      }
       if (browser) {
         try {
           await browser.close();
@@ -601,6 +605,7 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
         sample.cleanupStatus = run.cleanupStatus;
       }
       flush();
+      if (afterRun) await afterRun(raw, output);
     }
     if (run.functionalStatus !== 'PASS' || run.cleanupStatus !== 'PASS') break;
   }

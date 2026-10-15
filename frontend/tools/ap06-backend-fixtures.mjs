@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { executeFixture } from './e2e-fixture-characterization.mjs';
 import { generateCredentials } from '../e2e/support/session.ts';
 
-const root = resolve(import.meta.dirname, '../..'), out = join(root, '.quality/readiness-wave8');
+const root = resolve(import.meta.dirname, '../..'), out = resolve(root, process.env.AP06_EXPERIMENT_ROOT ?? '.quality/readiness-wave8');
 const config = JSON.parse(readFileSync(join(out, 'baseline/backend-runtime.local.json'), 'utf8'));
 Object.assign(process.env, config.environment);
 const save = (name, data) => writeFileSync(join(out, name), JSON.stringify(data, null, 2) + '\n');
@@ -18,7 +18,7 @@ if (process.argv.includes('--cleanup')) {
   const results = [];
   for (const account of credentials) {
     const result = await fixture('cleanup', { username: account.username });
-    assert.equal(result.result, 'PASS'); results.push({ status: result.result, fileIds: result.fileIds ?? [] });
+    assert.equal(result.result, 'PASS'); results.push({ status: result.result, fileIds: result.fileIds ?? [], removedFileCount: result.removedFileCount ?? null });
     account.password = ''; account.vaultPhrase = '';
   }
   save('pipeline/backend-account-cleanup.json', { status: 'PASS', accounts: results.length, results });
