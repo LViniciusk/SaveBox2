@@ -27,4 +27,3 @@ export async function validateContainer(kasumi, plaintext, encrypted, material) 
     chunkCount: chunks, macBytesPerChunk: 16, lastChunkBytes: plaintext.size - (chunks - 1) * 4194304,
     roundTripSha256: hash.digest('hex'), authenticatedMetadata: true };
 }
-
