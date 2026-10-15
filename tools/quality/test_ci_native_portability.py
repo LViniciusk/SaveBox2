@@ -26,7 +26,7 @@ class NativePortabilityTests(unittest.TestCase):
         self.assertRegex(self.backend_workflow, r"(?m)^  backend-windows-msvc:\s*$")
         self.assertIn("name: Backend / Windows MSVC", self.backend_workflow)
         self.assertIn("runs-on: windows-2022", self.backend_workflow)
-        self.assertIn('Visual Studio 17 2022', self.backend_workflow)
+        self.assertIn('Ninja Multi-Config', self.backend_workflow)
         self.assertIn('CMAKE_CXX_COMPILER_ID.*MSVC', self.backend_workflow)
         self.assertNotIn("msys2/setup-msys2", self.backend_workflow)
         self.assertNotIn("MinGW Makefiles", self.backend_workflow)
@@ -35,6 +35,43 @@ class NativePortabilityTests(unittest.TestCase):
         self.assertNotIn("g++.exe", self.backend_workflow)
         self.assertIn("--rng-seed 60102", self.backend_workflow)
         self.assertIn("$vcpkgRoot\\debug\\bin;$vcpkgRoot\\bin", self.backend_workflow)
+
+    def test_msvc_cache_uses_pinned_actions_and_embedded_debug_symbols(self) -> None:
+        job = self.backend_workflow.split("  backend-windows-msvc:", 1)[1].split("  backend-linux-coverage:", 1)[0]
+        self.assertIn('SCCACHE_GHA_ENABLED: "true"', job)
+        self.assertIn('ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756', job)
+        self.assertIn('mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba', job)
+        self.assertIn('version: "v0.16.0"', job)
+        self.assertIn("arch: x64", job)
+        self.assertIn("vsversion: '2022'", job)
+        self.assertLess(job.index('Prepare vcpkg binary cache'), job.index('Setup MSVC'))
+        self.assertLess(job.index('Setup MSVC'), job.index('Setup sccache'))
+        self.assertNotIn('-A x64', job)
+        for option in ('CMAKE_CXX_COMPILER=cl', 'CMAKE_CXX_COMPILER_LAUNCHER=sccache',
+                       'CMAKE_POLICY_DEFAULT_CMP0141=NEW', 'CMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded'):
+            self.assertIn('-D' + option, job)
+        self.assertIn('CMAKE_CXX_COMPILER_ID.*MSVC', job)
+        self.assertIn('ninja -C backend/build-msvc -f build-Debug.ninja -t commands', job)
+        self.assertIn("$commands -match 'sccache.*cl\\.exe'", job)
+        self.assertIn('/Z7', job)
+        self.assertIn('ACTIONS_RESULTS_URL -or -not $env:ACTIONS_RUNTIME_TOKEN', job)
+        self.assertNotIn('actions: write', job)
+
+    def test_msvc_cache_statistics_and_native_failures_remain_visible(self) -> None:
+        job = self.backend_workflow.split("  backend-windows-msvc:", 1)[1].split("  backend-linux-coverage:", 1)[0]
+        self.assertIn('timeout-minutes: 60', job)
+        self.assertIn('if ($LASTEXITCODE -ne 0) { throw "MSVC CMake configuration failed" }', job)
+        self.assertIn('if ($buildExitCode -ne 0) { throw "MSVC native build failed" }', job)
+        self.assertIn('MSVC backend tests failed with exit code $LASTEXITCODE', job)
+        self.assertIn('savebox_server savebox_tests nanika_e2e_fixture --parallel 2', job)
+        self.assertIn('sccache --zero-stats', job)
+        stats = job.split('- name: Show sccache stats', 1)[1].split('- name: Stop native PostgreSQL', 1)[0]
+        self.assertIn('if: always()', stats)
+        self.assertIn('sccache --show-stats --stats-format=json', stats)
+        self.assertIn('$stats.compile_requests -le 0', stats)
+        self.assertIn('$stats | ConvertTo-Json -Depth 5', stats)
+        self.assertNotIn('Write-Output $statsJson', stats)
+        self.assertNotIn('continue-on-error', job)
 
     def test_backend_coverage_remains_a_separate_linux_gate(self) -> None:
         self.assertRegex(self.backend_workflow, r"(?m)^  backend-linux-coverage:\s*$")
