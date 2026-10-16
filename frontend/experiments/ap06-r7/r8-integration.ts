@@ -20,13 +20,15 @@ import { validatePartialResponse, validateBounds } from './range-adapter';
 import { directRange, DirectCounters, selectTransport } from './r9-transport';
 import { buildRangeAllowlist, inspectRangeRequest, R10RangeBackend, R10_RANGE_FILES, RangeAllowlist, selectR10Condition } from './r10-range-backend';
 import { selectR11 } from '../../tools/ap06-r11-contract.mjs';
+import { R12_CONDITIONS, selectR12, rangeBodyBytes } from '../../tools/ap06-r12-contract.mjs';
 
 export interface R8Fixture { id: number; name: string; ciphertextBytes: number; }
 interface Runtime { username: string; password: string; fileIds: Record<string, number>; fdks?: Record<string, number[]>; }
 declare global { interface Window { r8RefreshStore: () => Promise<Record<string, number>>; } }
 export const r8Mode = (window as Window & { r8BootstrapMode?: string }).r8BootstrapMode ?? null;
 const selectedR11 = selectR11((window as any).ap06R11Condition,(window as any).ap06R10Condition,(window as any).ap06R9Transport);
-const r10Condition = selectedR11 ? selectedR11 === 'r11.0' ? 'r10.0' : 'r10.1' : selectR10Condition((window as Window & { ap06R10Condition?: unknown }).ap06R10Condition);
+const selectedR12 = selectR12((window as any).ap06R12Condition,(window as any).ap06R11Condition,(window as any).ap06R10Condition,(window as any).ap06R9Transport);
+const r10Condition = selectedR12 ? R12_CONDITIONS[selectedR12].transport === 'xhr' ? 'r10.0' : 'r10.1' : selectedR11 ? selectedR11 === 'r11.0' ? 'r10.0' : 'r10.1' : selectR10Condition((window as Window & { ap06R10Condition?: unknown }).ap06R10Condition);
 const requestedR9 = (window as Window & { ap06R9Transport?: unknown }).ap06R9Transport;
 if (r10Condition && requestedR9 !== undefined) throw new Error('R10_CONFLICTING_TRANSPORT_SELECTORS');
 const r9Transport = selectTransport(r10Condition ? r10Condition === 'r10.2' ? 'angular-fetch' : 'xhr' : requestedR9);
@@ -54,6 +56,7 @@ export const observeR8Http: HttpInterceptorFn = (request, next) => defer(() => {
   const measured = r10Condition ? inspectRangeRequest(request, r10Allowlist) : null;
   if (measured) request = request.clone({ redirect: 'error' });
   const range = request.headers.get('Range');
+  if (selectedR12 && measured && request.responseType !== (selectedR12 === 'r12.4' && measured.start !== 0 ? 'arraybuffer' : 'blob')) throw new Error('R12_REQUEST_RESPONSE_TYPE_INVALID');
   if (range && (!request.headers.has('Authorization') || !request.withCredentials)) throw new Error('R8_JWT_INTERCEPTOR_MISSING');
   let settled = false;
   c()['outstandingSubscriptions']++;
@@ -68,13 +71,14 @@ export const observeR8Http: HttpInterceptorFn = (request, next) => defer(() => {
     if (measured && event.url !== measured.url) throw new Error('R10_REDIRECT_RESPONSE_FORBIDDEN');
     const fixture = fixtures.find(row => request.url.endsWith(`/files/${expectedId(row)}/download`));
     const match = /^bytes=(\d+)-(\d+)$/.exec(range);
-    if (!fixture || !match || !(event.body instanceof Blob)) throw new Error('R8_HTTP_RANGE_IDENTITY_INVALID');
+    if (!fixture || !match || !selectedR12 && !(event.body instanceof Blob)) throw new Error('R8_HTTP_RANGE_IDENTITY_INVALID');
     const start = Number(match[1]), end = Number(match[2]);
     validateBounds(start, end, fixture.ciphertextBytes);
     validatePartialResponse({ status: event.status, headers: event.headers }, start, end, fixture.ciphertextBytes);
-    if (event.body.size !== end - start + 1) throw new Error('TRUNCATED_RANGE_BODY');
+    const receivedBytes = selectedR12 ? rangeBodyBytes(selectedR12,start !== 0,event.body) : (event.body as Blob).size;
+    if (receivedBytes !== end - start + 1) throw new Error('TRUNCATED_RANGE_BODY');
     if (selectedR11) (window as any).r11ObserveBlob(event.body);
-    c()['http206Validated']++; c()['rangeBytesReceived'] += event.body.size;
+    c()['http206Validated']++; c()['rangeBytesReceived'] += receivedBytes;
     c()['rangeRequestsCompleted']++; settled = true;
   }, error: () => { if (range && !settled) { c()['rangeRequestsFailed']++; settled = true; } } }), finalize(() => {
     c()['outstandingSubscriptions']--;

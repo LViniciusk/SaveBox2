@@ -10,6 +10,10 @@ import { rangeAdapter, RangeCounters } from './range-adapter';
 import { configureR8, r8Contracts, r8File, r8Providers } from './r8-integration';
 import { runR11Stage } from '../../tools/ap06-r11-stage';
 import { DriveService } from '../../src/app/features/drive/services/drive.service';
+import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { map } from 'rxjs';
+import { environment } from '../../src/environments/environment';
+import { runR12Stage } from '../../tools/ap06-r12-stage';
 
 interface Fixture { id: number; name: string; bytes: number; dataOffset: number; ciphertextBytes: number; }
 type Mode = 'control' | 'service' | 'component' | 'store' | 'backend';
@@ -83,11 +87,11 @@ async function start(app: ApplicationRef): Promise<void> {
     mode = selected;
     adapter = rangeAdapter(fixtures, observed());
     await configureR8(app, fixtures, selected, runtime);
-    if (mode !== 'control') stream = app.injector.get(VideoStreamService);
+    if (mode !== 'control' && !(window as any).ap06R12Condition) stream = app.injector.get(VideoStreamService);
     await app.whenStable();
   };
   window.r7Contracts = () => ({ ...r8Contracts(), kasumiReal: kasumi instanceof KasumiCryptoService,
-    streamReal: mode === 'control' ? stream === null : stream instanceof VideoStreamService,
+    streamReal: mode === 'control' || (window as any).ap06R12Condition ? stream === null : stream instanceof VideoStreamService,
     rootEmpty: root.mount.length === 0, localOnly: currentFile === null ||
       currentFile.storageProvider === 'local' && !currentFile.shareUuid && currentFile.forceOriginal === true });
   window.r7ReadEnvelope = async fixture => {
@@ -106,7 +110,20 @@ async function start(app: ApplicationRef): Promise<void> {
   };
   window.r7Run = async fixture => {
     const c = observed();
-    if (!mode || currentFile || root.mount.length) throw new Error('R7_SESSION_OVERLAP');
+    if (!mode || currentFile || root.mount.length || window.r7SessionActive) throw new Error('R7_SESSION_OVERLAP');
+    const r12 = (window as any).ap06R12Condition;
+    if (r12) {
+      const file = r8File(fixture)!, controller = new AbortController();
+      window.r7SessionActive = true; window.r7CancelSession = () => controller.abort();
+      try {
+        await runR12Stage(r12,fixture,file,app.injector.get(DriveService),kasumi,(start,end) =>
+          app.injector.get(HttpClient).get(`${environment.apiUrl}/files/${file.id}/download`, {
+            headers:new HttpHeaders().set('Range',`bytes=${start}-${end}`),observe:'response',responseType:'arraybuffer',withCredentials:true,
+          }).pipe(map(response => { if (!response.body) throw new Error('R12_EMPTY_RESPONSE'); return response.body; })),
+          (window as any).r12Counters,controller.signal);
+      } finally { controller.abort();window.r7CancelSession=null;file.shareFdk?.fill(0);await app.whenStable();window.r7SessionActive=false; }
+      return;
+    }
     const r11 = (window as any).ap06R11Condition;
     if (r11 === 'r11.2' || r11 === 'r11.3') {
       const file = r8File(fixture)!;

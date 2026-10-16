@@ -19,23 +19,25 @@ export async function configureR11Page(page,context,raw,origin,paths,condition) 
   return configureBackendObservation(page,context,raw,origin,paths,{bootstrapHttp:true,optionsHttp:true});
 }
 
-export async function initializeR11Page(page,fixtures) {
+export async function initializeR11Page(page,fixtures,counterName='r11') {
   const runtime=JSON.parse(readFileSync(process.env.AP06_R8_PRIVATE_CONFIG,'utf8'));
   const bytes=execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R11_KEYS,process.env.AP06_R11_AUTHORITY],{windowsHide:true});
   try {
     runtime.fdks=JSON.parse(bytes.toString('utf8'));
     await initializeIntegrationPage(page,fixtures,'r8.2',runtime);
   } finally { bytes.fill(0);runtime.password='';for(const key of Object.values(runtime.fdks??{}))key.fill(0); }
-  return page.evaluate(()=>{
-    window.r5Counters.r11=window.r11Counters;
-    const run=window.r7Run;
-    window.r7Run=async fixture=>{
-      const c=window.r11Counters;c.sessionsStarted++;
-      try{await run(fixture);c.sessionsCompleted++;}catch(error){c.sessionsFailed++;throw error;}
-    };
+  return page.evaluate(name=>{
+    window.r5Counters[name]=window[name+'Counters'];
+    if(name==='r11'){
+      const run=window.r7Run;
+      window.r7Run=async fixture=>{
+        const c=window.r11Counters;c.sessionsStarted++;
+        try{await run(fixture);c.sessionsCompleted++;}catch(error){c.sessionsFailed++;throw error;}
+      };
+    }
     window.r5RunFixture=fixture=>window.r7Run(fixture);
     return window.r10TransportProof();
-  });
+  },counterName);
 }
 
 export function validateR11Functional(condition,counters,media) {

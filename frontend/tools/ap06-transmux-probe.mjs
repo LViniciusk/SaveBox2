@@ -487,11 +487,18 @@ export function ownershipSnapshot(counters) {
   };
 }
 
+export async function captureNaturalIdle(page,capture,milliseconds) {
+  if(![30000,120000].includes(milliseconds))throw new Error('INVALID_CHECKPOINT_TIMING');
+  await capture('post-teardown-settled',6);
+  await page.waitForTimeout(30000);await capture('idle-30s',6);
+  if(milliseconds===120000){await page.waitForTimeout(90000);await capture('idle-120s',6);}
+}
+
 export async function runTransmuxProbe({ pageScript = transmuxPageScript(), countersFactory = newTransmuxCounters,
   cleanupValidator = validateCleanupOwnership, functionalValidator = validateTransmuxOwnership, snapshot = ownershipSnapshot,
   launchOptions = {}, configurePage = null, initializePage = null, identity = {}, beforeRun = null, afterRun = null,
   auxiliaryMetrics = null, repetitions = null, runLabel = null, idleAfterTeardownMs = 0, naturalCloseDelayMs = 1000 } = {}) {
-  if (![0,30000].includes(idleAfterTeardownMs) || ![0,1000].includes(naturalCloseDelayMs)) throw new Error('INVALID_CHECKPOINT_TIMING');
+  if (![0,30000,120000].includes(idleAfterTeardownMs) || ![0,1000].includes(naturalCloseDelayMs)) throw new Error('INVALID_CHECKPOINT_TIMING');
   const expectedChromiumVersion = validateExpectedChromiumVersion(process.env.AP06_R5_CHROMIUM_VERSION);
   const { AP06_R5_MODE: mode, AP06_R5_STAGE: stage, AP06_R5_ARTIFACT_DIR: artifactDir,
     AP06_R5_MEDIA_ORIGIN: origin, AP06_R5_FIXTURE_MANIFEST: manifestPath,
@@ -576,9 +583,7 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
         await capture(`cycle-${cycle}-close`, cycle);
       }
       if (idleAfterTeardownMs) {
-        await capture('post-teardown-settled',6);
-        await page.waitForTimeout(idleAfterTeardownMs);
-        await capture('idle-30s',6);
+        await captureNaturalIdle(page,capture,idleAfterTeardownMs);
       }
       await capture('forced-GC-final', 6, 'forced-diagnostic');
       run.functionalStatus = 'PASS'; run.cleanupStatus = 'PASS';
