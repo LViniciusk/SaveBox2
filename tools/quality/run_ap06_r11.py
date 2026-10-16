@@ -233,10 +233,56 @@ def renderer_delta(raw):
     return (samples[6]['processMemory']['byCategory']['renderer']['privateBytes']-samples[0]['processMemory']['byCategory']['renderer']['privateBytes'])/MIB
 
 
+def formal_scalars(results):
+    if not isinstance(results,(list,tuple)) or len(results)!=6:raise ValueError('R11_INVALID_FORMAL_COUNT')
+    projected=[]
+    for result in results:
+        if (not isinstance(result,dict) or result.get('condition') not in CONDITIONS or
+                type(result.get('rendererPrivateDeltaMiB')) not in (int,float) or not math.isfinite(result['rendererPrivateDeltaMiB'])):
+            raise ValueError('R11_INVALID_FORMAL_SCALAR')
+        projected.append({k:result[k] for k in ('condition','rendererPrivateDeltaMiB')})
+    return projected
+
+
+def validate_classifier_result(result,mode,candidate=None):
+    pairs={'H1':['r11.0','r11.2'],'H2':['r11.2','r11.3'],'H3':['r11.3','r11.1']}
+    if isinstance(result,dict):
+        status=result.get('status')
+        if status in ('R11_CANDIDATE','R11_ATTRIBUTION_CONFIRMED'):
+            if (set(result)=={'status','hypothesis','pair'} and isinstance(result['hypothesis'],str) and
+                    result['pair']==pairs.get(result['hypothesis']) and result['hypothesis'] in pairs):
+                if mode=='triage' and status=='R11_CANDIDATE':return result
+                if mode=='formal' and status=='R11_ATTRIBUTION_CONFIRMED' and all(result[k]==candidate[k] for k in ('hypothesis','pair')):return result
+        if status=='R11_INCONCLUSIVE' and (set(result)=={'status'} or mode=='formal' and
+                result=={'status':'R11_INCONCLUSIVE','reason':'FORMAL_DISAGREEMENT'}):return result
+        if mode=='triage' and result=={'status':'R11_CONTROL_NOT_REPRODUCED'}:return result
+    raise WaveFailure('R11_CLASSIFIER_BRIDGE_FAILED')
+
+
+def invoke_classifier(node,cwd,payload):
+    try:serialized=json.dumps(payload,allow_nan=False,separators=(',',':'))
+    except (TypeError,ValueError):raise ValueError('R11_CLASSIFIER_INVALID_INPUT') from None
+    if len(serialized.encode('utf-8'))>4096:raise ValueError('R11_CLASSIFIER_INPUT_TOO_LARGE')
+    try:
+        result=subprocess.run([node,'tools/ap06-r11-classifier.mjs'],input=serialized,capture_output=True,
+            text=True,encoding='utf-8',cwd=cwd,timeout=30,check=True)
+        if len(result.stdout.encode('utf-8'))>4096:raise ValueError('R11_CLASSIFIER_OUTPUT_TOO_LARGE')
+        decoded=json.loads(result.stdout)
+        return validate_classifier_result(decoded,payload['mode'],payload.get('candidate'))
+    except (OSError,subprocess.SubprocessError,json.JSONDecodeError,UnicodeError,KeyError,TypeError):
+        raise WaveFailure('R11_CLASSIFIER_BRIDGE_FAILED') from None
+
+
 def classify(wave,values,formal=None,candidate=None):
-    script="import{classifyStages,confirmFormal}from'./tools/ap06-r11-contract.mjs';const v=JSON.parse(process.argv[1]);console.log(JSON.stringify(v.formal?confirmFormal(v.candidate,v.control,v.formal):classifyStages(v.values)))"
-    payload={'values':values} if formal is None else {'candidate':candidate,'control':values['r11.1'],'formal':formal}
-    return json.loads(subprocess.check_output([wave.node,'--input-type=module','-e',script,json.dumps(payload)],cwd=wave.root/'frontend',text=True))
+    if (not isinstance(values,dict) or set(values)!=set(CONDITIONS) or
+            any(type(v) not in (int,float) or not math.isfinite(v) for v in values.values())):
+        raise ValueError('R11_CLASSIFIER_INVALID_INPUT')
+    payload={'mode':'triage','values':values}
+    if formal is not None:
+        validate_classifier_result(candidate,'triage')
+        if candidate['status']!='R11_CANDIDATE':raise ValueError('R11_CLASSIFIER_INVALID_CANDIDATE')
+        payload={'mode':'formal','candidate':candidate,'control':values['r11.1'],'formal':formal_scalars(formal)}
+    return invoke_classifier(wave.node,wave.root/'frontend',payload)
 
 
 def unit_browser(wave):
