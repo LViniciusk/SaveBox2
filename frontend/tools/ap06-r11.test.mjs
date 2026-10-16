@@ -109,3 +109,26 @@ test('original worker protocols enforce order, detach, cancellation, error and t
   pending=service.sendToTransmuxWorker(s,new ArrayBuffer(4),2,true);t.mock.timers.tick(timeout);
   await assert.rejects(pending,{name:'WorkerResponseTimeoutError'});t.mock.timers.reset();
 });
+
+test('formal ABBAAB rejects every inconsistent replicate, wrong order and missing replicate for H1 H2 H3',()=>{
+  for (const [hypothesis,pair] of [['H1',['r11.0','r11.2']],['H2',['r11.2','r11.3']],['H3',['r11.3','r11.1']]]) {
+    const candidate={status:'R11_CANDIDATE',hypothesis,pair},[a,b]=pair;
+    const rows=[a,b,b,a,a,b].map(condition=>({condition,rendererPrivateDeltaMiB:condition===a?50:400}));
+    assert.equal(confirmFormal(candidate,450,rows).hypothesis,hypothesis);
+    for(let i=0;i<6;i++) {
+      const bad=structuredClone(rows);bad[i].rendererPrivateDeltaMiB=200;
+      assert.equal(confirmFormal(candidate,450,bad).status,'R11_INCONCLUSIVE');
+      const order=structuredClone(rows);order[i].condition=order[i].condition===a?b:a;
+      assert.equal(confirmFormal(candidate,450,order).status,'R11_INCONCLUSIVE');
+    }
+    assert.equal(confirmFormal(candidate,450,rows.slice(1)).status,'R11_INCONCLUSIVE');
+  }
+});
+test('classification retains inclusive 70 percent and exclusive 30 percent boundaries',()=>{
+  const classify=(x,y,c=300)=>classifyStages({'r11.0':20,'r11.1':c,'r11.2':x,'r11.3':y});
+  assert.equal(classify(210,210).hypothesis,'H1');
+  assert.equal(classify(89,210).hypothesis,'H2');
+  assert.equal(classify(89,89).hypothesis,'H3');
+  for(const [x,y] of [[90,210],[209,210],[-1,10],[210,89]])assert.equal(classify(x,y).status,'R11_INCONCLUSIVE');
+  assert.equal(classify(10,10,299).status,'R11_CONTROL_NOT_REPRODUCED');
+});

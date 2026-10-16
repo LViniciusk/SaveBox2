@@ -16,7 +16,7 @@ from run_ap06_r9 import (publish, media_files, runtime_environment, freeze_imple
     verify_freeze, measure, validate_network)
 from run_ap06_r10 import validate_condition as validate_r10, validate_auxiliary, validate_bootstrap_network, expected_proof
 from run_ap06_transport_probe import media_server
-from ap06_authorities import sha256
+from ap06_authorities import sha256, checked_path
 
 OUTPUT='.quality/readiness-wave11'
 CAMPAIGN='AP-06-R11'
@@ -25,10 +25,30 @@ CONDITIONS=('r11.0','r11.1','r11.2','r11.3')
 MIB=1024**2
 AUDIO_SERVICE='audio.mojom.AudioService'
 PLAYBACK_CONDITIONS=frozenset(('r11.0','r11.1'))
+EXPECTED_PHASES=('baseline',*[f'cycle-{i}-close' for i in range(1,7)],
+    'post-teardown-settled','idle-30s','forced-GC-final')
+
+
+def is_r11_followup():
+    return CAMPAIGN in ('AP-06-R11-R2','AP-06-R11-R3')
+
+
+def project_r11_to_r10(raw,alias):
+    if alias not in ('r10.0','r10.1'):raise ValueError('R11_INVALID_R10_ALIAS')
+    adapted=copy.deepcopy(raw)
+    adapted.update(condition=alias,stage='triage',transport='xhr' if alias=='r10.0' else 'range-fetch')
+    run=adapted['runs'][0]
+    run['runId']='triage-01-r10.0' if alias=='r10.0' else 'triage-02-r10.1'
+    run['samples']=[s for s in run['samples'] if s['phase'] not in ('post-teardown-settled','idle-30s')]
+    if len(run['samples'])!=8:raise ValueError('R11_R10_PROJECTION_INVALID')
+    adapted['processSampleCalls']=len(run['samples'])
+    return adapted
 
 
 def process_types(sample):
     result={}
+    if not sample.get('processMemory',{}).get('processes'):
+        raise ValueError('R11_PROCESS_UNAVAILABLE')
     for row in sample['processMemory']['processes']:
         pid=row['pid'];kind=row['type']
         if type(pid) is not int or pid<=0 or pid in result:raise ValueError('R11_INVALID_PROCESS_IDENTITY')
@@ -73,8 +93,8 @@ def reserve_development(path,head):
 
 
 def validate_memory(sample,baseline):
-    memory=sample['processMemory']
-    if memory['status']!='AVAILABLE':raise ValueError('R11_PROCESS_UNAVAILABLE')
+    memory=sample.get('processMemory',{})
+    if memory.get('status')!='AVAILABLE':raise ValueError('R11_PROCESS_UNAVAILABLE')
     process_types(sample)
     rows=memory['processes']
     categories=memory['byCategory']
@@ -98,13 +118,14 @@ def environment(wave,directory,condition,stage='triage',freeze=None):
     env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=PUBLISHER)
     env.update(AP06_R11_KEYS=str(wave.root/'tools/quality/ap06_r11_keys.py'),
         AP06_R11_AUTHORITY=str(wave.output/'baseline/authority-config.local.json'),
-        AP06_R11_PROCESS_VALIDATOR=str(PUBLISHER) if CAMPAIGN=='AP-06-R11-R2' else '',
+        AP06_R11_PROCESS_VALIDATOR=str(PUBLISHER) if is_r11_followup() else '',
         AP06_R11_ATTEMPT=stage+'-'+directory.name)
     return env,assets
 
 
 def verify_r11_freeze(wave,freeze):
-    verify_freeze(wave,freeze)
+    try:verify_freeze(wave,freeze)
+    except WaveFailure as error:raise WaveFailure('R11_RAW_AUTHORITY_CHANGED') from error
     versions=read(wave.output/'baseline/versions.json')
     checks=[(Path(versions['chromium']['executablePath']),versions['chromium']['sha256']),
         (Path(versions['nodeExecutable']),versions['nodeSha256']),
@@ -117,6 +138,15 @@ def verify_r11_freeze(wave,freeze):
 
 
 def validate_condition(raw,condition,stage,freeze,fixtures):
+    try:return _validate_condition(raw,condition,stage,freeze,fixtures)
+    except (KeyError,IndexError,TypeError) as error:
+        raise WaveFailure('R11_VALIDATION_CONTRACT_FAILED') from error
+    except WaveFailure as error:
+        if str(error).startswith('R11_'):raise
+        raise WaveFailure('R11_VALIDATION_CONTRACT_FAILED:'+str(error)) from error
+
+
+def _validate_condition(raw,condition,stage,freeze,fixtures):
     run=raw['runs'][0];alias='r10.0' if condition=='r11.0' else 'r10.1'
     attempt=re.fullmatch(r'(triage|formal)-(\d{2})-(r11\.[0-3])',run['runId'])
     if (condition not in CONDITIONS or not attempt or attempt[1]!=stage or attempt[3]!=condition or
@@ -137,13 +167,13 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
             run['browserVersion']!=VERSION or run['playbackSessions']!=18 or raw.get('pageErrors') or raw.get('recoveryWarnings') or
             any(raw['network'][k] for k in ('externalRequests','unexpectedRequests','rejectedRequests'))):
         raise WaveFailure('R11_RUN_IDENTITY_OR_FUNCTIONAL_FAILURE')
-    phases=['baseline',*[f'cycle-{i}-close' for i in range(1,7)],'post-teardown-settled','idle-30s','forced-GC-final']
-    if [s['phase'] for s in run['samples']]!=phases or any(s['gc']!=('forced-diagnostic' if s['phase']=='forced-GC-final' else 'natural') for s in run['samples']):
+    samples=run['samples']
+    if len(samples)!=10 or raw.get('processSampleCalls')!=10:raise WaveFailure('R11_PROCESS_SAMPLE_COUNT_CHANGED')
+    if tuple(s['phase'] for s in samples)!=EXPECTED_PHASES or any(s['gc']!=('forced-diagnostic' if s['phase']=='forced-GC-final' else 'natural') for s in run['samples']):
         raise WaveFailure('R11_CHECKPOINTS_CHANGED')
     from datetime import datetime
-    samples=run['samples']
-    if raw.get('processSampleCalls')!=len(samples):raise WaveFailure('R11_PROCESS_SAMPLE_COUNT_CHANGED')
     if [s['cycle'] for s in samples]!=[0,1,2,3,4,5,6,6,6,6]:raise WaveFailure('R11_CHECKPOINTS_CHANGED')
+    for sample in samples:validate_memory(sample,samples[0])
     validate_process_lifecycle(samples,condition)
     if (datetime.fromisoformat(samples[-2]['timestamp'].replace('Z','+00:00'))-datetime.fromisoformat(samples[-3]['timestamp'].replace('Z','+00:00'))).total_seconds()<30:
         raise WaveFailure('R11_IDLE_TOO_SHORT')
@@ -152,24 +182,45 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
     received=validate_network(run,condition,freeze['workload']['rangesPerCycle']*6,fixtures,freeze['backendFileMapping'],
         expected_type='XHR' if condition=='r11.0' else 'Fetch')
     if received!=freeze['workload']['bytesPerCycle']*6:raise WaveFailure('R11_HTTP_WORKLOAD_CHANGED')
+    identities=[{key:f[key] for key in ('id','name','bytes','sha256')} for f in fixtures]
+    if (raw.get('fixtureIdentities')!=identities or raw.get('orchestratorHash')!=freeze['runnerHash']):
+        raise WaveFailure('R11_RAW_AUTHORITY_CHANGED')
+    pids=sorted({r['pid'] for s in samples for r in s['processMemory']['processes']})
+    if run['processExitAudit']!={'status':'PASS','ownedPids':pids,'aliveOwnedPids':[]}:
+        raise WaveFailure('R11_PROCESS_IDENTITY_CHANGED')
+    requested=raw['network']['workerRequests'];allowed={v['name'] for v in freeze['workers'].values()}
+    if set(requested)-allowed or (any(requested.get(name,0)==0 for name in allowed) if workers else bool(requested)):
+        raise WaveFailure('R11_RAW_AUTHORITY_CHANGED')
     for sample in samples:
-        validate_memory(sample,samples[0]);validate_auxiliary(sample)
+        validate_auxiliary(sample)
+        if sample.get('browserVersion')!=VERSION or sample.get('functionalStatus')!='PASS' or sample.get('cleanupStatus')!='PASS':
+            raise WaveFailure('R11_VALIDATION_CONTRACT_FAILED')
         for key,value in {'sourceHash':freeze['sourceHash'],'fixtureHash':freeze['fixtureHash'],'harnessHash':freeze['harnessHash'],
                 'orchestratorHash':freeze['runnerHash'],'workerBundleHash':freeze['workers']['transmux']['sha256'],
                 'cryptoWorkerBundleHash':freeze['workers']['crypto']['sha256']}.items():
-            if sample.get(key)!=value:raise WaveFailure('R11_SAMPLE_AUTHORITY_CHANGED')
+            if sample.get(key)!=value:raise WaveFailure('R11_RAW_AUTHORITY_CHANGED')
         c=sample['counters']['observed'];cycle=sample['cycle']
         if (any(sample['ownership'].values()) or sample['mediaNodes'] or
                 c['rangeRequestsCompleted']!=9*cycle or c['rangeBytesReceived']!=freeze['workload']['bytesPerCycle']*cycle or
                 sample['counters']['r11']['sessionsCompleted']!=3*cycle):raise WaveFailure('R11_WORKLOAD_OR_CLEANUP_CHANGED')
-        if condition=='r11.2' and (c['workersCreated'] or c['mediaSourcesCreated'] or c['bytesAppended']):raise WaveFailure('R11_ARRAYBUFFER_STAGE_ESCAPED')
-        if condition=='r11.3' and (c['mediaSourcesCreated'] or c['bytesAppended'] or c['workerTransferBytesSent']!=freeze['workload']['workerTransferBytesSentPerCycle']*cycle):
+        if (c.get('rangeRequestsStarted')!=c['rangeRequestsCompleted'] or c.get('jwtRangesValidated')!=9*cycle or
+                c.get('http206Validated')!=9*cycle or c.get('workerMessagesSent')!=c.get('workerMessagesReceived') or
+                c.get('workersCreated')!=c.get('workersTerminated') or any(c.get(k)!=0 for k in
+                ('rangeRequestsFailed','rangeRequestsAborted','workerErrors','transferFailures','unhandledRejections',
+                 'pendingOperations','pendingAppends','activeRanges','workerMessagesCancelled'))):
+            raise WaveFailure('R11_WORKLOAD_OR_CLEANUP_CHANGED')
+        r11=sample['counters']['r11']
+        if (any(type(v) not in (int,float) or not math.isfinite(v) or v<0 for v in r11.values()) or
+                r11.get('sessionsStarted')!=3*cycle or any(r11.get(k)!=0 for k in
+                ('sessionsFailed','materializationsPending','materializationsFailed','workerProtocolFailures')) or
+                r11.get('transferredBuffers')!=r11.get('detachedBuffers')):
+            raise WaveFailure('R11_WORKLOAD_OR_CLEANUP_CHANGED')
+        if cycle and (not r11.get('blobCount') or not r11.get('arrayBufferCount')):raise WaveFailure('R11_MATERIALIZATION_MISSING')
+        if condition=='r11.2' and (r11.get('workerOutputBytes') or r11.get('transferBytes') or c['workersCreated'] or c['mediaSourcesCreated'] or c['bytesAppended']):raise WaveFailure('R11_ARRAYBUFFER_STAGE_ESCAPED')
+        if condition=='r11.3' and (c['workersCreated']!=6*cycle or cycle and (not r11.get('workerOutputBytes') or not r11.get('segmentBytes')) or c['mediaSourcesCreated'] or c['bytesAppended'] or c['workerTransferBytesSent']!=freeze['workload']['workerTransferBytesSentPerCycle']*cycle):
             raise WaveFailure('R11_WORKER_STAGE_ESCAPED')
     if condition in ('r11.0','r11.1'):
-        adapted=copy.deepcopy(raw);adapted.update(condition=alias,stage='triage',transport='xhr' if condition=='r11.0' else 'range-fetch')
-        adapted['runs'][0]['runId']='triage-01-r10.0' if alias=='r10.0' else 'triage-02-r10.1'
-        adapted['runs'][0]['samples']=[s for s in adapted['runs'][0]['samples'] if s['phase'] not in ('post-teardown-settled','idle-30s')]
-        adapted['processSampleCalls']=len(adapted['runs'][0]['samples'])
+        adapted=project_r11_to_r10(raw,alias)
         classification=validate_r10(adapted,alias,'triage',freeze,fixtures)
         if condition=='r11.0' and classification!='TRANSMUX_MSE_REPRODUCES_BROWSER_PROCESS_OWNERSHIP':
             raise WaveFailure('R11_XHR_CONTROL_NOT_REPRODUCED')
@@ -206,7 +257,7 @@ def unit_browser(wave):
             wave.save('pipeline/preflight-transport.json',stats)
     unit=read(target)
     if failure or unit['status']!='PASS' or unit['unitBrowserLaunches']!=1:raise WaveFailure('R11_PREFLIGHT_FAILED')
-    if CAMPAIGN=='AP-06-R11-R2':
+    if is_r11_followup():
         for case in unit['cases']:
             validate_process_lifecycle(case['processSamples'],case['condition'])
             for sample in case['processSamples']:validate_memory(sample,case['processSamples'][0])
@@ -229,10 +280,14 @@ def freeze(wave):
     extra=('baseline/history.json','baseline/prechecks.json','baseline/experimental-backend.json','baseline/listener-isolation.json',
         'baseline/network-spoof-guard.json','baseline/postgres-toolchain.json','baseline/custody-readback.json','baseline/preregistered-protocol.json','baseline/backend-isolation.json',
         'tooling/backend-build/nanika_ap06_local_server.exe','tooling/backend-build/CMakeCache.txt','tooling/backend-build/compile_commands.json')
-    if CAMPAIGN=='AP-06-R11-R2':extra+=('baseline/lifecycle-replay.json','baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json',
+    if CAMPAIGN=='AP-06-R11-R3':extra+=('baseline/retrospective-replay.json','baseline/ci.json','baseline/native-tests.json',
+        'baseline/preflight-ready.json','pipeline/development-reservation.json','baseline/red-python.txt',
+        'tooling/prepare.py','tooling/prechecks.py','tooling/replay.py','tooling/retrospective.py',
+        'tooling/cleanup.py','tooling/readback.py','tooling/native-tests.py','tooling/backend-build/nanika_ap06_tests.exe')
+    if is_r11_followup():extra+=('baseline/lifecycle-replay.json','baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json',
         'baseline/original-fdks.dpapi','baseline/original-custody.json','baseline/typescript.txt','baseline/acl-readback.json')
     freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r11-probe.mjs',runner_path=PUBLISHER,extra_files=extra,
-        extra_publications=('custody',) if CAMPAIGN=='AP-06-R11-R2' else (),
+        extra_publications=('custody',) if is_r11_followup() else (),
         protocol={'campaign':CAMPAIGN,'protocol':read(wave.output/'baseline/preregistered-protocol.json'),
             'readiness':dict.fromkeys(('units','angularIntegration','build','preflight','integrity','secretScan'),'PASS')})
 
@@ -271,7 +326,7 @@ def main():
     parser.add_argument('--validate-processes',type=Path);parser.add_argument('--condition',choices=CONDITIONS)
     args=parser.parse_args();wave=Wave(Path(__file__).resolve().parents[2]);wave.output=wave.root/OUTPUT
     if args.validate_processes:
-        path=args.validate_processes.absolute()
+        path=checked_path(args.validate_processes.absolute())
         if not path.is_relative_to(wave.output):raise ValueError('R11_PREFLIGHT_PATH_INVALID')
         case=next(c for c in read(path)['cases'] if c['condition']==args.condition)
         samples=case['processSamples'];validate_process_lifecycle(samples,args.condition)
@@ -284,13 +339,13 @@ def main():
             elif args.freeze:freeze(wave)
             elif args.verify_freeze:verify_r11_freeze(wave,read(wave.output/'tooling/freeze.json'))
             elif args.publish_raw:
-                path=args.publish_raw.absolute()
+                path=checked_path(args.publish_raw.absolute())
                 if not path.is_relative_to(wave.output) or not args.snapshot:raise ValueError('R11_RAW_PATH_INVALID')
                 publish(wave,'raw-'+args.snapshot,{f'evidence/raws/{args.snapshot}.json':path})
             elif args.run:return campaign_run(wave)
             else:parser.error('action required')
         except (WaveFailure,ValueError) as error:
-            stop={'status':'BLOCKED_AP06_R11_R2' if CAMPAIGN=='AP-06-R11-R2' else 'BLOCKED_AP06_R11','reason':str(error),'ap06':'OPEN'}
+            stop={'status':'BLOCKED_'+CAMPAIGN.replace('-','_'),'reason':str(error),'ap06':'OPEN'}
             wave.save('final/STOP.json',stop)
             publish(wave,'stop-'+('preflight' if args.unit_browser else 'campaign'),{'evidence/STOP-'+('preflight' if args.unit_browser else 'campaign')+'.json':wave.output/'final/STOP.json'})
             print(json.dumps(stop));return 1

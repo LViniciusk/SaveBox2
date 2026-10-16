@@ -24,14 +24,17 @@ def add_audio(samples,start=1):
     for sample in samples[start:]:sample['processMemory']['processes'].append({'pid':5,'type':AUDIO_SERVICE,'privateBytes':3})
 
 
-def r11_complete_raw():
+def r11_complete_raw(condition="r11.0"):
     from test_ap06_r10 import r10_raw
     from test_run_ap06_transmux_probe import summary
-    raw,freeze,fixtures=r10_raw()
-    raw['summary']=summary(20,1)
-    raw.update(condition='r11.0',transport='xhr',httpWorkloadEquivalent=True,cryptoWorkloadEquivalent=True,
-        transmuxWorkloadEquivalent=True,mseWorkloadEquivalent=True,playbackFunctional=True)
-    run=raw['runs'][0];run['runId']='triage-01-r11.0'
+    raw,freeze,fixtures=r10_raw("r10.0" if condition=="r11.0" else "r10.1")
+    full=condition in ('r11.0','r11.1');workers=condition!='r11.2'
+    growths=(20,1) if condition=='r11.0' else (1,400)
+    raw['summary']=summary(*growths)
+    raw.update(condition=condition,transport='xhr' if condition=='r11.0' else 'fetch',httpWorkloadEquivalent=True,
+        cryptoWorkloadEquivalent=workers,transmuxWorkloadEquivalent=workers,mseWorkloadEquivalent=full,playbackFunctional=full,
+        videoPlayerComponentUsed=full,videoStreamServiceUsed=workers)
+    run=raw['runs'][0];run['runId']=f'triage-{int(condition[-1])+1:02}-{condition}'
     sequence=[[n,'bytes=0-3'] for n in range(3) for _ in range(3)]
     freeze['workload'].update(rangesPerCycle=sequence,bytesPerCycle=36,requestsPerCycle=9)
     rows=run['rangeNetwork']['requests']
@@ -42,20 +45,32 @@ def r11_complete_raw():
     raw['processSampleCalls']=len(run['samples'])
     for index,sample in enumerate(run['samples']):
         sample['timestamp']=f'2026-10-16T00:{index:02}:00Z'
-        sample['counters']['r11']={'sessionsCompleted':3*sample['cycle']}
+        sample['counters']['r11']={'sessionsStarted':3*sample['cycle'],'sessionsCompleted':3*sample['cycle'],
+            'sessionsFailed':0,'materializationsPending':0,'materializationsFailed':0,'workerProtocolFailures':0,
+            'blobCount':9*sample['cycle'],'blobBytes':36*sample['cycle'],'arrayBufferCount':6*sample['cycle'],
+            'arrayBufferBytes':24*sample['cycle'],'transferredBuffers':int(workers)*6*sample['cycle'],
+            'detachedBuffers':int(workers)*6*sample['cycle'],'transferBytes':int(workers)*12345*sample['cycle'],
+            'workerOutputBytes':int(workers)*123*sample['cycle'],'segmentBytes':int(workers)*12*sample['cycle']}
         c=sample['counters']['observed'];c.update(rangeRequestsStarted=9*sample['cycle'],rangeRequestsCompleted=9*sample['cycle'],
             rangeBytesReceived=36*sample['cycle'],http206Validated=9*sample['cycle'],jwtRangesValidated=9*sample['cycle'])
         memory=sample['processMemory']
-        for kind,growth in (('browser',20),('renderer',1)):
+        if not full:
+            for key in ('mediaSourcesCreated','mediaSourcesClosed','sourceBuffersCreated','sourceBuffersReleased','bytesAppended','playbackStarted','playbackCompleted'):
+                c[key]=0
+        if not workers:
+            for key in ('workersCreated','workersTerminated','workerTransferBytesSent','workerMessagesSent','workerMessagesReceived','detachedTransfers'):
+                c[key]=0
+        for kind,growth in zip(('browser','renderer'),growths):
             value=100*1048576+int(growth*1048576*sample['cycle']/6)
             memory['byCategory'][kind]['privateBytes']=value
             memory['processes'][0 if kind=='browser' else 1]['privateBytes']=value
         for row,kind in zip(memory['processes'],('browser','renderer','GPU','network.mojom.NetworkService')):row['type']=kind
-        if index:memory['processes'].append({'pid':5,'type':AUDIO_SERVICE,'privateBytes':0})
+        if index and full:memory['processes'].append({'pid':5,'type':AUDIO_SERVICE,'privateBytes':0})
         memory['byType']={r['type']:{'privateBytes':r['privateBytes']} for r in memory['processes']}
         memory['byCategory']['utility']['privateBytes']=sum(r['privateBytes'] for r in memory['processes'] if 'Service' in r['type'])
         memory['privateBytes']=sum(r['privateBytes'] for r in memory['processes'])
-    run['processExitAudit']['ownedPids']=[1,2,3,4,5]
+    run['processExitAudit']['ownedPids']=[1,2,3,4,5] if full else [1,2,3,4]
+    if not workers:raw['network']['workerRequests']={}
     # The shared fixture gives a coherent positive browser ownership classification.
     natural=next(p for p in raw['summary']['phases'] if p['phase']=='cycle-6-close')
     for kind in ('browser','renderer'):
@@ -172,5 +187,106 @@ class R11Tests(unittest.TestCase):
                     publication.side_effect=failure
                     with self.assertRaisesRegex(RuntimeError,'READBACK_FAILED'):verify_freeze(wave,freeze)
 
+
+
+class R11R3ContractTests(unittest.TestCase):
+    def test_projection_is_pure_and_has_eight_samples(self):
+        import run_ap06_r11 as r11
+        for condition,alias in [('r11.0','r10.0'),('r11.1','r10.1')]:
+            raw,_,_=r11_complete_raw(condition);before=json.dumps(raw,sort_keys=True)
+            projected=r11.project_r11_to_r10(raw,alias)
+            self.assertEqual(json.dumps(raw,sort_keys=True),before)
+            self.assertEqual(projected['processSampleCalls'],8)
+            self.assertEqual(len(projected['runs'][0]['samples']),8)
+            projected['runs'][0]['samples'][0]['phase']='modified'
+            self.assertEqual(json.dumps(raw,sort_keys=True),before)
+        for alias in ('r10.2','r11.0',None):
+            with self.assertRaisesRegex(ValueError,'R11_INVALID_R10_ALIAS'):r11.project_r11_to_r10(raw,alias)
+        raw['runs'][0]['samples'].pop()
+        with self.assertRaisesRegex(ValueError,'R11_R10_PROJECTION_INVALID'):r11.project_r11_to_r10(raw,'r10.1')
+
+    def test_complete_validator_all_four_arms_and_formal_projection(self):
+        for condition in ('r11.0','r11.1','r11.2','r11.3'):
+            raw,freeze,fixtures=r11_complete_raw(condition)
+            before=json.dumps(raw,sort_keys=True)
+            self.assertIsInstance(validate_condition(raw,condition,'triage',freeze,fixtures),str)
+            self.assertEqual(json.dumps(raw,sort_keys=True),before)
+            for index in (5,6,7,8,9,10):
+                raw['stage']='formal';raw['runs'][0]['runId']=f'formal-{index:02}-{condition}'
+                self.assertIsInstance(validate_condition(raw,condition,'formal',freeze,fixtures),str)
+
+    def test_checkpoint_count_and_gc_idle_contract(self):
+        for count in (8,9,11):
+            raw,freeze,fixtures=r11_complete_raw();samples=raw['runs'][0]['samples']
+            samples[:]=samples[:count] if count<10 else samples+[copy.deepcopy(samples[-1])]
+            raw['processSampleCalls']=count
+            with self.assertRaisesRegex(RuntimeError,'R11_PROCESS_SAMPLE_COUNT_CHANGED'):validate_condition(raw,'r11.0','triage',freeze,fixtures)
+        for change in (lambda s:s[2].update(gc='forced-diagnostic'),lambda s:s[8].update(timestamp=s[7]['timestamp']),lambda s:s[5].update(cycle=4)):
+            raw,freeze,fixtures=r11_complete_raw();change(raw['runs'][0]['samples'])
+            with self.assertRaises((ValueError,RuntimeError)):validate_condition(raw,'r11.0','triage',freeze,fixtures)
+
+    def test_integrated_negative_contracts_in_every_arm(self):
+        changes=[lambda r:r.update(fixtureManifestSha256='changed'),lambda r:r.update(cryptoWorkerBundleSha256='changed'),
+            lambda r:r['runs'][0]['samples'][1].update(sourceHash='changed'),
+            lambda r:r['runs'][0]['rangeNetwork']['requests'][0].update(type='Other'),
+            lambda r:r['runs'][0]['rangeNetwork']['requests'][0].update(status=200),
+            lambda r:r['runs'][0]['rangeNetwork']['requests'][0].update(range='bytes=1-3'),
+            lambda r:r['runs'][0]['rangeNetwork']['requests'][0]['headers'].update({'content-length':'3'}),
+            lambda r:r['runs'][0]['samples'][1]['counters']['observed'].update(jwtRangesValidated=0),
+            lambda r:r['runs'][0]['samples'][1]['counters']['observed'].update(http206Validated=0),
+            lambda r:r['runs'][0]['samples'][1]['counters']['observed'].update(rangeBytesReceived=0),
+            lambda r:r['runs'][0]['samples'][1]['ownership'].update(pendingFetches=1),
+            lambda r:r['runs'][0]['processExitAudit'].update(ownedPids=[999]),
+            lambda r:r['runs'][0]['samples'][1]['counters']['r11'].update(sessionsFailed=1),
+            lambda r:r['runs'][0]['samples'][1]['counters']['r11'].update(arrayBufferCount=0)]
+        for condition in ('r11.0','r11.1','r11.2','r11.3'):
+            for index,change in enumerate(changes):
+                raw,freeze,fixtures=r11_complete_raw(condition);change(raw)
+                with self.subTest(condition=condition,change=index),self.assertRaises((ValueError,RuntimeError)):
+                    validate_condition(raw,condition,'triage',freeze,fixtures)
+
+    def test_partial_stage_guards(self):
+        for condition in ('r11.2','r11.3'):
+            for key in ('mediaSourcesCreated','bytesAppended','workersCreated') if condition=='r11.2' else ('mediaSourcesCreated','bytesAppended','workerTransferBytesSent'):
+                raw,freeze,fixtures=r11_complete_raw(condition)
+                raw['runs'][0]['samples'][1]['counters']['observed'][key]=1
+                with self.subTest(condition=condition,key=key),self.assertRaises(RuntimeError):validate_condition(raw,condition,'triage',freeze,fixtures)
+
+    def test_missing_memory_and_unclassified_contract_are_distinct(self):
+        raw,freeze,fixtures=r11_complete_raw();del raw['runs'][0]['samples'][1]['processMemory']
+        with self.assertRaisesRegex((ValueError,RuntimeError),'R11_PROCESS_UNAVAILABLE'):validate_condition(raw,'r11.0','triage',freeze,fixtures)
+        raw,freeze,fixtures=r11_complete_raw();del raw['runs'][0]['rangeNetwork']
+        with self.assertRaisesRegex(RuntimeError,'R11_VALIDATION_CONTRACT_FAILED'):validate_condition(raw,'r11.0','triage',freeze,fixtures)
+
+    def test_preflight_rejects_outside_authority_paths_without_reading_them(self):
+        import run_ap06_r11 as r11
+        root=Path(__file__).resolve().parents[2]
+        for path in (root/'outside.json',root/r11.OUTPUT/'../outside.json'):
+            with patch('sys.argv',['runner','--validate-processes',str(path),'--condition','r11.0']):
+                with self.assertRaisesRegex(ValueError,'R11_PREFLIGHT_PATH_INVALID|AUTHORITY_ABSOLUTE_PATH_REQUIRED'):r11.main()
+
+    def test_followup_predicate_is_dynamic(self):
+        import run_ap06_r11 as r11
+        for campaign,expected in [('AP-06-R11',False),('AP-06-R11-R2',True),('AP-06-R11-R3',True)]:
+            with patch.object(r11,'CAMPAIGN',campaign):self.assertIs(r11.is_r11_followup(),expected)
+
+    def test_both_followup_publications_are_isolated_and_verified(self):
+        import secrets
+        import ap06_authorities as a
+        from run_ap06_r9 import publish
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);authority=root/'authority';identity=secrets.token_hex(32);a.initialize(authority,identity,campaign='AP-06-R10')
+            source=root/'receipt';source.write_text('original')
+            a.publish_snapshot(authority,identity,'old',{'evidence/original':source},root)
+            original=sha256(authority/'manifests/old.json')
+            for suffix in ('r2','r3'):
+                output=root/f'.quality/readiness-wave11-{suffix}';(output/'baseline').mkdir(parents=True);(output/'pipeline').mkdir()
+                (output/'baseline/authority-config.local.json').write_text(json.dumps({'AP06_AUTHORITY_ROOT':str(authority),'identity':identity}))
+                publish(SimpleNamespace(output=output),'test',{'evidence/test':source})
+                a.verify_publication(authority,identity,f'r11-{suffix}-test')
+                self.assertEqual((authority/f'r11-{suffix}/evidence/test').read_text(),'original')
+            self.assertEqual(sha256(authority/'manifests/old.json'),original)
+            (authority/'r11-r3/evidence/test').write_text('changed')
+            with self.assertRaisesRegex(ValueError,'AUTHORITY_HASH_OR_SIZE_MISMATCH'):a.verify_publication(authority,identity,'r11-r3-test')
 
 if __name__=='__main__':unittest.main()
