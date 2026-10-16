@@ -142,6 +142,7 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
         raise WaveFailure('R11_CHECKPOINTS_CHANGED')
     from datetime import datetime
     samples=run['samples']
+    if raw.get('processSampleCalls')!=len(samples):raise WaveFailure('R11_PROCESS_SAMPLE_COUNT_CHANGED')
     if [s['cycle'] for s in samples]!=[0,1,2,3,4,5,6,6,6,6]:raise WaveFailure('R11_CHECKPOINTS_CHANGED')
     validate_process_lifecycle(samples,condition)
     if (datetime.fromisoformat(samples[-2]['timestamp'].replace('Z','+00:00'))-datetime.fromisoformat(samples[-3]['timestamp'].replace('Z','+00:00'))).total_seconds()<30:
@@ -168,6 +169,7 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
         adapted=copy.deepcopy(raw);adapted.update(condition=alias,stage='triage',transport='xhr' if condition=='r11.0' else 'range-fetch')
         adapted['runs'][0]['runId']='triage-01-r10.0' if alias=='r10.0' else 'triage-02-r10.1'
         adapted['runs'][0]['samples']=[s for s in adapted['runs'][0]['samples'] if s['phase'] not in ('post-teardown-settled','idle-30s')]
+        adapted['processSampleCalls']=len(adapted['runs'][0]['samples'])
         classification=validate_r10(adapted,alias,'triage',freeze,fixtures)
         if condition=='r11.0' and classification!='TRANSMUX_MSE_REPRODUCES_BROWSER_PROCESS_OWNERSHIP':
             raise WaveFailure('R11_XHR_CONTROL_NOT_REPRODUCED')

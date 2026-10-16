@@ -39,6 +39,7 @@ def r11_complete_raw():
     run['backendTraffic']['rows']=[{'fileId':r['fileId'],'status':206} for r in run['rangeNetwork']['requests']]
     original=run['samples'];run['samples']=original[:7]+[copy.deepcopy(original[6]),copy.deepcopy(original[6]),original[7]]
     run['samples'][7]['phase']='post-teardown-settled';run['samples'][8]['phase']='idle-30s'
+    raw['processSampleCalls']=len(run['samples'])
     for index,sample in enumerate(run['samples']):
         sample['timestamp']=f'2026-10-16T00:{index:02}:00Z'
         sample['counters']['r11']={'sessionsCompleted':3*sample['cycle']}
@@ -114,6 +115,12 @@ class R11LifecycleTests(unittest.TestCase):
     def test_full_validator_rejects_attempt_order_before_measurement(self):
         raw,freeze,fixtures=r11_complete_raw();raw['runs'][0]['runId']='triage-02-r11.0'
         with self.assertRaisesRegex(RuntimeError,'^R11_ATTEMPT_IDENTITY_CHANGED$'):validate_condition(raw,'r11.0','triage',freeze,fixtures)
+
+    def test_full_validator_requires_ten_actual_native_samples(self):
+        raw,freeze,fixtures=r11_complete_raw()
+        for calls in (8,9,11):
+            raw['processSampleCalls']=calls
+            with self.assertRaisesRegex(RuntimeError,'^R11_PROCESS_SAMPLE_COUNT_CHANGED$'):validate_condition(raw,'r11.0','triage',freeze,fixtures)
 
 
 class R11Tests(unittest.TestCase):
