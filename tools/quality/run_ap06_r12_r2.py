@@ -11,6 +11,29 @@ from run_ap06_transport_probe import media_server
 from ap06_authorities import checked_path
 
 OUTPUT='.quality/readiness-wave12-r2-factorial'
+CAMPAIGN='AP-06-R12-R2-factorial'
+PUBLISHER=Path(__file__).resolve()
+
+def configure_campaign(output,publisher,campaign):
+    global OUTPUT,PUBLISHER,CAMPAIGN
+    require(output=='.quality/readiness-wave12-r3-factorial' and campaign=='AP-06-R12-R3-factorial','R12R3_CAMPAIGN_INVALID')
+    OUTPUT,PUBLISHER,CAMPAIGN=output,Path(publisher).resolve(),campaign
+
+def campaign_decision(value):
+    return dict(value,status=value['status'].replace('R12R2_','R12R3_')) if CAMPAIGN=='AP-06-R12-R3-factorial' else value
+
+def validate_browser_receipt(record,identity):
+    receipt=record.get('browserIdentity',{})
+    require(receipt.get('status')=='PASS' and receipt.get('readLease') is True and receipt.get('launchSucceeded') is True,'R12R3_BROWSER_IDENTITY_REQUIRED')
+    before,after=receipt.get('before',{}),receipt.get('after',{})
+    require(receipt.get('processExitAudit',{}).get('status')=='PASS' and before.get('identityBeforeWorkload') is True and after.get('identityBeforeWorkload') is False and
+        before.get('browserPid')==after.get('browserPid') and before.get('processCreationTime')==after.get('processCreationTime') and
+        receipt.get('closed',{}).get('closedHashVerified') is True,'R12R3_BROWSER_LIFETIME_UNPROVEN')
+    for row in (before,after):
+        require(row.get('status')=='PASS' and row.get('expectedSha256')==row.get('observedSha256')==identity['executableSha256'] and
+            row.get('expectedExecutable')==row.get('observedExecutable')==identity['executablePath'] and row.get('headless') is True and
+            row.get('launchArgsValidated') is True and row.get('chromiumVersion')==identity['chromiumVersion'] and row.get('architecture')==identity['architecture'],
+            'R12R3_BROWSER_RECEIPT_INVALID')
 CONDITIONS=dict(zip((f'r12r2.{i}' for i in range(4)),({'metadata':m,'payload':p} for m,p in (('xhr','xhr'),('fetch','xhr'),('xhr','fetch'),('fetch','fetch')))))
 PAIRS=(('r12r2.0','r12r2.2'),('r12r2.1','r12r2.3'),('r12r2.0','r12r2.1'),('r12r2.2','r12r2.3'))
 
@@ -32,6 +55,9 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
     try:
         require(condition in CONDITIONS and stage in ('triage','formal') and len(raw['runs'])==1,'R12R2_RUN_IDENTITY_CHANGED')
         run=raw['runs'][0];attempt=re.fullmatch(r'(triage|formal)-(\d{2})-(r12r2\.[0-3])',run['runId'])
+        if CAMPAIGN=='AP-06-R12-R3-factorial':
+            validate_browser_receipt(run,freeze['browserIdentity'])
+            require(run['browserIdentity']['before']['browserPid']==next(p['pid'] for p in run['samples'][0]['processMemory']['processes'] if p['type']=='browser'),'R12R3_BROWSER_SAMPLE_PID_MISMATCH')
         require(attempt and attempt[1]==stage and attempt[3]==condition and
             (int(attempt[2])==list(CONDITIONS).index(condition)+1 if stage=='triage' else 5<=int(attempt[2])<=10),'R12R2_ATTEMPT_ORDER_CHANGED')
         identity={'videoPlayerComponentUsed':False,'videoStreamServiceUsed':False,'attributionDriverUsed':True,'httpWorkloadEquivalent':True,
@@ -57,9 +83,10 @@ def check_budget(budget,previous,requested):
         budget.get('measurementRetries')==0 and type(previous) is int and 0<=previous<10 and type(requested) is int and requested==1,'R12R2_BROWSER_BUDGET_EXCEEDED')
 
 def environment(wave,directory,condition,stage='triage',freeze=None):
-    env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=Path(__file__).resolve())
+    env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=PUBLISHER)
     env.update(AP06_R11_KEYS=str(wave.root/'tools/quality/ap06_r11_keys.py'),AP06_R11_AUTHORITY=str(wave.output/'baseline/authority-config.local.json'),
         AP06_R12R2_ATTEMPT=stage+'-'+directory.name)
+    if CAMPAIGN=='AP-06-R12-R3-factorial':env['AP06_BROWSER_IDENTITY']=str(wave.output/'baseline/browser-identity.json')
     return env,assets
 
 def validate_classifier_result(result,mode,candidate=None):
@@ -98,8 +125,12 @@ def classify(wave,values,formal=None,candidate=None):
 def unit_browser(wave):
     checks=read(wave.output/'baseline/prechecks.json')
     require(not wave.git('status','--porcelain').strip() and all(checks.get(k)=='PASS' for k in ('status','secretScan','angularBuild','typescript','syntax','diff')),'R12R2_PRECHECKS_REQUIRED')
+    if CAMPAIGN=='AP-06-R12-R3-factorial':
+        ci=read(wave.output/'baseline/ci.json')
+        require(ci['headSha']==wave.git('rev-parse','HEAD').strip() and ci['conclusion']=='success' and len(ci['jobs'])==3 and
+            all(job['conclusion']=='success' for job in ci['jobs']),'R12R3_CI_REQUIRED')
     reservation=wave.output/'pipeline/development-reservation.json'
-    with reservation.open('x') as stream:json.dump({'campaign':'AP-06-R12-R2-factorial','head':wave.git('rev-parse','HEAD'),'maximum':1,'retries':0},stream)
+    with reservation.open('x') as stream:json.dump({'campaign':CAMPAIGN,'head':wave.git('rev-parse','HEAD'),'maximum':1,'retries':0},stream)
     publish(wave,'development-reserved',{'evidence/development-reservation.json':reservation})
     env,assets=environment(wave,wave.output/'tooling','r12r2.0');target=wave.output/'tooling/angular-unit-1.json';env['AP06_R7_UNIT_OUTPUT']=str(target)
     with media_server(media_files(wave),True,'application/octet-stream',assets,port=42088) as (origin,stats):
@@ -109,6 +140,7 @@ def unit_browser(wave):
             if target.exists():publish(wave,'preflight-complete',{'evidence/preflight.raw.json':target})
             wave.save('pipeline/preflight-transport.json',stats)
     unit=read(target);require(unit['status']=='PASS' and unit['unitBrowserLaunchAttempts']==unit['unitBrowserLaunches']==1 and unit['browserClosed'] and unit['processExitAudit']['status']=='PASS','R12R2_PREFLIGHT_FAILED')
+    if CAMPAIGN=='AP-06-R12-R3-factorial':validate_browser_receipt(unit,read(wave.output/'baseline/browser-identity.json'))
     workload=read(wave.output/'baseline/workload.json');fixtures=read(wave.output/'fixtures/manifest.json');mapping=read(wave.output/'baseline/backend-authority.json')['fileMapping']
     for condition in CONDITIONS:
         network=unit['rangeNetworks'][condition];require(unit['transportProofs'][condition]==expected_proof('r10.1'),'R12R2_PREFLIGHT_DI_CHANGED')
@@ -120,13 +152,21 @@ def unit_browser(wave):
 
 def freeze(wave):
     require(read(wave.output/'baseline/preflight-ready.json')['status']=='PASS','R12R2_PREFLIGHT_REQUIRED')
-    freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r12-r2-probe.mjs',runner_path=Path(__file__),extra_publications=('custody',),
+    identity_files=()
+    if CAMPAIGN=='AP-06-R12-R3-factorial':
+        from ap06_browser_identity import verify_identity
+        identity=read(wave.output/'baseline/browser-identity.json');verify_identity(identity)
+        validate_browser_receipt(read(wave.output/'tooling/angular-unit-1.json'),identity)
+        ci=read(wave.output/'baseline/ci.json');require(ci['headSha']==wave.git('rev-parse','HEAD').strip() and ci['conclusion']=='success','R12R3_CI_REQUIRED')
+        identity_files=('baseline/browser-identity.json','baseline/browser-identity-publication.json')
+    freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r12-r2-probe.mjs',runner_path=PUBLISHER,extra_publications=('custody',),
         extra_files=('baseline/prechecks.json','baseline/preregistered-protocol.json','baseline/custody-readback.json','baseline/backend-isolation.json',
             'baseline/experimental-backend.json','baseline/ci.json','baseline/preflight-ready.json','baseline/prior-publications.json','pipeline/development-reservation.json',
             'tooling/backend-build/nanika_ap06_local_server.exe','tooling/backend-build/CMakeCache.txt','tooling/backend-build/compile_commands.json',
-            'baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json'),
-        protocol={'campaign':'AP-06-R12-R2-factorial','protocol':read(wave.output/'baseline/preregistered-protocol.json'),
+            'baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json',*identity_files),
+        protocol={'campaign':CAMPAIGN,**({'browserIdentity':identity} if identity_files else {}),'protocol':read(wave.output/'baseline/preregistered-protocol.json'),
             'readiness':dict.fromkeys(('units','angularIntegration','build','preflight','integrity','secretScan'),'PASS')})
+    if identity_files:verify_identity(identity)
 
 def campaign_run(wave):
     require(not any((wave.output/p).exists() for p in ('pipeline/launch-ledger.json','pipeline/campaign-started.json','final/STOP.json')),'R12R2_NO_RETRY_OR_RESUME')
@@ -138,10 +178,10 @@ def campaign_run(wave):
             verify_fn=verify_r11_freeze,environment_fn=environment,validate_fn=validate_condition,probe='tools/ap06-r12-r2-probe.mjs')
         result['rendererPrivateDeltaMiB']=renderer_delta(read(wave.output/result['rawPath']));results.append(result);wave.save('pipeline/results.json',results);return result
     for condition in CONDITIONS:values[condition]=one(condition,'triage')['rendererPrivateDeltaMiB']
-    decision=classify(wave,values);wave.save('pipeline/triage-decision.json',decision);publish(wave,'triage-decision',{'evidence/triage-decision.json':wave.output/'pipeline/triage-decision.json'})
+    decision=classify(wave,values);wave.save('pipeline/triage-decision.json',campaign_decision(decision));publish(wave,'triage-decision',{'evidence/triage-decision.json':wave.output/'pipeline/triage-decision.json'})
     if decision['status']=='R12R2_CANDIDATE':
         a,b=decision['pair'];formal=[one(c,'formal') for c in (a,b,b,a,a,b)];decision=classify(wave,values,formal,decision)
-    wave.save('final/decision.json',dict(decision,results=results,triageValues=values,chromiumMeasurement=len(ledger),retries=0,ap06='OPEN'))
+    wave.save('final/decision.json',dict(campaign_decision(decision),results=results,triageValues=values,chromiumMeasurement=len(ledger),retries=0,ap06='OPEN'))
     publish(wave,'campaign-decision',{'evidence/campaign-decision.json':wave.output/'final/decision.json'})
 
 def main():
@@ -152,6 +192,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ap06-r12r2-') as tmp:
         wave.temp=Path(tmp)
         try:
+            if CAMPAIGN=='AP-06-R12-R3-factorial' and (args.unit_browser or args.freeze or args.run) and (wave.output/'final/STOP.json').exists():
+                print(json.dumps({'status':'R12R3_STOP','reason':'R12R3_NO_RETRY_OR_RESUME'}));return 1
             if args.validate_processes:
                 path=checked_path(args.validate_processes.absolute());require(path.is_relative_to(wave.output),'R12R2_PREFLIGHT_PATH_INVALID')
                 samples=next(c for c in read(path)['cases'] if c['condition']==args.condition)['processSamples'];validate_process_lifecycle(samples,'r11.2')
@@ -167,7 +209,7 @@ def main():
             else:parser.error('action required')
         except (WaveFailure,ValueError,OSError,subprocess.SubprocessError,KeyError,TypeError,IndexError) as error:
             reason=str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+',str(error)) else 'R12R2_EXECUTION_FAILED'
-            phase='preflight' if args.unit_browser else 'campaign';stop={'status':'R12R2_STOP','reason':reason,'ap06':'OPEN'};wave.save('final/STOP.json',stop)
+            phase='preflight' if args.unit_browser else 'campaign';stop=campaign_decision({'status':'R12R2_STOP','reason':reason,'ap06':'OPEN'});wave.save('final/STOP.json',stop)
             publish(wave,'stop-'+phase,{'evidence/STOP-'+phase+'.json':wave.output/'final/STOP.json'});print(json.dumps(stop));return 1
     return 0
 

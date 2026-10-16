@@ -127,6 +127,11 @@ def verify_r11_freeze(wave,freeze):
     try:verify_freeze(wave,freeze)
     except WaveFailure as error:raise WaveFailure('R11_RAW_AUTHORITY_CHANGED') from error
     versions=read(wave.output/'baseline/versions.json')
+    if wave.output.name in ('readiness-wave12-r3-factorial','readiness-wave12-r3-native'):
+        from ap06_browser_identity import verify_identity
+        identity=read(wave.output/'baseline/browser-identity.json')
+        if freeze.get('browserIdentity')!=identity:raise WaveFailure('R12R3_BROWSER_MANIFEST_CHANGED')
+        verify_identity(identity)
     checks=[(Path(versions['chromium']['executablePath']),versions['chromium']['sha256']),
         (Path(versions['nodeExecutable']),versions['nodeSha256']),
         (Path(versions['postgres']['bin'])/'postgres.exe',versions['postgres']['serverSha256'])]

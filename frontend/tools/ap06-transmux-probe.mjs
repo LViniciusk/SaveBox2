@@ -494,6 +494,8 @@ export async function captureNaturalIdle(page,capture,milliseconds) {
   if(milliseconds===120000){await page.waitForTimeout(90000);await capture('idle-120s',6);}
 }
 
+import {launchAttestedBrowser,finishBrowserIdentity,closeBrowserIdentity} from './ap06-browser-identity.mjs';
+
 export async function runTransmuxProbe({ pageScript = transmuxPageScript(), countersFactory = newTransmuxCounters,
   cleanupValidator = validateCleanupOwnership, functionalValidator = validateTransmuxOwnership, snapshot = ownershipSnapshot,
   launchOptions = {}, configurePage = null, initializePage = null, identity = {}, beforeRun = null, afterRun = null,
@@ -537,7 +539,7 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
     raw.runs.push(run); raw.launchAttempts++; flush();
     let browser = null, page = null, pageInitialized = false, closeObservation = null;
     try {
-      browser = await chromium.launch(launchOptions); raw.browserLaunches++; flush();
+      browser = await launchAttestedBrowser(chromium,launchOptions,run); raw.browserLaunches++; flush();
       run.browserVersion = browser.version();
       if (run.browserVersion !== expectedChromiumVersion) throw new Error('CHROMIUM_VERSION_MISMATCH');
       const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block' });
@@ -603,7 +605,8 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
       }
       if (browser) {
         try {
-          await browser.close();
+          try { await finishBrowserIdentity(browser); }
+          finally { try { await browser.close(); } finally { await closeBrowserIdentity(browser); } }
           if (process.env.AP06_R8_PID_AUDITOR && run.samples.length) {
             const pids = [...new Set(run.samples.flatMap(sample => sample.processMemory.processes.map(row => row.pid)))];
             const { stdout } = await exec(process.env.WAVE1_PYTHON,

@@ -11,6 +11,21 @@ from ap06_authorities import checked_path,private_permissions,validate_owned_des
 from ap06_native import trace_events,aggregate_trace
 
 OUTPUT='.quality/readiness-wave12-r2-native'
+CAMPAIGN='AP-06-R12-R2-native'
+PUBLISHER=Path(__file__).resolve()
+TRACE_PREFIX='r12-r2-native'
+FACTORIAL_STATUS='R12R2_FACTORIAL_CONFIRMED'
+
+def configure_campaign(output,publisher):
+    global OUTPUT,PUBLISHER,CAMPAIGN,TRACE_PREFIX,FACTORIAL,FACTORIAL_STATUS
+    require(output=='.quality/readiness-wave12-r3-native','R12R3_NATIVE_CAMPAIGN_INVALID')
+    OUTPUT,PUBLISHER,CAMPAIGN,TRACE_PREFIX=output,Path(publisher).resolve(),'AP-06-R12-R3-native','r12-r3-native'
+    FACTORIAL='.quality/readiness-wave12-r3-factorial';FACTORIAL_STATUS='R12R3_FACTORIAL_CONFIRMED'
+    import run_ap06_r12_r2 as factorial
+    factorial.configure_campaign(FACTORIAL,Path(__file__).with_name('run_ap06_r12_r3.py'),'AP-06-R12-R3-factorial')
+
+def campaign_decision(value):
+    return dict(value,status=value['status'].replace('R12R2_','R12R3_')) if TRACE_PREFIX=='r12-r3-native' else value
 
 def native_budget(budget,previous,requested):
     require(budget.get('approved') is True and budget.get('developmentMaximum')==1 and budget.get('measurementMaximum')==2 and
@@ -20,7 +35,7 @@ def private_trace_path(wave,directory):
     config=read(wave.output/'baseline/authority-config.local.json');authority=Path(config['AP06_AUTHORITY_ROOT'])
     validate_owned_destination(authority,config['identity']);name='capability' if directory==wave.output/'pipeline' else directory.parent.name+'-'+directory.name
     require(re.fullmatch(r'capability|formal-0[56]-r12r2\.[0-3]',name) is not None,'R12R2_NATIVE_TRACE_NAME_INVALID')
-    path=checked_path(authority/'r12-r2-native/traces'/(name+'.json'))
+    path=checked_path(authority/TRACE_PREFIX/'traces'/(name+'.json'))
     require(not path.exists(),'R12R2_NATIVE_TRACE_ALREADY_EXISTS')
     create=not path.parent.exists();path.parent.mkdir(parents=True,exist_ok=True);private_permissions(path.parent,create=create)
     wave.save(str((directory/'native-trace.json').relative_to(wave.output)),{'authorityRelativePath':path.relative_to(authority).as_posix()})
@@ -30,13 +45,13 @@ def seal_trace(wave,receipt):
     receipt=checked_path(receipt.absolute());require(receipt.is_relative_to(wave.output),'R12R2_NATIVE_RECEIPT_PATH_INVALID')
     registration=read(receipt.parent/'native-trace.json');config=read(wave.output/'baseline/authority-config.local.json');authority=Path(config['AP06_AUTHORITY_ROOT'])
     relative=registration['authorityRelativePath'];path=checked_path(authority/relative)
-    require(path.is_relative_to(authority/'r12-r2-native/traces') and path.suffix=='.json','R12R2_NATIVE_TRACE_PATH_INVALID')
+    require(path.is_relative_to(authority/TRACE_PREFIX/'traces') and path.suffix=='.json','R12R2_NATIVE_TRACE_PATH_INVALID')
     if not path.exists():return {'status':'NO_TRACE_WRITTEN'}
     digest=sha256(path);data=read(receipt);trace=data.get('trace',data)
     if trace.get('sha256') is not None:require(trace['sha256']==digest and trace['bytes']==path.stat().st_size,'R12R2_NATIVE_TRACE_CHECKSUM_CHANGED')
     manifest={'campaign':'AP-06-R10','files':[{'path':relative,'size':path.stat().st_size,'sha256':digest}]}
     # Adopt the sealed stream in place: sensitive trace bytes never enter a worktree or temp publication copy.
-    result=publish_authorities(authority,authority,manifest,config['identity'],'r12-r2-native-trace-'+path.stem)
+    result=publish_authorities(authority,authority,manifest,config['identity'],TRACE_PREFIX+'-trace-'+path.stem)
     wave.save(str((receipt.parent/'native-trace-seal.json').relative_to(wave.output)),dict(result,traceSha256=digest,bytes=path.stat().st_size))
     return result
 
@@ -53,9 +68,10 @@ def parse_trace(wave,receipt):
     return result
 
 def environment(wave,directory,condition,stage='formal',freeze=None):
-    env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=Path(__file__).resolve())
+    env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=PUBLISHER)
     env.update(AP06_R11_KEYS=str(wave.root/'tools/quality/ap06_r11_keys.py'),AP06_R11_AUTHORITY=str(wave.output/'baseline/authority-config.local.json'),
         AP06_R12R2_ATTEMPT=stage+'-'+directory.name,AP06_NATIVE_TRACE=str(private_trace_path(wave,directory)),AP06_NATIVE_RECEIPT=str(directory/'native-receipt.json'))
+    if TRACE_PREFIX=='r12-r3-native':env['AP06_BROWSER_IDENTITY']=str(wave.output/'baseline/browser-identity.json')
     return env,assets
 
 def verify(wave,frozen):
@@ -66,7 +82,7 @@ def verify(wave,frozen):
 
 def prepare(wave):
     source=wave.root/FACTORIAL;decision=read(source/'final/decision.json')
-    require(decision['status']=='R12R2_FACTORIAL_CONFIRMED' and not (wave.output/'baseline/factorial-gate.json').exists(),'R12R2_NATIVE_GATE_NOT_AUTHORIZED_OR_RESTARTED')
+    require(decision['status']==FACTORIAL_STATUS and not (wave.output/'baseline/factorial-gate.json').exists(),'R12R2_NATIVE_GATE_NOT_AUTHORIZED_OR_RESTARTED')
     for name in ('baseline','pipeline','tooling','formal','final'):(wave.output/name).mkdir(parents=True,exist_ok=True)
     private_permissions(wave.output,create=True)
     for directory in ('fixtures','tooling/app','tooling/backend-build'):shutil.copytree(source/directory,wave.output/directory,dirs_exist_ok=False)
@@ -74,11 +90,14 @@ def prepare(wave):
         'task.md','workload.json','historical-r9.json','backend-isolation.json','experimental-backend.json','ci.json','runtime-credentials.dpapi',
         'runtime-credentials-custody.json','custody-readback.json','prechecks.json')
     for name in names:shutil.copyfile(source/'baseline'/name,wave.output/'baseline'/name)
+    if TRACE_PREFIX=='r12-r3-native':
+        shutil.copyfile(source/'baseline/browser-identity.json',wave.output/'baseline/browser-identity.json')
+        shutil.copyfile(source/'baseline/browser-identity-publication.json',wave.output/'baseline/browser-identity-publication.json')
     shutil.copyfile(source/'tooling/kasumi.cjs',wave.output/'tooling/kasumi.cjs')
     wave.save('baseline/budget.json',{'approved':True,'developmentMaximum':1,'measurementMaximum':2,'measurementRetries':0,'globalMaximum':14})
     wave.save('baseline/factorial-gate.json',{'status':'PASS','decision':{k:v for k,v in decision.items() if k not in ('results',)},
         'factorialFreezeSha256':sha256(source/'tooling/freeze.json'),'factorialDecisionSha256':sha256(source/'final/decision.json')})
-    wave.save('baseline/preregistered-protocol.json',{'campaign':'AP-06-R12-R2-native','gate':'One capability browser only after factorial formal confirmation',
+    wave.save('baseline/preregistered-protocol.json',{'campaign':CAMPAIGN,'gate':'One capability browser only after factorial formal confirmation',
         'conditions':read(source/'pipeline/triage-decision.json')['pair'],'measurements':2,'retries':0,
         'sourceProtocolSha256':sha256(source/'baseline/preregistered-protocol.json'),'capture':'CDP MemoryInfra ReturnAsStream JSON, native memlog 16384-byte sampling',
         'checkpoints':['baseline','cycle-6-close','idle-120s','forced-GC-final'],'limits':{'traceBytes':512*1024*1024,'eventBytes':32*1024*1024,'cdpTimeoutMs':30000,'streamTimeoutMs':120000},
@@ -93,19 +112,27 @@ def run(wave):
     publish(wave,'capability-reserved',{'evidence/capability-reservation.json':wave.output/'pipeline/capability-reservation.json'})
     env,_=environment(wave,wave.output/'pipeline','r12r2.0');wave.command('native-capability',[wave.node,'tools/ap06-native-capability.mjs'],wave.root/'frontend',env)
     seal_trace(wave,target);record=read(target)
+    if TRACE_PREFIX=='r12-r3-native':verify_r11_freeze(factorial,frozen)
+    if TRACE_PREFIX=='r12-r3-native':
+        from run_ap06_r12_r2 import validate_browser_receipt
+        validate_browser_receipt(record,read(wave.output/'baseline/browser-identity.json'))
     require(record['launchAttempts']==record['browserLaunches']==1 and record['browserClosed'] and record.get('processExitAudit',{}).get('status')=='PASS','R12R2_NATIVE_CAPABILITY_LIFECYCLE_FAILED')
     capability=parse_trace(wave,target);wave.save('baseline/native-capability.json',capability)
     publish(wave,'capability-complete',{'evidence/capability-receipt.json':target,'evidence/capability.json':wave.output/'baseline/native-capability.json'})
     if capability['status']!='R12R2_NATIVE_CAPABILITY_PASS':
-        wave.save('final/decision.json',dict(capability,capabilityChromium=1,measurementChromium=0,retries=0));publish(wave,'decision',{'evidence/decision.json':wave.output/'final/decision.json'});return
+        wave.save('final/decision.json',dict(campaign_decision(capability),capabilityChromium=1,measurementChromium=0,retries=0));publish(wave,'decision',{'evidence/decision.json':wave.output/'final/decision.json'});return
     assets,products,workers=build_products(wave.root,OUTPUT);unit=read(factorial.output/'tooling/angular-unit-1.json')
     unit.update(appProducts=products,pageScriptSha256=frozen['pageScriptSha256'],nativeCapabilitySha256=sha256(wave.output/'baseline/native-capability.json'),
         nativeGateBrowserLaunches=1,provenance='Factorial app preflight plus one independent native capability browser, no extra browser')
     wave.save('tooling/angular-unit-1.json',unit)
-    freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r12-r2-native-probe.mjs',runner_path=Path(__file__),extra_publications=('custody',),
+    identity_files=('baseline/browser-identity.json','baseline/browser-identity-publication.json','pipeline/native-receipt.json') if TRACE_PREFIX=='r12-r3-native' else ()
+    freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r12-r2-native-probe.mjs',runner_path=PUBLISHER,extra_publications=('custody',),
         extra_files=('baseline/factorial-gate.json','baseline/native-capability.json','baseline/preregistered-protocol.json','baseline/backend-isolation.json',
-            'baseline/ci.json','baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json','tooling/backend-build/nanika_ap06_local_server.exe'),
-        protocol={'campaign':'AP-06-R12-R2-native','protocol':read(wave.output/'baseline/preregistered-protocol.json')})
+            'baseline/ci.json','baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json','tooling/backend-build/nanika_ap06_local_server.exe',*identity_files),
+        protocol={'campaign':CAMPAIGN,**({'browserIdentity':read(wave.output/'baseline/browser-identity.json')} if identity_files else {}),'protocol':read(wave.output/'baseline/preregistered-protocol.json')})
+    if identity_files:
+        from ap06_browser_identity import verify_identity
+        verify_identity(read(wave.output/'baseline/browser-identity.json'))
     frozen=read(wave.output/'tooling/freeze.json');ledger=[];results=[]
     for index,condition in enumerate(read(factorial.output/'pipeline/triage-decision.json')['pair'],5):
         result=measure(wave,condition,'formal',frozen,ledger,requested=1,directory_name=f'{index:02}-{condition}',budget_fn=native_budget,
@@ -116,7 +143,7 @@ def run(wave):
         results.append({'condition':condition,'rawSha256':result['rawSha256'],'rawPath':result['rawPath'],'native':aggregate})
     decision={'status':'R12R2_NATIVE_TRACKED_AGGREGATES_OBSERVED' if all(r['native']['status']=='R12R2_NATIVE_CAPABILITY_PASS' for r in results) else 'R12R2_NATIVE_INCONCLUSIVE',
         'capabilityChromium':1,'measurementChromium':2,'retries':0,'results':results,'causalAttribution':'INCONCLUSIVE: total allocation coverage and individual lifetimes unproven; no function culprit or leak established.'}
-    wave.save('final/decision.json',decision);publish(wave,'decision',{'evidence/decision.json':wave.output/'final/decision.json'})
+    wave.save('final/decision.json',campaign_decision(decision));publish(wave,'decision',{'evidence/decision.json':wave.output/'final/decision.json'})
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--run',action='store_true');parser.add_argument('--verify-freeze',action='store_true')
@@ -125,6 +152,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ap06-native-') as tmp:
         wave.temp=Path(tmp)
         try:
+            if TRACE_PREFIX=='r12-r3-native' and args.run and (wave.output/'final/STOP.json').exists():
+                print(json.dumps({'status':'R12R3_NATIVE_STOP','reason':'R12R3_NATIVE_NO_RETRY_OR_RESUME'}));return 1
             if args.run:run(wave)
             elif args.verify_freeze:verify(wave,read(wave.output/'tooling/freeze.json'))
             elif args.seal_trace:print(json.dumps(seal_trace(wave,args.receipt)))
@@ -134,7 +163,7 @@ def main():
             else:parser.error('action required')
         except (WaveFailure,ValueError,OSError,subprocess.SubprocessError,KeyError,TypeError,IndexError) as error:
             reason=str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+',str(error)) else 'R12R2_NATIVE_EXECUTION_FAILED'
-            stop={'status':'R12R2_NATIVE_STOP','reason':reason,'factorialResultPreserved':True};wave.save('final/STOP.json',stop)
+            stop=campaign_decision({'status':'R12R2_NATIVE_STOP','reason':reason,'factorialResultPreserved':True});wave.save('final/STOP.json',stop)
             publish(wave,'stop',{'evidence/STOP.json':wave.output/'final/STOP.json'});print(json.dumps(stop));return 1
     return 0
 

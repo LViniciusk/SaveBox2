@@ -4,6 +4,7 @@ import {AUTOPLAY_ARGS} from './ap06-integration-probe.mjs';
 import {NativeTrace,NATIVE_ARGS} from './ap06-native-trace.mjs';
 import {sampleOwnedProcesses} from './ap06-process-sample.mjs';
 import {writeJsonAtomic} from './browser-memory-probe.mjs';
+import {launchAttestedBrowser,finishBrowserIdentity,closeBrowserIdentity} from './ap06-browser-identity.mjs';
 const output=process.env.AP06_NATIVE_RECEIPT;
 if(!output||!process.env.AP06_NATIVE_TRACE)throw new Error('NATIVE_OWNED_PATH_REQUIRED');
 const record={launchAttempts:1,browserLaunches:0,retries:0,browserClosed:false,status:'FAIL'},pids=new Set();
@@ -11,7 +12,7 @@ let browser,trace,browserCdp;
 const save=()=>writeJsonAtomic(output,{...record,trace:trace?.receipt});
 save();
 try{
-  browser=await chromium.launch({args:[...AUTOPLAY_ARGS,...NATIVE_ARGS]});record.browserLaunches=1;save();
+  browser=await launchAttestedBrowser(chromium,{args:[...AUTOPLAY_ARGS,...NATIVE_ARGS]},record);record.browserLaunches=1;save();
   if(browser.version()!==process.env.AP06_R5_CHROMIUM_VERSION)throw new Error('NATIVE_VERSION_CHANGED');
   browserCdp=await browser.newBrowserCDPSession();trace=new NativeTrace(process.env.AP06_NATIVE_TRACE);await trace.start(browser);
   const context=await browser.newContext({serviceWorkers:'block'}),page=await context.newPage();
@@ -26,7 +27,10 @@ try{
 finally{
   if(trace)try{await trace.stop();}catch(error){record.traceFailure=/^[A-Z0-9_]+$/.test(error.message)?error.message:'NATIVE_TRACE_STOP_FAILED';}
   if(browserCdp)try{for(const p of(await browserCdp.send('SystemInfo.getProcessInfo')).processInfo)pids.add(p.id);}catch{}
-  if(browser){await browser.close();record.browserClosed=true;}
+  if(browser){
+    try{await finishBrowserIdentity(browser);}catch{record.status='STOP';record.failureClass='AP06_BROWSER_IDENTITY_UNPROVEN';}
+    finally{try{await browser.close();record.browserClosed=true;}finally{try{await closeBrowserIdentity(browser);}catch{record.status='STOP';record.failureClass='AP06_BROWSER_IDENTITY_UNPROVEN';}}}
+  }
   if(pids.size)record.processExitAudit=JSON.parse(execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R8_PID_AUDITOR,'--closed-pids',[...pids].join(',')],{encoding:'utf8',windowsHide:true}));
   save();
 }

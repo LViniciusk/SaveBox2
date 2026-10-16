@@ -12,6 +12,7 @@ import { sampleOwnedProcesses } from './ap06-process-sample.mjs';
 import { AUTOPLAY_ARGS } from './ap06-integration-probe.mjs';
 import { writeJsonAtomic } from './browser-memory-probe.mjs';
 import { networkGuardSnapshot,validateCleanNetwork } from './ap06-preflight.mjs';
+import {launchAttestedBrowser,finishBrowserIdentity,closeBrowserIdentity} from './ap06-browser-identity.mjs';
 
 export async function runHttpPreflight({conditions,cancellationCondition,configure,initialize,pageScript,validateFunctional,counterName}){
 const output=process.env.AP06_R7_UNIT_OUTPUT;if(!output)throw new Error('R12_OUTPUT_REQUIRED');
@@ -25,7 +26,7 @@ const result={status:'FAIL',unitBrowserLaunchAttempts:0,unitBrowserLaunches:0,br
 const save=()=>writeJsonAtomic(output,result),pids=new Set();let browser,browserCdp;
 async function remember(){if(browserCdp)for(const p of(await browserCdp.send('SystemInfo.getProcessInfo')).processInfo)pids.add(p.id);result.ownedPids=[...pids];save();}
 try{
-  result.unitBrowserLaunchAttempts++;save();browser=await chromium.launch({args:AUTOPLAY_ARGS});result.unitBrowserLaunches++;save();
+  result.unitBrowserLaunchAttempts++;save();browser=await launchAttestedBrowser(chromium,{args:AUTOPLAY_ARGS},result);result.unitBrowserLaunches++;save();
   assert.equal(browser.version(),process.env.AP06_R5_CHROMIUM_VERSION);browserCdp=await browser.newBrowserCDPSession();await remember();
   for(const condition of [...conditions,'cancel-'+cancellationCondition]){
     const cancellation=condition.startsWith('cancel-'),selected=cancellation?cancellationCondition:condition;
@@ -66,7 +67,10 @@ try{
   result.status='PASS';
 }catch(error){result.failureClass=/^[A-Z0-9_]+$/.test(error.message)?error.message:'R12_PREFLIGHT_FAILED';process.exitCode=1;}
 finally{
-  await remember();if(browser){await browser.close();result.browserClosed=true;}
+  await remember();if(browser){
+    try{await finishBrowserIdentity(browser);}catch{result.status='FAIL';process.exitCode=1;}
+    finally{try{await browser.close();result.browserClosed=true;}finally{try{await closeBrowserIdentity(browser);}catch{result.status='FAIL';result.failureClass='AP06_BROWSER_IDENTITY_UNPROVEN';process.exitCode=1;}}}
+  }
   if(pids.size){result.processExitAudit=JSON.parse(execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R8_PID_AUDITOR,'--closed-pids',[...pids].join(',')],{encoding:'utf8',windowsHide:true}));if(result.processExitAudit.status!=='PASS'){result.status='FAIL';process.exitCode=1;}}
   save();
 }
