@@ -165,7 +165,7 @@ def main():
                 path=checked_path(args.publish_raw.absolute());require(path.is_relative_to(wave.output) and re.fullmatch(r'(triage|formal)-\d{2}-r12r2\.[0-3]',args.snapshot or ''),'R12R2_RAW_PATH_INVALID')
                 publish(wave,'raw-'+args.snapshot,{f'evidence/raws/{args.snapshot}.json':path})
             else:parser.error('action required')
-        except (WaveFailure,ValueError,OSError,subprocess.SubprocessError) as error:
+        except (WaveFailure,ValueError,OSError,subprocess.SubprocessError,KeyError,TypeError,IndexError) as error:
             reason=str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+',str(error)) else 'R12R2_EXECUTION_FAILED'
             phase='preflight' if args.unit_browser else 'campaign';stop={'status':'R12R2_STOP','reason':reason,'ap06':'OPEN'};wave.save('final/STOP.json',stop)
             publish(wave,'stop-'+phase,{'evidence/STOP-'+phase+'.json':wave.output/'final/STOP.json'});print(json.dumps(stop));return 1

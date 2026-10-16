@@ -93,7 +93,7 @@ def run(wave):
     publish(wave,'capability-reserved',{'evidence/capability-reservation.json':wave.output/'pipeline/capability-reservation.json'})
     env,_=environment(wave,wave.output/'pipeline','r12r2.0');wave.command('native-capability',[wave.node,'tools/ap06-native-capability.mjs'],wave.root/'frontend',env)
     seal_trace(wave,target);record=read(target)
-    require(record['launchAttempts']==record['browserLaunches']==1 and record['browserClosed'] and record['processExitAudit']['status']=='PASS','R12R2_NATIVE_CAPABILITY_LIFECYCLE_FAILED')
+    require(record['launchAttempts']==record['browserLaunches']==1 and record['browserClosed'] and record.get('processExitAudit',{}).get('status')=='PASS','R12R2_NATIVE_CAPABILITY_LIFECYCLE_FAILED')
     capability=parse_trace(wave,target);wave.save('baseline/native-capability.json',capability)
     publish(wave,'capability-complete',{'evidence/capability-receipt.json':target,'evidence/capability.json':wave.output/'baseline/native-capability.json'})
     if capability['status']!='R12R2_NATIVE_CAPABILITY_PASS':
@@ -132,7 +132,7 @@ def main():
                 path=checked_path(args.publish_raw.absolute());require(path.is_relative_to(wave.output) and re.fullmatch(r'formal-0[56]-r12r2\.[0-3]',args.snapshot or ''),'R12R2_NATIVE_RAW_PATH_INVALID')
                 publish(wave,'raw-'+args.snapshot,{f'evidence/raws/{args.snapshot}.json':path})
             else:parser.error('action required')
-        except (WaveFailure,ValueError,OSError,subprocess.SubprocessError) as error:
+        except (WaveFailure,ValueError,OSError,subprocess.SubprocessError,KeyError,TypeError,IndexError) as error:
             reason=str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+',str(error)) else 'R12R2_NATIVE_EXECUTION_FAILED'
             stop={'status':'R12R2_NATIVE_STOP','reason':reason,'factorialResultPreserved':True};wave.save('final/STOP.json',stop)
             publish(wave,'stop',{'evidence/STOP.json':wave.output/'final/STOP.json'});print(json.dumps(stop));return 1
