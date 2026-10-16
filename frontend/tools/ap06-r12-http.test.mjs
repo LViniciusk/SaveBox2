@@ -14,11 +14,11 @@ const helpers=await import('data:text/javascript;base64,'+Buffer.from(bundle.out
 const source=readFileSync(new URL('../experiments/ap06-r7/r8-integration.ts',import.meta.url),'utf8');
 const tree=ts.createSourceFile('r8.ts',source,ts.ScriptTarget.Latest,true);
 const initializer=name=>tree.statements.flatMap(s=>ts.isVariableStatement(s)?[...s.declarationList.declarations]:[]).find(n=>n.name.getText(tree)===name).initializer.getText(tree);
-const make=new Function('deps',ts.transpile(`const {defer,finalize,tap,inspectRangeRequest,validateBounds,validatePartialResponse,HttpEventType,selectedR12,selectedR11,r10Condition,r10Allowlist,fixtures,expectedId,c,rangeBodyBytes}=deps;return ${initializer('observeR8Http')};`));
+const make=new Function('deps',ts.transpile(`const {defer,finalize,tap,inspectRangeRequest,validateBounds,validatePartialResponse,HttpEventType,selectedR12,selectedR11,r10Condition,r10Allowlist,fixtures,expectedId,c,rangeBodyBytes}=deps;const selectedFactorial=null;return ${initializer('observeR8Http')};`));
 const allowlist=helpers.buildRangeAllowlist([101,102,103].map(id=>({id,ciphertextBytes:1000})));
 function setup(condition){
   const counters=newIntegrationCounters().observed;
-  const selector=new Function('selectedR12','selectedR11','R12_CONDITIONS','window','selectR10Condition',ts.transpile('return '+initializer('r10Condition')));
+  const selector=new Function('selectedR12','selectedR11','R12_CONDITIONS','window','selectR10Condition',ts.transpile('const selectedFactorial=null;return '+initializer('r10Condition')));
   const alias=selector(condition,null,R12_CONDITIONS,{},helpers.selectR10Condition);
   assert.equal(alias,R12_CONDITIONS[condition].transport==='xhr'?'r10.0':'r10.1');
   const observe=make({...helpers,defer,finalize,tap,HttpEventType:{Response:4},selectedR12:condition,selectedR11:null,r10Condition:alias,r10Allowlist:allowlist,

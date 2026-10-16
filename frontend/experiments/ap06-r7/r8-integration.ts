@@ -21,14 +21,17 @@ import { directRange, DirectCounters, selectTransport } from './r9-transport';
 import { buildRangeAllowlist, inspectRangeRequest, R10RangeBackend, R10_RANGE_FILES, RangeAllowlist, selectR10Condition } from './r10-range-backend';
 import { selectR11 } from '../../tools/ap06-r11-contract.mjs';
 import { R12_CONDITIONS, selectR12, rangeBodyBytes } from '../../tools/ap06-r12-contract.mjs';
+import {CONDITIONS as FACTORIAL_CONDITIONS,selectCondition as selectFactorial} from '../../tools/ap06-r12-r2-contract.mjs';
+import {R12R2RangeBackend,R12R2_CONDITION,R12R2_PROTOCOL} from './r12-r2-range-backend';
 
-export interface R8Fixture { id: number; name: string; ciphertextBytes: number; }
+export interface R8Fixture { id: number; name: string; ciphertextBytes: number; dataOffset?: number; }
 interface Runtime { username: string; password: string; fileIds: Record<string, number>; fdks?: Record<string, number[]>; }
 declare global { interface Window { r8RefreshStore: () => Promise<Record<string, number>>; } }
 export const r8Mode = (window as Window & { r8BootstrapMode?: string }).r8BootstrapMode ?? null;
 const selectedR11 = selectR11((window as any).ap06R11Condition,(window as any).ap06R10Condition,(window as any).ap06R9Transport);
 const selectedR12 = selectR12((window as any).ap06R12Condition,(window as any).ap06R11Condition,(window as any).ap06R10Condition,(window as any).ap06R9Transport);
-const r10Condition = selectedR12 ? R12_CONDITIONS[selectedR12].transport === 'xhr' ? 'r10.0' : 'r10.1' : selectedR11 ? selectedR11 === 'r11.0' ? 'r10.0' : 'r10.1' : selectR10Condition((window as Window & { ap06R10Condition?: unknown }).ap06R10Condition);
+const selectedFactorial=selectFactorial((window as any).ap06R12R2Condition,(window as any).ap06R12Condition,(window as any).ap06R11Condition,(window as any).ap06R10Condition,(window as any).ap06R9Transport);
+const r10Condition = selectedFactorial ? 'r10.1' : selectedR12 ? R12_CONDITIONS[selectedR12].transport === 'xhr' ? 'r10.0' : 'r10.1' : selectedR11 ? selectedR11 === 'r11.0' ? 'r10.0' : 'r10.1' : selectR10Condition((window as Window & { ap06R10Condition?: unknown }).ap06R10Condition);
 const requestedR9 = (window as Window & { ap06R9Transport?: unknown }).ap06R9Transport;
 if (r10Condition && requestedR9 !== undefined) throw new Error('R10_CONFLICTING_TRANSPORT_SELECTORS');
 const r9Transport = selectTransport(r10Condition ? r10Condition === 'r10.2' ? 'angular-fetch' : 'xhr' : requestedR9);
@@ -37,6 +40,7 @@ const realStore = r8Mode === 'store' || r8Mode === 'backend';
 const backend = r8Mode === 'backend';
 let fixtures: R8Fixture[] = [], runtime: Runtime | undefined, store: DriveStore | null = null;
 let r10Allowlist: RangeAllowlist;
+let factorialProtocol:readonly Readonly<{id:number;start:number;end:number}>[]=[];
 const c = () => window.r5Counters.observed;
 const unexpected = () => { c()['unexpectedPeripheralOperations']++; throw new Error('R8_UNEXPECTED_PERIPHERAL_OPERATION'); };
 const peripheral = new Proxy({}, { get: (_, key) => key === 'then' ? undefined : unexpected });
@@ -56,6 +60,7 @@ export const observeR8Http: HttpInterceptorFn = (request, next) => defer(() => {
   const measured = r10Condition ? inspectRangeRequest(request, r10Allowlist) : null;
   if (measured) request = request.clone({ redirect: 'error' });
   const range = request.headers.get('Range');
+  if(selectedFactorial&&measured&&request.responseType!=='blob')throw new Error('R12R2_RESPONSE_TYPE_CHANGED');
   if (selectedR12 && measured && request.responseType !== (selectedR12 === 'r12.4' && measured.start !== 0 ? 'arraybuffer' : 'blob')) throw new Error('R12_REQUEST_RESPONSE_TYPE_INVALID');
   if (range && (!request.headers.has('Authorization') || !request.withCredentials)) throw new Error('R8_JWT_INTERCEPTOR_MISSING');
   let settled = false;
@@ -77,6 +82,11 @@ export const observeR8Http: HttpInterceptorFn = (request, next) => defer(() => {
     validatePartialResponse({ status: event.status, headers: event.headers }, start, end, fixture.ciphertextBytes);
     const receivedBytes = selectedR12 ? rangeBodyBytes(selectedR12,start !== 0,event.body) : (event.body as Blob).size;
     if (receivedBytes !== end - start + 1) throw new Error('TRUNCATED_RANGE_BODY');
+    if(selectedFactorial){
+      const kind=start===0&&end===131071?'metadata':'payload',transport=FACTORIAL_CONDITIONS[selectedFactorial][kind];
+      const routing=(window as any).r12r2Routing;
+      routing[kind+transport+'Count']++;routing[kind+transport+'Bytes']+=receivedBytes;
+    }
     if (selectedR11) (window as any).r11ObserveBlob(event.body);
     c()['http206Validated']++; c()['rangeBytesReceived'] += receivedBytes;
     c()['rangeRequestsCompleted']++; settled = true;
@@ -93,7 +103,9 @@ export function r8Providers(controlledRange: (id: number, start: number, end: nu
   return [provideRouter([]), provideHttpClient(...(r9Transport === 'angular-fetch' ? [withFetch()] : []),
     withInterceptors([jwtInterceptor, errorInterceptor, observeR8Http])),
     ...(r10Condition === 'r10.1' ? [FetchBackend, { provide: R10_RANGE_FILES, useValue: () => r10Allowlist },
-      { provide: HttpBackend, useClass: R10RangeBackend }] : []),
+      { provide: HttpBackend, useClass: selectedFactorial ? R12R2RangeBackend : R10RangeBackend }] : []),
+    ...(selectedFactorial ? [{provide:R12R2_CONDITION,useValue:FACTORIAL_CONDITIONS[selectedFactorial]},
+      {provide:R12R2_PROTOCOL,useValue:()=>factorialProtocol}] : []),
     { provide: DriveService, ...(backend ? { useClass: r9Transport === 'direct-fetch' ? R9DirectDriveService : DriveService } : { useValue: {
       downloadFileRange: controlledRange,
       getTree: () => of({ folders: [], has_more: false, files: fixtures.map(row => ({ id: row.id,
@@ -115,6 +127,14 @@ export async function configureR8(app: ApplicationRef, values: R8Fixture[], sele
   if (backend) {
     if (!runtime || Object.keys(runtime.fileIds).sort().join() !== '0,1,2') throw new Error('R8_BACKEND_MAPPING_MISSING');
     if (r10Condition) r10Allowlist = buildRangeAllowlist(fixtures.map(row => ({ id: expectedId(row), ciphertextBytes: row.ciphertextBytes })));
+    if(selectedFactorial){
+      if(fixtures.map(f=>f.id).join()!=='0,1,2'||fixtures.some(f=>!Number.isSafeInteger(f.dataOffset)||f.dataOffset!<=0||f.dataOffset!+8388640>f.ciphertextBytes))throw new Error('R12R2_PROTOCOL_FIXTURE_INVALID');
+      factorialProtocol=Object.freeze(fixtures.flatMap(f=>[
+        {id:expectedId(f),start:0,end:131071},
+        {id:expectedId(f),start:f.dataOffset!,end:f.dataOffset!+4194319},
+        {id:expectedId(f),start:f.dataOffset!+4194320,end:f.dataOffset!+8388639},
+      ]).map(row=>Object.freeze(row)));
+    }
     if (r9Transport) {
       if (!runtime.fdks || Object.keys(runtime.fdks).sort().join() !== '0,1,2' ||
           Object.values(runtime.fdks).some(key => key.length !== 32 || key.some(byte => !Number.isInteger(byte) || byte < 0 || byte > 255))) {

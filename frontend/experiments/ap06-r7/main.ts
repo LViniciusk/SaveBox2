@@ -87,11 +87,11 @@ async function start(app: ApplicationRef): Promise<void> {
     mode = selected;
     adapter = rangeAdapter(fixtures, observed());
     await configureR8(app, fixtures, selected, runtime);
-    if (mode !== 'control' && !(window as any).ap06R12Condition) stream = app.injector.get(VideoStreamService);
+    if (mode !== 'control' && !(window as any).ap06R12Condition && !(window as any).ap06R12R2Condition) stream = app.injector.get(VideoStreamService);
     await app.whenStable();
   };
   window.r7Contracts = () => ({ ...r8Contracts(), kasumiReal: kasumi instanceof KasumiCryptoService,
-    streamReal: mode === 'control' || (window as any).ap06R12Condition ? stream === null : stream instanceof VideoStreamService,
+    streamReal: mode === 'control' || (window as any).ap06R12Condition || (window as any).ap06R12R2Condition ? stream === null : stream instanceof VideoStreamService,
     rootEmpty: root.mount.length === 0, localOnly: currentFile === null ||
       currentFile.storageProvider === 'local' && !currentFile.shareUuid && currentFile.forceOriginal === true });
   window.r7ReadEnvelope = async fixture => {
@@ -111,6 +111,16 @@ async function start(app: ApplicationRef): Promise<void> {
   window.r7Run = async fixture => {
     const c = observed();
     if (!mode || currentFile || root.mount.length || window.r7SessionActive) throw new Error('R7_SESSION_OVERLAP');
+    if((window as any).ap06R12R2Condition){
+      const controller=new AbortController();window.r7SessionActive=true;window.r7CancelSession=()=>controller.abort();
+      const file=r8File(fixture)!;
+      try{
+        // Reuse the validated Blob-only operation; transport is selected by the factorial backend.
+        await runR12Stage('r12.0',fixture,file,app.injector.get(DriveService),kasumi,
+          ()=>{throw new Error('R12R2_PAYLOAD_ARRAYBUFFER_FORBIDDEN');},(window as any).r12r2Counters,controller.signal);
+      }finally{controller.abort();file.shareFdk?.fill(0);window.r7CancelSession=null;await app.whenStable();window.r7SessionActive=false;}
+      return;
+    }
     const r12 = (window as any).ap06R12Condition;
     if (r12) {
       const file = r8File(fixture)!, controller = new AbortController();

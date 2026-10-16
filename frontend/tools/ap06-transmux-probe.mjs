@@ -557,7 +557,7 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
       const browserCdp = await browser.newBrowserCDPSession();
       const capture = async (phase, cycle, gc = 'natural') => {
         if (gc === 'forced-diagnostic') await cdp.send('HeapProfiler.collectGarbage');
-        const auxiliary = auxiliaryMetrics ? await auxiliaryMetrics(cdp) : null;
+        const auxiliary = auxiliaryMetrics ? await auxiliaryMetrics(cdp,{phase,cycle,gc,browser,page}) : null;
         const sample = await collectRawMetrics(cdp, { runId, scenarioId: mode, fixtureId: 'ABC-classic-MP4-corpus',
           mode, cycle, fixture: 'ABC-classic-MP4-corpus', phase, gc, browserVersion: run.browserVersion,
           sourceHash: process.env.AP06_R5_SOURCE_HASH, fixtureHash: manifestHash, harnessHash: process.env.AP06_R5_HARNESS_HASH,

@@ -70,6 +70,16 @@ def _validate_condition(raw,condition,stage,freeze,fixtures):
         raw['browserLaunches']==raw['launchAttempts']==1 and raw['retries']==0 and raw['processSampleCalls']==11 and
         run['browserVersion']==VERSION and run['functionalStatus']==run['cleanupStatus']=='PASS' and run['playbackSessions']==18 and
         not raw['pageErrors'] and not raw['recoveryWarnings'] and not any(raw['network'][k] for k in ('externalRequests','unexpectedRequests','rejectedRequests')) and not raw['network']['workerRequests'],'R12_FUNCTIONAL_OR_NETWORK_FAILURE')
+    alias='r10.1' if condition in FETCH else 'r10.0'
+    require(run['transportProof']==expected_proof(alias),'R12_DI_CHANGED');validate_bootstrap_network(run['rangeNetwork'],alias)
+    received=validate_network(run,condition,freeze['workload']['rangesPerCycle']*6,fixtures,freeze['backendFileMapping'],expected_type='Fetch' if condition in FETCH else 'XHR')
+    require(received==freeze['workload']['bytesPerCycle']*6,'R12_HTTP_WORKLOAD_CHANGED')
+    validate_http_samples(raw,freeze,fixtures,'r12',lambda counters,sessions:validate_scalars(counters,condition,sessions,freeze['workload']['bytesPerCycle']))
+    return 'R12_MATERIALIZATION_VALID'
+
+
+def validate_http_samples(raw,freeze,fixtures,counter_name,validate_counter):
+    run=raw['runs'][0]
     for key,value in {'fixtureManifestSha256':freeze['fixtureHash'],'orchestratorHash':freeze['runnerHash'],
         'experimentalAppProducts':freeze['appProducts'],'pageScriptSha256':freeze['pageScriptSha256'],
         'backendAuthoritySha256':freeze['backendAuthoritySha256'],'backendFileMapping':freeze['backendFileMapping'],
@@ -84,10 +94,6 @@ def _validate_condition(raw,condition,stage,freeze,fixtures):
     at=lambda index:datetime.fromisoformat(samples[index]['timestamp'].replace('Z','+00:00'))
     require((at(8)-at(7)).total_seconds()>=30 and (at(9)-at(8)).total_seconds()>=90 and
         (at(9)-at(7)).total_seconds()>=120 and all(at(i)>=at(i-1) for i in range(1,11)),'R12_IDLE_TOO_SHORT')
-    alias='r10.1' if condition in FETCH else 'r10.0'
-    require(run['transportProof']==expected_proof(alias),'R12_DI_CHANGED');validate_bootstrap_network(run['rangeNetwork'],alias)
-    received=validate_network(run,condition,freeze['workload']['rangesPerCycle']*6,fixtures,freeze['backendFileMapping'],expected_type='Fetch' if condition in FETCH else 'XHR')
-    require(received==freeze['workload']['bytesPerCycle']*6,'R12_HTTP_WORKLOAD_CHANGED')
     pids=sorted({r['pid'] for s in samples for r in s['processMemory']['processes']})
     require(run['processExitAudit']=={'status':'PASS','ownedPids':pids,'aliveOwnedPids':[]},'R12_PROCESS_NOT_CLOSED')
     for sample in samples:
@@ -103,9 +109,8 @@ def _validate_condition(raw,condition,stage,freeze,fixtures):
             'activeRanges','pendingAppends','transferFailures','unhandledRejections','unexpectedPeripheralOperations','outstandingSubscriptions')) and
             all(c.get(k)==9*cycle for k in ('rangeRequestsStarted','rangeRequestsCompleted','jwtRangesValidated','http206Validated')) and
             c['metadataRequests']==sessions and c['rangeBytesReceived']==freeze['workload']['bytesPerCycle']*cycle,'R12_WORKLOAD_OR_PIPELINE_CHANGED')
-        validate_scalars(sample['counters']['r12'],condition,sessions,freeze['workload']['bytesPerCycle'])
-    require(all(s['counters']['r12']==samples[6]['counters']['r12'] for s in samples[7:]),'R12_IDLE_WORKLOAD_CHANGED')
-    return 'R12_MATERIALIZATION_VALID'
+        validate_counter(sample['counters'][counter_name],sessions)
+    require(all(s['counters'][counter_name]==samples[6]['counters'][counter_name] for s in samples[7:]),'R12_IDLE_WORKLOAD_CHANGED')
 
 
 def validate_classifier_result(result,mode,candidate=None):
