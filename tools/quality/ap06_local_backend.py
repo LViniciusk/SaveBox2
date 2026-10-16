@@ -14,7 +14,7 @@ from ap06_authorities import sha256, checked_path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / os.environ.get('AP06_EXPERIMENT_ROOT', '.quality/readiness-wave8')
-EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3'}.get(OUTPUT.name,'r8')
+EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3'}.get(OUTPUT.name,'r8')
 R3 = EXPERIMENT_ID == 'r10_r3'
 BACKEND_PORT, APP_PORT = 42187, 42088
 

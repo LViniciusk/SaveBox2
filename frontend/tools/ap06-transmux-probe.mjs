@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { collectRawMetrics, groupProcessMetrics, writeJsonAtomic } from './browser-memory-probe.mjs';
+import { collectRawMetrics, writeJsonAtomic } from './browser-memory-probe.mjs';
+import { sampleOwnedProcesses } from './ap06-process-sample.mjs';
 import {
   createMseSession, decryptWorkerChunk, disposableCryptoMaterial, newOwnership, summarizeMseRuns,
 } from './ap06-mse-probe.mjs';
@@ -555,10 +556,8 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
           sourceHash: process.env.AP06_R5_SOURCE_HASH, fixtureHash: manifestHash, harnessHash: process.env.AP06_R5_HARNESS_HASH,
           orchestratorHash: process.env.AP06_R5_RUNNER_SHA256, workerBundleHash: transpHash,
           cryptoWorkerBundleHash: cryptoWorkerHash, functionalStatus: 'PENDING' }, async () => {
-          const { processInfo } = await browserCdp.send('SystemInfo.getProcessInfo'); raw.processSampleCalls++;
-          const { stdout } = await exec(process.env.WAVE1_PYTHON,
-            [process.env.WAVE1_RUNNER, '--process-sample', processInfo.map(process => process.id).join(',')], { windowsHide: true });
-          return groupProcessMetrics(JSON.parse(stdout), processInfo);
+          raw.processSampleCalls++;
+          return sampleOwnedProcesses(browserCdp);
         }, auxiliary);
         const state = await page.evaluate(() => ({ counters: { ...window.r5Counters }, mediaNodes: document.querySelectorAll('video,audio').length }));
         sample.counters = state.counters; sample.mediaNodes = state.mediaNodes;

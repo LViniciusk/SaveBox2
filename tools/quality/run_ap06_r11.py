@@ -4,6 +4,7 @@ import copy
 import json
 import math
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -18,8 +19,46 @@ from run_ap06_transport_probe import media_server
 from ap06_authorities import sha256
 
 OUTPUT='.quality/readiness-wave11'
+CAMPAIGN='AP-06-R11'
+PUBLISHER=Path(__file__)
 CONDITIONS=('r11.0','r11.1','r11.2','r11.3')
 MIB=1024**2
+AUDIO_SERVICE='audio.mojom.AudioService'
+PLAYBACK_CONDITIONS=frozenset(('r11.0','r11.1'))
+
+
+def process_types(sample):
+    result={}
+    for row in sample['processMemory']['processes']:
+        pid=row['pid'];kind=row['type']
+        if type(pid) is not int or pid<=0 or pid in result:raise ValueError('R11_INVALID_PROCESS_IDENTITY')
+        if not isinstance(kind,str) or not kind:raise ValueError('R11_INVALID_PROCESS_TYPE')
+        result[pid]=kind
+    if not result:raise ValueError('R11_PROCESS_UNAVAILABLE')
+    return result
+
+
+def validate_process_lifecycle(samples,condition):
+    if (condition not in CONDITIONS or len(samples)<2 or samples[0].get('phase')!='baseline' or samples[0].get('cycle')!=0 or
+            samples[1].get('phase')!='cycle-1-close' or samples[1].get('cycle')!=1):
+        raise ValueError('R11_INVALID_PROCESS_TIMELINE')
+    def split(sample):
+        processes=process_types(sample)
+        return {pid:kind for pid,kind in processes.items() if kind!=AUDIO_SERVICE},{pid for pid,kind in processes.items() if kind==AUDIO_SERVICE}
+    stable,baseline_audio=split(samples[0])
+    if len(baseline_audio)>1:raise ValueError('R11_MULTIPLE_AUDIO_SERVICES')
+    if any(list(stable.values()).count(kind)!=1 for kind in ('browser','renderer','network.mojom.NetworkService')) or sum(kind in ('GPU','gpu-process') for kind in stable.values())!=1:
+        raise ValueError('R11_MISSING_CORE_PROCESS')
+    expected_audio=baseline_audio
+    for index,sample in enumerate(samples[1:],1):
+        current,audio=split(sample)
+        if current!=stable:raise ValueError('R11_PROCESS_IDENTITY_CHANGED')
+        if len(audio)>1:raise ValueError('R11_MULTIPLE_AUDIO_SERVICES')
+        if index==1:
+            if audio!=baseline_audio and (condition not in PLAYBACK_CONDITIONS or baseline_audio or len(audio)!=1):
+                raise ValueError('R11_UNEXPECTED_AUDIO_LIFECYCLE')
+            expected_audio=audio
+        elif audio!=expected_audio:raise ValueError('R11_AUDIO_LIFECYCLE_CHANGED')
 
 
 def check_budget(budget,previous,requested):
@@ -30,16 +69,14 @@ def check_budget(budget,previous,requested):
 
 def reserve_development(path,head):
     with path.open('x',encoding='utf-8') as stream:
-        json.dump({'campaign':'AP-06-R11','implementationHead':head,'developmentMaximum':1,'measurementMaximum':10,'retries':0},stream)
+        json.dump({'campaign':CAMPAIGN,'implementationHead':head,'developmentMaximum':1,'measurementMaximum':10,'retries':0},stream)
 
 
 def validate_memory(sample,baseline):
-    memory=sample['processMemory'];before=baseline['processMemory']
+    memory=sample['processMemory']
     if memory['status']!='AVAILABLE':raise ValueError('R11_PROCESS_UNAVAILABLE')
-    rows=memory['processes'];ids=[r['pid'] for r in rows]
-    if (len(ids)!=len(set(ids)) or not rows or any(type(pid) is not int or pid<=0 for pid in ids) or
-            {(r['pid'],r['type']) for r in rows}!={(r['pid'],r['type']) for r in before['processes']}):
-        raise ValueError('R11_PROCESS_IDENTITY_CHANGED')
+    process_types(sample)
+    rows=memory['processes']
     categories=memory['byCategory']
     if any(k not in categories for k in ('browser','renderer','gpu-process','utility')):raise ValueError('R11_PROCESS_MISSING')
     values=[memory['privateBytes'],*[r['privateBytes'] for r in rows],*[r['privateBytes'] for r in categories.values()]]
@@ -50,12 +87,18 @@ def validate_memory(sample,baseline):
         selected=[r for r in rows if ('browser' if r['type']=='browser' else 'renderer' if r['type']=='renderer' else
             'gpu-process' if r['type'] in ('GPU','gpu-process') else 'utility' if 'Service' in r['type'] or 'utility' in r['type'] else 'other')==kind]
         if sum(r['privateBytes'] for r in selected)!=category['privateBytes']:raise ValueError('R11_CATEGORY_TOTAL_MISMATCH')
+    types=memory.get('byType',{})
+    if set(types)!={r['type'] for r in rows} or any(type(v.get('privateBytes')) not in (int,float) or
+            not math.isfinite(v['privateBytes']) or v['privateBytes']<0 or
+            v['privateBytes']!=sum(r['privateBytes'] for r in rows if r['type']==kind) for kind,v in types.items()):
+        raise ValueError('R11_TYPE_TOTAL_MISMATCH')
 
 
 def environment(wave,directory,condition,stage='triage',freeze=None):
-    env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=Path(__file__))
+    env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=PUBLISHER)
     env.update(AP06_R11_KEYS=str(wave.root/'tools/quality/ap06_r11_keys.py'),
         AP06_R11_AUTHORITY=str(wave.output/'baseline/authority-config.local.json'),
+        AP06_R11_PROCESS_VALIDATOR=str(PUBLISHER) if CAMPAIGN=='AP-06-R11-R2' else '',
         AP06_R11_ATTEMPT=stage+'-'+directory.name)
     return env,assets
 
@@ -75,7 +118,9 @@ def verify_r11_freeze(wave,freeze):
 
 def validate_condition(raw,condition,stage,freeze,fixtures):
     run=raw['runs'][0];alias='r10.0' if condition=='r11.0' else 'r10.1'
-    if condition not in CONDITIONS or not run['runId'].startswith(stage+'-') or run['runId'].split('-',2)[-1]!=condition:
+    attempt=re.fullmatch(r'(triage|formal)-(\d{2})-(r11\.[0-3])',run['runId'])
+    if (condition not in CONDITIONS or not attempt or attempt[1]!=stage or attempt[3]!=condition or
+            (int(attempt[2])!=CONDITIONS.index(condition)+1 if stage=='triage' else not 5<=int(attempt[2])<=10)):
         raise WaveFailure('R11_ATTEMPT_IDENTITY_CHANGED')
     full=condition in ('r11.0','r11.1');workers=condition!='r11.2'
     proof={'httpWorkloadEquivalent':True,'cryptoWorkloadEquivalent':workers,'transmuxWorkloadEquivalent':workers,
@@ -97,6 +142,8 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
         raise WaveFailure('R11_CHECKPOINTS_CHANGED')
     from datetime import datetime
     samples=run['samples']
+    if [s['cycle'] for s in samples]!=[0,1,2,3,4,5,6,6,6,6]:raise WaveFailure('R11_CHECKPOINTS_CHANGED')
+    validate_process_lifecycle(samples,condition)
     if (datetime.fromisoformat(samples[-2]['timestamp'].replace('Z','+00:00'))-datetime.fromisoformat(samples[-3]['timestamp'].replace('Z','+00:00'))).total_seconds()<30:
         raise WaveFailure('R11_IDLE_TOO_SHORT')
     if run['transportProof']!=expected_proof(alias):raise WaveFailure('R11_DI_CHANGED')
@@ -157,6 +204,10 @@ def unit_browser(wave):
             wave.save('pipeline/preflight-transport.json',stats)
     unit=read(target)
     if failure or unit['status']!='PASS' or unit['unitBrowserLaunches']!=1:raise WaveFailure('R11_PREFLIGHT_FAILED')
+    if CAMPAIGN=='AP-06-R11-R2':
+        for case in unit['cases']:
+            validate_process_lifecycle(case['processSamples'],case['condition'])
+            for sample in case['processSamples']:validate_memory(sample,case['processSamples'][0])
     sequences=[]
     fixtures=read(wave.output/'fixtures/manifest.json');mapping=read(wave.output/'baseline/backend-authority.json')['fileMapping']
     workload=read(wave.output/'baseline/workload.json')
@@ -176,8 +227,11 @@ def freeze(wave):
     extra=('baseline/history.json','baseline/prechecks.json','baseline/experimental-backend.json','baseline/listener-isolation.json',
         'baseline/network-spoof-guard.json','baseline/postgres-toolchain.json','baseline/custody-readback.json','baseline/preregistered-protocol.json','baseline/backend-isolation.json',
         'tooling/backend-build/nanika_ap06_local_server.exe','tooling/backend-build/CMakeCache.txt','tooling/backend-build/compile_commands.json')
-    freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r11-probe.mjs',runner_path=__file__,extra_files=extra,
-        protocol={'campaign':'AP-06-R11','protocol':read(wave.output/'baseline/preregistered-protocol.json'),
+    if CAMPAIGN=='AP-06-R11-R2':extra+=('baseline/lifecycle-replay.json','baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json',
+        'baseline/original-fdks.dpapi','baseline/original-custody.json','baseline/typescript.txt','baseline/acl-readback.json')
+    freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r11-probe.mjs',runner_path=PUBLISHER,extra_files=extra,
+        extra_publications=('custody',) if CAMPAIGN=='AP-06-R11-R2' else (),
+        protocol={'campaign':CAMPAIGN,'protocol':read(wave.output/'baseline/preregistered-protocol.json'),
             'readiness':dict.fromkeys(('units','angularIntegration','build','preflight','integrity','secretScan'),'PASS')})
 
 
@@ -212,7 +266,15 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for flag in ('unit-browser','freeze','run','verify-freeze'):parser.add_argument('--'+flag,action='store_true')
     parser.add_argument('--publish-raw',type=Path);parser.add_argument('--snapshot')
+    parser.add_argument('--validate-processes',type=Path);parser.add_argument('--condition',choices=CONDITIONS)
     args=parser.parse_args();wave=Wave(Path(__file__).resolve().parents[2]);wave.output=wave.root/OUTPUT
+    if args.validate_processes:
+        path=args.validate_processes.absolute()
+        if not path.is_relative_to(wave.output):raise ValueError('R11_PREFLIGHT_PATH_INVALID')
+        case=next(c for c in read(path)['cases'] if c['condition']==args.condition)
+        samples=case['processSamples'];validate_process_lifecycle(samples,args.condition)
+        for sample in samples:validate_memory(sample,samples[0])
+        print(json.dumps({'status':'PASS','condition':args.condition,'samples':len(samples)}));return 0
     with tempfile.TemporaryDirectory(prefix='ap06-r11-') as tmp:
         wave.temp=Path(tmp)
         try:
@@ -226,7 +288,7 @@ def main():
             elif args.run:return campaign_run(wave)
             else:parser.error('action required')
         except (WaveFailure,ValueError) as error:
-            stop={'status':'BLOCKED_AP06_R11','reason':str(error),'ap06':'OPEN'}
+            stop={'status':'BLOCKED_AP06_R11_R2' if CAMPAIGN=='AP-06-R11-R2' else 'BLOCKED_AP06_R11','reason':str(error),'ap06':'OPEN'}
             wave.save('final/STOP.json',stop)
             publish(wave,'stop-'+('preflight' if args.unit_browser else 'campaign'),{'evidence/STOP-'+('preflight' if args.unit_browser else 'campaign')+'.json':wave.output/'final/STOP.json'})
             print(json.dumps(stop));return 1

@@ -10,6 +10,7 @@ import { sampleRenderer } from './ap06-r10-memory.mjs';
 import { AUTOPLAY_ARGS } from './ap06-integration-probe.mjs';
 import { writeJsonAtomic } from './browser-memory-probe.mjs';
 import { networkGuardSnapshot, validateCleanNetwork } from './ap06-preflight.mjs';
+import { sampleOwnedProcesses } from './ap06-process-sample.mjs';
 
 const output=process.env.AP06_R7_UNIT_OUTPUT;
 if(!output)throw new Error('R11_OUTPUT_REQUIRED');
@@ -40,6 +41,7 @@ try {
         window.r5Counters=counters;window.r5CryptoWorkerSource=crypto;window.r5TransmuxWorkerSource=transmux;
       },{counters:newIntegrationCounters(),crypto:readFileSync(process.env.AP06_R5_CRYPTO_WORKER,'utf8'),transmux:readFileSync(process.env.AP06_R5_TRANSMUX_WORKER,'utf8')});
       result.transportProofs[condition]=await initializeR11Page(page,fixtures);
+      if(process.env.AP06_R11_PROCESS_VALIDATOR)record.processSamples=[{phase:'baseline',cycle:0,processMemory:await sampleOwnedProcesses(browserCdp)}];
       record.sessions=[];
       for(const fixture of fixtures){
         const before=await page.evaluate(()=>({...window.r5Counters.observed}));
@@ -55,6 +57,13 @@ try {
       validateR11Functional(condition,state.counters,state.media);
       assert.equal(state.counters.r11.sessionsCompleted,3);
       result.boundaryCounters[condition]=state.counters.observed;result.scalarCounters[condition]=state.counters.r11;
+      if(process.env.AP06_R11_PROCESS_VALIDATOR){
+        record.processSamples.push({phase:'cycle-1-close',cycle:1,processMemory:await sampleOwnedProcesses(browserCdp)});save();
+        try {
+          record.processValidation=JSON.parse(execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R11_PROCESS_VALIDATOR,
+            '--validate-processes',output,'--condition',condition],{encoding:'utf8',windowsHide:true}));
+        } catch(error) { throw new Error(String(error.stderr??'').match(/R11_[A-Z_]+/g)?.at(-1)??'R11_PREFLIGHT_PROCESS_VALIDATION_FAILED'); }
+      }
       cdp=await context.newCDPSession(page);result.rendererMemory[condition]=await sampleRenderer(cdp);
       record.guards=networkGuardSnapshot(raw);validateCleanNetwork(raw,condition);record.status='PASS';
     } catch(error){record.failureClass=/^[A-Z_0-9]+$/.test(error.message)?error.message:error.name;throw error;}
