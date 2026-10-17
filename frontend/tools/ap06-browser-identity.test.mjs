@@ -42,7 +42,7 @@ test('frozen launch arguments match the installed Playwright defaults without st
 test('every campaign caller uses one shared identity gate and persists launch after launch returns',()=>{
   for(const name of ['ap06-transmux-probe.mjs','ap06-r12-preflight.mjs','ap06-native-capability.mjs']){
     const code=readFileSync(new URL(name,import.meta.url),'utf8');
-    assert.match(code,/launchAttestedBrowser\(chromium/); assert.doesNotMatch(code,/chromium\.launch\(/);
+    assert.match(code,/launchAttestedBrowser\((?:chromium|browserType)/); assert.doesNotMatch(code,/chromium\.launch\(/);
     assert.match(code,/closeBrowserWithIdentity/);
   }
   const gate=readFileSync(new URL('ap06-browser-identity.mjs',import.meta.url),'utf8');

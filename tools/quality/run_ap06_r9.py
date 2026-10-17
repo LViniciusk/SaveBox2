@@ -34,7 +34,7 @@ def publish(wave, name, files):
     if wave.output.name in ('readiness-wave11','readiness-wave11-r2','readiness-wave11-r3','readiness-wave12','readiness-wave12-r2-factorial','readiness-wave12-r2-native',
             'readiness-wave12-r3-factorial','readiness-wave12-r3-native','readiness-wave12-r4-factorial','readiness-wave12-r4-native',
             'readiness-wave12-r5-factorial','readiness-wave12-r5-native','readiness-wave12-r6-factorial','readiness-wave12-r6-native',
-            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native'):
+            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native','readiness-wave12-r9-factorial','readiness-wave12-r9-native'):
         prefix=wave.output.name.replace('readiness-wave','r')
         name = name if name.startswith(prefix+'-') else prefix+'-'+name
         files = {prefix+'/'+relative:source for relative,source in files.items()}
@@ -134,25 +134,30 @@ def validate_condition(raw, condition, stage, freeze, fixtures):
     return classification
 
 
-def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r9-probe.mjs', runner_path=None,
-                          extra_files=(), extra_publications=(), protocol=None):
-    target=wave.output/'tooling/freeze.json'
-    if target.exists() or wave.git('status','--porcelain').strip(): raise WaveFailure('R9_FREEZE_REQUIRES_CLEAN_COMMITTED_IMPLEMENTATION')
-    unit=read(wave.output/'tooling/angular-unit-1.json')
+def validate_freeze_preflight(wave,unit,output):
     if unit['status'] != 'PASS' or unit['unitBrowserLaunches'] != 1: raise WaveFailure('R9_UNIT_NOT_READY')
     assets, products, workers=build_products(wave.root,output)
     if products != unit['appProducts'] or unit['multiplexedContract']['workerHashes'] != {kind:row['sha256'] for kind,row in workers.items()}:
         raise WaveFailure('R9_APP_CHANGED_SINCE_NATIVE_PREFLIGHT')
     fixture_hash=sha256(wave.output/'fixtures/manifest.json')
     if fixture_hash != unit['multiplexedContract']['fixtureHash']: raise WaveFailure('R9_CORPUS_CHANGED_SINCE_PREFLIGHT')
+    return assets,products,workers,fixture_hash
+
+
+def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r9-probe.mjs', runner_path=None,
+                          extra_files=(), extra_publications=(), protocol=None):
+    target=wave.output/'tooling/freeze.json'
+    if target.exists() or wave.git('status','--porcelain').strip(): raise WaveFailure('R9_FREEZE_REQUIRES_CLEAN_COMMITTED_IMPLEMENTATION')
+    unit=read(wave.output/'tooling/angular-unit-1.json')
+    assets,products,workers,fixture_hash=validate_freeze_preflight(wave,unit,output)
     tracked=wave.git('ls-files').splitlines()
     files={path:wave.root/path for path in tracked}
     if wave.output.name in ('readiness-wave10-r3','readiness-wave11','readiness-wave11-r2','readiness-wave11-r3','readiness-wave12','readiness-wave12-r2-factorial','readiness-wave12-r2-native',
             'readiness-wave12-r3-factorial','readiness-wave12-r3-native','readiness-wave12-r4-factorial','readiness-wave12-r4-native',
             'readiness-wave12-r5-factorial','readiness-wave12-r5-native','readiness-wave12-r6-factorial','readiness-wave12-r6-native',
-            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native'):
+            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native','readiness-wave12-r9-factorial','readiness-wave12-r9-native'):
         header=wave.root/'backend/include/crow_all.h'
-        if wave.output.name.startswith('readiness-wave12-r8-'):
+        if wave.output.name.startswith(('readiness-wave12-r8-','readiness-wave12-r9-')):
             backend=read(wave.output/'baseline/experimental-backend.json')
             if header.is_file():
                 if sha256(header)!=backend.get('crowHeaderSha256'):raise WaveFailure('R12R8_CROW_HEADER_AUTHORITY_MISMATCH')
@@ -175,7 +180,8 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
         'readiness-wave12-r5-factorial':'r12-r5-factorial-','readiness-wave12-r5-native':'r12-r5-native-',
         'readiness-wave12-r6-factorial':'r12-r6-factorial-','readiness-wave12-r6-native':'r12-r6-native-',
         'readiness-wave12-r7-factorial':'r12-r7-factorial-','readiness-wave12-r7-native':'r12-r7-native-',
-        'readiness-wave12-r8-factorial':'r12-r8-factorial-','readiness-wave12-r8-native':'r12-r8-native-'}.get(wave.output.name,'')
+        'readiness-wave12-r8-factorial':'r12-r8-factorial-','readiness-wave12-r9-factorial':'r12-r9-factorial-','readiness-wave12-r9-native':'r12-r9-native-',
+            'readiness-wave12-r8-native':'r12-r8-native-'}.get(wave.output.name,'')
     implementation_name = prefix+'implementation'
     freeze_name = prefix+'freeze'
     freeze={'campaign':'AP-06-R9-R2','status':'FROZEN','implementationHead':wave.git('rev-parse','HEAD').strip(),

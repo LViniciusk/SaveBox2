@@ -77,10 +77,10 @@ def claim_stage(output, condition, stage):
 
 def build_products(root, output=OUTPUT):
     root = Path(root).resolve()
-    r12r8 = Path(output).as_posix() == '.quality/readiness-wave12-r8-factorial'
+    r12r8 = Path(output).as_posix() in ('.quality/readiness-wave12-r8-factorial','.quality/readiness-wave12-r9-factorial','.quality/readiness-wave12-r9-native')
 
     def fail(reason):
-        raise WaveFailure(reason if r12r8 else 'R8_EXECUTABLE_BUNDLES_MISSING')
+        raise WaveFailure('R12R9_APP_PRODUCTS_INVALID' if Path(output).name.startswith('readiness-wave12-r9-') else reason if r12r8 else 'R8_EXECUTABLE_BUNDLES_MISSING')
 
     app = root / output / 'tooling/app'
     if not r12r8:
@@ -103,7 +103,7 @@ def build_products(root, output=OUTPUT):
     try:
         checked_path(app.absolute())
         checked_path(browser.absolute())
-        app_root = (root / '.quality/readiness-wave12-r8-factorial').resolve(strict=True)
+        app_root = (root / output).resolve(strict=True)
         app_real = app.resolve(strict=True)
         browser_real = browser.resolve(strict=True)
         if not app_real.is_relative_to(app_root) or not browser_real.is_relative_to(app_real):

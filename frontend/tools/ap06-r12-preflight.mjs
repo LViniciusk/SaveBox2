@@ -11,10 +11,10 @@ import { sampleRenderer } from './ap06-r10-memory.mjs';
 import { sampleOwnedProcesses } from './ap06-process-sample.mjs';
 import { AUTOPLAY_ARGS } from './ap06-integration-probe.mjs';
 import { writeJsonAtomic } from './browser-memory-probe.mjs';
-import { networkGuardSnapshot,validateCleanNetwork } from './ap06-preflight.mjs';
+import { networkGuardSnapshot,validateCleanNetwork,cleanupContext } from './ap06-preflight.mjs';
 import {launchAttestedBrowser,closeBrowserWithIdentity,registerBrowserProcesses,usesRetainedProcessAudit} from './ap06-browser-identity.mjs';
 
-export async function runHttpPreflight({conditions,cancellationCondition,configure,initialize,pageScript,validateFunctional,counterName}){
+export async function runHttpPreflight({conditions,cancellationCondition,configure,initialize,pageScript,validateFunctional,counterName,browserType=chromium,identityResolver}){
 const output=process.env.AP06_R7_UNIT_OUTPUT;if(!output)throw new Error('R12_OUTPUT_REQUIRED');
 const fixtures=JSON.parse(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST,'utf8'));
 const paths=JSON.parse(process.env.AP06_R7_ALLOWED_PATHS),origin=process.env.AP06_R5_MEDIA_ORIGIN;
@@ -28,12 +28,12 @@ async function remember(){if(browserCdp){const processes=(await browserCdp.send(
   if(usesRetainedProcessAudit())await registerBrowserProcesses(browser,processes);for(const p of processes)pids.add(p.id);}
   result.ownedPids=[...pids];save();}
 try{
-  result.unitBrowserLaunchAttempts++;save();browser=await launchAttestedBrowser(chromium,{args:AUTOPLAY_ARGS},result,()=>{result.unitBrowserLaunches++;save();});
+  result.unitBrowserLaunchAttempts++;save();browser=await launchAttestedBrowser(browserType,{args:AUTOPLAY_ARGS},result,()=>{result.unitBrowserLaunches++;save();},identityResolver);
   assert.equal(browser.version(),process.env.AP06_R5_CHROMIUM_VERSION);browserCdp=await browser.newBrowserCDPSession();await remember();
   for(const condition of [...conditions,'cancel-'+cancellationCondition]){
     const cancellation=condition.startsWith('cancel-'),selected=cancellation?cancellationCondition:condition;
     const context=await browser.newContext({viewport:{width:1280,height:720},serviceWorkers:'block'});
-    let page,observer,cdp;const raw={},record={condition,status:'FAIL'};result.cases.push(record);save();
+    let page,observer,cdp,primary;const raw={},record={condition,status:'FAIL'};result.cases.push(record);save();
     try{
       page=await context.newPage();observer=await configure(page,context,raw,origin,paths,selected);
       await page.addInitScript({content:pageScript()});await page.goto(origin);
@@ -59,12 +59,16 @@ try{
         record.guards=networkGuardSnapshot(raw);validateCleanNetwork(raw,condition);
       }
       record.status='PASS';
-    }finally{
-      if(page){const state=await page.evaluate(()=>({counters:window.r5Counters,media:document.querySelectorAll('video,audio').length}));validateIntegrationCleanup(state.counters,state.media);}
-      try{await remember();}catch(error){result.status='FAIL';result.failureClass??=/^[A-Z0-9_]+$/.test(error.message)?error.message:'AP06_BROWSER_CDP_PROCESS_QUERY_FAILED';process.exitCode=1;}
-      if(observer)await observer();if(cdp)await cdp.detach();
+    }catch(error){primary=error;throw error;}finally{
+      const errors=[],closed={};
+      if(page)try{const state=await page.evaluate(()=>({counters:window.r5Counters,media:document.querySelectorAll('video,audio').length}));validateIntegrationCleanup(state.counters,state.media);}catch(error){errors.push(error);}
+      try{await remember();}catch(error){errors.push(error);}
+      errors.push(...await cleanupContext({routes:[],observer,cdp,context},closed));
       result.rangeNetworks[condition]={cdp:raw.rangeNetwork,backend:raw.backendTraffic};
-      await context.unrouteAll({behavior:'wait'});await context.close();record.contextClosed=true;save();
+      record.contextClosed=closed.closed===true;
+      if(errors.length){record.cleanupFailureClass='AP06_CONTEXT_CLEANUP_FAILED';result.cleanupFailureClass??=record.cleanupFailureClass;result.status='FAIL';process.exitCode=1;}
+      save();
+      if(errors.length&&!primary)throw new Error(record.cleanupFailureClass);
     }
   }
   if(!result.failureClass)result.status='PASS';

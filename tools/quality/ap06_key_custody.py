@@ -3,6 +3,7 @@ import csv
 import ctypes
 from ctypes import wintypes
 from functools import lru_cache
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -72,6 +73,57 @@ def unprotect(data, context):
     return dpapi(data,context,True)
 
 
+def verify_runtime_key_custody(blob_path, context, receipt, manifest_sha, identity, campaign, expected=None):
+    """Runtime account/backend credentials are separate from the three corpus FDKs."""
+    try:
+        blob_path=checked_path(Path(blob_path).absolute());private_permissions(blob_path.parent)
+        if context.get('identity')!=identity:raise ValueError('R12R9_DPAPI_IDENTITY_MISMATCH')
+        if context.get('manifestSha256')!=manifest_sha:raise ValueError('R12R9_DPAPI_MANIFEST_MISMATCH')
+        if context!=custody_context(identity,manifest_sha):raise ValueError('R12R9_DPAPI_UNSEAL_FAILED')
+        if (receipt.get('status')!='PASS' or receipt.get('campaign')!=campaign or receipt.get('identity')!=identity or
+            receipt.get('manifestSha256')!=manifest_sha or receipt.get('scope')!='CurrentUser' or
+            receipt.get('sourceCustodyCampaign')!='AP-06-R10' or receipt.get('plaintextPersisted') is not False or
+            receipt.get('independentProcess') is not True or receipt.get('credentialGroups')!=3 or
+            not blob_path.is_file() or blob_path.stat().st_size!=receipt.get('protectedBytes') or
+            sha256(blob_path)!=receipt.get('protectedSha256')):
+            raise ValueError('R12R9_DPAPI_CUSTODY_MISMATCH')
+    except ValueError as error:
+        if str(error).startswith('R12R9_'):raise
+        raise ValueError('R12R9_DPAPI_CUSTODY_MISMATCH') from None
+    except (OSError,KeyError,TypeError,AttributeError):
+        raise ValueError('R12R9_DPAPI_CUSTODY_MISMATCH') from None
+    try:
+        payload=json.loads(unprotect(blob_path.read_bytes(),context))
+        if (not isinstance(payload,dict) or set(payload)!=
+            {'accounts.local.json','player-auth.local.json','backend-runtime.local.json'} or
+            not isinstance(payload['accounts.local.json'],list) or not payload['accounts.local.json'] or
+            not all(isinstance(payload[n],dict) for n in ('player-auth.local.json','backend-runtime.local.json')) or
+            expected is not None and payload!=expected):
+            raise ValueError('R12R9_DPAPI_UNSEAL_FAILED')
+        del payload
+    except (ValueError,OSError,TypeError):
+        raise ValueError('R12R9_DPAPI_UNSEAL_FAILED') from None
+    return {'status':'PASS','credentialGroups':3,'plaintextPersisted':False}
+
+
+def seal_runtime_credentials(baseline, identity, manifest_sha, campaign, credentials):
+    baseline=checked_path(Path(baseline).absolute());private_permissions(baseline)
+    context=custody_context(identity,manifest_sha);blob=baseline/'runtime-credentials.dpapi'
+    sealed=protect(json.dumps(credentials,sort_keys=True).encode(),context)
+    receipt={'status':'PASS','campaign':campaign,'sourceCustodyCampaign':'AP-06-R10','scope':'CurrentUser',
+        'identity':identity,'manifestSha256':manifest_sha,'protectedSha256':hashlib.sha256(sealed).hexdigest(),
+        'protectedBytes':len(sealed),'independentProcess':True,'credentialGroups':3,'plaintextPersisted':False,
+        'provenance':'fresh seal of this campaign owned runtime; not copied from a historical blob'}
+    with blob.open('xb') as stream:stream.write(sealed)
+    with (baseline/'runtime-credentials-custody.json').open('x',encoding='utf-8') as stream:json.dump(context,stream,indent=2)
+    verify_runtime_key_custody(blob,context,receipt,manifest_sha,identity,campaign,credentials)
+    result=subprocess.run([sys.executable,__file__,'--runtime-readback',str(baseline)],
+        input=json.dumps(receipt).encode(),capture_output=True,check=True)
+    if json.loads(result.stdout).get('status')!='PASS':raise ValueError('R12R9_DPAPI_UNSEAL_FAILED')
+    with (baseline/'runtime-credentials-readback.json').open('x',encoding='utf-8') as stream:json.dump(receipt,stream,indent=2)
+    return receipt
+
+
 def seal_runtime_keys(runtime, identity, manifest):
     runtime = checked_path(runtime); private_permissions(runtime)
     context = custody_context(identity,sha256(checked_path(manifest)))
@@ -103,6 +155,13 @@ def readback(root, identity):
 if __name__ == '__main__':
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root',type=Path,required=True);parser.add_argument('--identity',required=True)
+    parser.add_argument('--root',type=Path);parser.add_argument('--identity');parser.add_argument('--runtime-readback',type=Path)
     args=parser.parse_args()
-    print(json.dumps(readback(args.root,args.identity)))
+    if args.runtime_readback:
+        receipt=json.loads(sys.stdin.buffer.read(65537));baseline=args.runtime_readback
+        context=json.loads((baseline/'runtime-credentials-custody.json').read_text())
+        print(json.dumps(verify_runtime_key_custody(baseline/'runtime-credentials.dpapi',context,receipt,
+            receipt['manifestSha256'],receipt['identity'],receipt['campaign'])))
+    else:
+        if not args.root or not args.identity:parser.error('--root and --identity required')
+        print(json.dumps(readback(args.root,args.identity)))
