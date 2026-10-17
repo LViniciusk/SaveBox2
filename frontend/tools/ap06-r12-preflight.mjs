@@ -26,7 +26,7 @@ const result={status:'FAIL',unitBrowserLaunchAttempts:0,unitBrowserLaunches:0,br
 const save=()=>writeJsonAtomic(output,result),pids=new Set();let browser,browserCdp;
 async function remember(){if(browserCdp)for(const p of(await browserCdp.send('SystemInfo.getProcessInfo')).processInfo)pids.add(p.id);result.ownedPids=[...pids];save();}
 try{
-  result.unitBrowserLaunchAttempts++;save();browser=await launchAttestedBrowser(chromium,{args:AUTOPLAY_ARGS},result);result.unitBrowserLaunches++;save();
+  result.unitBrowserLaunchAttempts++;save();browser=await launchAttestedBrowser(chromium,{args:AUTOPLAY_ARGS},result,()=>{result.unitBrowserLaunches++;save();});
   assert.equal(browser.version(),process.env.AP06_R5_CHROMIUM_VERSION);browserCdp=await browser.newBrowserCDPSession();await remember();
   for(const condition of [...conditions,'cancel-'+cancellationCondition]){
     const cancellation=condition.startsWith('cancel-'),selected=cancellation?cancellationCondition:condition;
@@ -65,12 +65,14 @@ try{
     }
   }
   result.status='PASS';
-}catch(error){result.failureClass=/^[A-Z0-9_]+$/.test(error.message)?error.message:'R12_PREFLIGHT_FAILED';process.exitCode=1;}
+}catch(error){result.failureClass=/^[A-Z0-9_]+$/.test(error.message)?error.message:'R12_PREFLIGHT_FAILED';
+  result.failureStage??=result.browserIdentity?.failureStage;process.exitCode=1;}
 finally{
   await remember();if(browser){
     try{await finishBrowserIdentity(browser);}catch{result.status='FAIL';process.exitCode=1;}
     finally{try{await browser.close();result.browserClosed=true;}finally{try{await closeBrowserIdentity(browser);}catch{result.status='FAIL';result.failureClass='AP06_BROWSER_IDENTITY_UNPROVEN';process.exitCode=1;}}}
   }
+  else if(result.browserIdentity?.browserClosed){result.browserClosed=true;result.processExitAudit=result.browserIdentity.failureCleanupAudit;}
   if(pids.size){result.processExitAudit=JSON.parse(execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R8_PID_AUDITOR,'--closed-pids',[...pids].join(',')],{encoding:'utf8',windowsHide:true}));if(result.processExitAudit.status!=='PASS'){result.status='FAIL';process.exitCode=1;}}
   save();
 }

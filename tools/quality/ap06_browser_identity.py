@@ -9,6 +9,7 @@ from pathlib import Path
 import struct
 import subprocess
 import sys
+import time
 
 
 def require(value, reason='AP06_BROWSER_IDENTITY_MISMATCH'):
@@ -51,27 +52,76 @@ def metadata(path):
         productVersion=version, architecture=architecture)
 
 
-def validate_process(identity, observed, pid, parent_pid, cdp_args, required_args, previous=None):
+def safe_directory(value, expected_root, launch_started_ms):
+    path, root = Path(value), Path(expected_root)
+    require(path.is_absolute() and path.is_dir() and root.is_dir(), 'AP06_BROWSER_PROFILE_PATH_INVALID')
+    for item in (path, *path.parents, root, *root.parents):
+        require(not item.is_symlink() and not getattr(item.lstat(), 'st_file_attributes', 0) & 0x400,
+            'AP06_BROWSER_REPARSE_REJECTED')
+    require(os.path.normcase(str(path.resolve())) == os.path.normcase(str(path.absolute())) and
+        os.path.normcase(str(path.parent.resolve())) == os.path.normcase(str(root.resolve())) and path.is_dir(),
+        'AP06_BROWSER_PROFILE_PATH_INVALID')
+    created_ms=path.stat().st_ctime*1000
+    require(created_ms >= launch_started_ms-2000 and created_ms <= time.time()*1000+1000,
+        'AP06_BROWSER_PROFILE_PATH_INVALID')
+    return path
+
+
+def validate_creation_times(handle_time, cim_time, verify_time):
+    # shortcut: tolerate sub-ms CIM rounding; upgrade if CIM exposes raw FILETIME.
+    require(type(handle_time) is int and handle_time > 0 and type(verify_time) is int and verify_time > 0 and type(cim_time) is int,
+        'AP06_BROWSER_CREATION_UNAVAILABLE')
+    require(handle_time == verify_time, 'AP06_BROWSER_HANDLE_CREATION_CHANGED')
+    require(abs(handle_time-cim_time) <= 10000, 'AP06_BROWSER_CREATION_CIM_MISMATCH')
+    return handle_time
+
+
+def validate_process(identity, observed, pid, parent_pid, required_args, previous=None, parent=None,
+        node_executable=None, launch_started_ms=None):
     require(type(pid) is int and pid > 0 and observed['pid'] == pid and observed['parentPid'] == parent_pid,
         'AP06_BROWSER_PID_NOT_OWNED')
     require(type(observed['creationTime']) is int and observed['creationTime'] > 0, 'AP06_BROWSER_CREATION_UNAVAILABLE')
     for key in ('executablePath', 'executableSha256', 'executableBytes', 'chromiumVersion', 'architecture'):
         expected, actual = identity[key], observed[key]
-        require((os.path.normcase(expected) == os.path.normcase(actual)) if key == 'executablePath' else expected == actual)
-    require(identity['mode'] == 'headless-shell' and isinstance(observed['args'], list) and
-        observed['args'] == cdp_args and '--headless' in observed['args'] and
-        not any(arg.startswith('--type=') for arg in observed['args']) and
-        all(arg in observed['args'] for arg in required_args), 'AP06_BROWSER_FLAGS_MISMATCH')
+        require((os.path.normcase(os.path.normpath(expected)) == os.path.normcase(os.path.normpath(actual)))
+            if key == 'executablePath' else expected == actual, 'AP06_BROWSER_IDENTITY_MISMATCH')
+    require(identity['mode'] == 'headless-shell' and Path(observed['executablePath']).name.lower() == 'chrome-headless-shell.exe',
+        'AP06_BROWSER_IDENTITY_MISMATCH')
+    protocol=identity['launchProtocol'];allowed=protocol['allowedExperimentalArgs']
+    require(isinstance(required_args,list) and required_args in allowed,'AP06_BROWSER_FLAGS_MISMATCH')
+    argv=observed['args'];require(isinstance(argv,list) and argv and
+        os.path.normcase(os.path.normpath(argv[0])) == os.path.normcase(os.path.normpath(observed['executablePath'])),
+        'AP06_BROWSER_OS_QUERY_FAILED')
+    tokens=argv[1:];fixed=protocol['fixedArgs'];suffix=protocol['suffixArgs'];profile_index=len(fixed)+len(required_args)
+    require(not any(arg == '--type' or arg.startswith('--type=') for arg in tokens) and
+        len(tokens) == profile_index+1+len(suffix) and tokens[:profile_index] == fixed+required_args,
+        'AP06_BROWSER_FLAGS_MISMATCH')
+    require(not suffix or tokens[-len(suffix):] == suffix, 'AP06_BROWSER_FLAGS_MISMATCH')
+    profile_arg=tokens[profile_index];prefix=protocol['profileArgPrefix']
+    require(profile_arg.startswith(prefix) and tokens.count(profile_arg)==1,'AP06_BROWSER_PROFILE_PATH_INVALID')
+    profile=safe_directory(profile_arg[len(prefix):],protocol['profileRoot'],launch_started_ms)
+    require(profile.name.startswith(protocol['profileNamePrefix']) and profile.name!=protocol['profileNamePrefix'],
+        'AP06_BROWSER_PROFILE_PATH_INVALID')
+    require(parent and parent['pid'] == parent_pid and node_executable and
+        os.path.normcase(os.path.normpath(parent['executablePath'])) == os.path.normcase(os.path.normpath(node_executable)) and
+        parent['creationTime'] < observed['creationTime'], 'AP06_BROWSER_ANCESTRY_INVALID')
+    require(observed['creationTime']/10000-11644473600000 >= launch_started_ms-2000,
+        'AP06_BROWSER_PID_NOT_OWNED')
     if previous:
-        require(previous['browserPid'] == pid and previous['processCreationTime'] == observed['creationTime'], 'AP06_BROWSER_PID_REUSED')
-    return dict(status='PASS', browserPid=pid, processCreationTime=observed['creationTime'],
-        expectedSha256=identity['executableSha256'], observedSha256=observed['executableSha256'],
-        expectedExecutable=identity['executablePath'], observedExecutable=observed['executablePath'],
-        chromiumVersion=observed['chromiumVersion'], architecture=observed['architecture'],
-        headless=True, launchArgsValidated=True, identityBeforeWorkload=previous is None)
+        require(previous['browserPid'] == pid and previous['processCreationTime'] == observed['creationTime'] and
+            previous['parentPid'] == parent_pid and previous['parentCreationTime'] == parent['creationTime'],
+            'AP06_BROWSER_PID_REUSED')
+    native_args=allowed[1] if len(allowed)>1 else []
+    return dict(status='PASS', browserPid=pid, parentPid=parent_pid, parentCreationTime=parent['creationTime'],
+        processCreationTime=observed['creationTime'], expectedSha256=identity['executableSha256'],
+        observedSha256=observed['executableSha256'], expectedExecutable=identity['executablePath'],
+        observedExecutable=observed['executablePath'], chromiumVersion=observed['chromiumVersion'],
+        architecture=observed['architecture'], browserMode='headless-shell', launchArgsValidated=True,
+        ancestryValidated=True,fixedDefaultsValidated=True,experimentalArgumentsValidated=True,profileDirectoryValidated=True,
+        nativeFlagsValidated=required_args==native_args, imageHashBoundByLease=True, identityBeforeWorkload=previous is None)
 
 
-def process_information(pid):
+def process_information(pid, include_identity=True, check_argv0=True):
     require(os.name == 'nt', 'AP06_BROWSER_WINDOWS_REQUIRED')
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]; kernel.OpenProcess.restype = wintypes.HANDLE
@@ -84,7 +134,7 @@ def process_information(pid):
         require(kernel.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(size)) and
             kernel.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]), 'AP06_BROWSER_OS_QUERY_FAILED')
         creation = (times[0].dwHighDateTime << 32) + times[0].dwLowDateTime
-        row = powershell(f'Get-CimInstance Win32_Process -Filter "ProcessId={pid}" | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress')
+        row = powershell(f'$p=Get-CimInstance Win32_Process -Filter "ProcessId={pid}";if($p){{[pscustomobject]@{{ProcessId=$p.ProcessId;ParentProcessId=$p.ParentProcessId;CommandLine=$p.CommandLine;CreationTimeFileTime=[long]$p.CreationDate.ToFileTimeUtc()}}|ConvertTo-Json -Compress}}')
         require(row and row['ProcessId'] == pid and row['CommandLine'], 'AP06_BROWSER_OS_QUERY_FAILED')
         shell = ctypes.WinDLL('shell32', use_last_error=True)
         shell.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
@@ -94,9 +144,16 @@ def process_information(pid):
         require(argv, 'AP06_BROWSER_OS_QUERY_FAILED')
         try: args = [argv[i] for i in range(count.value)]
         finally: kernel.LocalFree(argv)
-        # Query through the held process handle again, so a recycled CIM PID cannot pass.
+        # Match both Windows views while the same process handle remains open.
         verify = (wintypes.FILETIME*4)(); require(kernel.GetProcessTimes(handle, *[ctypes.byref(t) for t in verify]), 'AP06_BROWSER_OS_QUERY_FAILED')
-        return dict(pid=pid, parentPid=row['ParentProcessId'], creationTime=creation, args=args, **metadata(image.value))
+        verify_creation=(verify[0].dwHighDateTime << 32)+verify[0].dwLowDateTime
+        validate_creation_times(creation,row['CreationTimeFileTime'],verify_creation)
+        require(args and (not check_argv0 or
+            os.path.normcase(os.path.normpath(args[0]))==os.path.normcase(os.path.normpath(image.value))),
+            'AP06_BROWSER_IMAGE_ARGUMENT_MISMATCH')
+        result=dict(pid=pid,parentPid=row['ParentProcessId'],creationTime=creation,args=args,executablePath=str(Path(image.value).resolve()))
+        if include_identity: result.update(metadata(image.value))
+        return result
     finally: kernel.CloseHandle(handle)
 
 
@@ -132,6 +189,14 @@ def verify_identity(identity):
     require(path.is_relative_to(Path(identity['installationDirectory'])), 'AP06_BROWSER_INSTALLATION_CHANGED')
     for path, expected in identity['installationFiles'].items():
         require(digest(regular_path(path)) == expected, 'AP06_BROWSER_PLAYWRIGHT_CHANGED')
+    if 'launchProtocol' in identity:
+        protocol=identity['launchProtocol']
+        require(protocol['profileRoot'] and protocol['profileArgPrefix']=='--user-data-dir=' and
+            protocol['profileNamePrefix']=='playwright_chromiumdev_profile-' and protocol['suffixArgs']==['--remote-debugging-pipe','--no-startup-window'] and
+            protocol['fixedArgs'] and protocol['allowedExperimentalArgs']==[
+                ['--autoplay-policy=no-user-gesture-required'],
+                ['--autoplay-policy=no-user-gesture-required','--memlog=all','--memlog-stack-mode=native',
+                    '--memlog-sampling-rate=16384','--memlog-keep-small-allocations']], 'AP06_BROWSER_FLAGS_MISMATCH')
     return dict(status='PASS', **observed)
 
 
@@ -151,17 +216,21 @@ def main():
                 if request['action'] == 'closed':
                     result = verify_identity(identity); result['closedHashVerified'] = True
                     print(json.dumps(result), flush=True); break
-                observed = process_information(request['pid'])
+                observed = process_information(request['pid'],include_identity=False)
+                observed.update({key:identity[key] for key in ('executableSha256','executableBytes','architecture','productVersion')})
+                parent = process_information(request['parentPid'],include_identity=False,check_argv0=False)
                 # The shell has no PE VERSIONINFO; bind its CDP product version to the OS-attested root PID.
                 observed['chromiumVersion'] = request['browserVersion']
                 require(observed['productVersion'] in (None, observed['chromiumVersion']), 'AP06_BROWSER_VERSION_MISMATCH')
-                require(observed['creationTime']/10000 - 11644473600000 >= request['launchStartedMs'] - 2000, 'AP06_BROWSER_PID_NOT_OWNED')
-                result = validate_process(identity, observed, request['pid'], request['parentPid'], request['cdpArgs'], request['requiredArgs'], previous)
+                result = validate_process(identity, observed, request['pid'], request['parentPid'], request['requiredArgs'], previous,
+                    parent, request['nodeExecutable'], request['launchStartedMs'])
                 previous = previous or result
                 print(json.dumps(result), flush=True)
         finally: lease.close()
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-        print(json.dumps({'status':'STOP', 'reason':'AP06_BROWSER_IDENTITY_UNPROVEN'}), flush=True); raise SystemExit(1)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        reason=str(error)
+        if not reason.startswith('AP06_BROWSER_') or not reason.replace('_','').isalnum(): reason='AP06_BROWSER_IDENTITY_UNPROVEN'
+        print(json.dumps({'status':'STOP', 'reason':reason}), flush=True); raise SystemExit(1)
 
 
 if __name__ == '__main__': main()

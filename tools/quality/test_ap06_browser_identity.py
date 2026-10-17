@@ -1,56 +1,98 @@
 import copy
-import unittest
-import json
 import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
-from ap06_browser_identity import validate_process, metadata, verify_identity, ExecutableLease, regular_path, process_information, powershell
+import time
+import unittest
+from ap06_browser_identity import (validate_process, metadata, verify_identity, ExecutableLease,
+    regular_path, process_information, powershell, validate_creation_times)
 
 
 class IdentityTests(unittest.TestCase):
     def setUp(self):
-        self.identity = dict(executablePath='C:/owned/chrome-headless-shell.exe', executableSha256='a'*64,
-            executableBytes=123, chromiumVersion='151.0.7922.34', architecture='x64', mode='headless-shell')
-        self.process = dict(pid=71, parentPid=42, creationTime=133000000000000000,
-            executablePath=self.identity['executablePath'], executableSha256='a'*64, executableBytes=123,
-            chromiumVersion=self.identity['chromiumVersion'], architecture='x64',
-            args=[self.identity['executablePath'], '--headless', '--autoplay-policy=no-user-gesture-required'])
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+        self.shell=self.root/'chrome-headless-shell.exe';self.shell.write_bytes(b'owned image')
+        self.profile_root=self.root/'temp';self.profile_root.mkdir()
+        self.profile=self.profile_root/'playwright_chromiumdev_profile-test1234';self.profile.mkdir()
+        now_filetime=int((time.time()+11644473600)*10000000)
+        self.started=int(time.time()*1000)-2000
+        self.fixed=['--disable-background-networking','--no-sandbox']
+        self.autoplay=['--autoplay-policy=no-user-gesture-required']
+        self.native=self.autoplay+['--memlog=all','--memlog-stack-mode=native','--memlog-sampling-rate=16384','--memlog-keep-small-allocations']
+        self.protocol=dict(fixedArgs=self.fixed,suffixArgs=['--remote-debugging-pipe','--no-startup-window'],
+            profileRoot=str(self.profile_root),profileArgPrefix='--user-data-dir=',profileNamePrefix='playwright_chromiumdev_profile-',
+            allowedExperimentalArgs=[self.autoplay,self.native])
+        self.identity=dict(executablePath=str(self.shell),executableSha256='a'*64,executableBytes=123,
+            chromiumVersion='151.0.7922.34',architecture='x64',mode='headless-shell',launchProtocol=self.protocol)
+        self.process=dict(pid=71,parentPid=42,creationTime=now_filetime,
+            executablePath=self.identity['executablePath'],executableSha256='a'*64,executableBytes=123,
+            chromiumVersion=self.identity['chromiumVersion'],architecture='x64',
+            args=[self.identity['executablePath'],*self.fixed,*self.autoplay,
+                '--user-data-dir='+str(self.profile),*self.protocol['suffixArgs']])
+        self.parent=dict(pid=42,creationTime=self.process['creationTime']-10000000,
+            executablePath=sys.executable,args=[sys.executable,'runner.js'])
 
-    def check(self, process=None, previous=None):
-        return validate_process(self.identity, process or self.process, 71, 42,
-            self.process['args'], ['--autoplay-policy=no-user-gesture-required'], previous)
+    def tearDown(self): self.temp.cleanup()
 
-    def test_real_association_contract(self):
-        self.assertEqual(self.check()['status'], 'PASS')
-        self.assertEqual(self.check(previous=self.check())['status'], 'PASS')
+    def check(self, process=None, previous=None, required_args=None, parent=None):
+        return validate_process(self.identity,process or self.process,71,42,
+            self.autoplay if required_args is None else required_args,previous,
+            self.parent if parent is None else parent,sys.executable,self.started)
 
-    def test_precise_r2_failure_and_independent_corruptions(self):
-        for field, value in [('executablePath', 'C:/owned/chrome.exe'),
-                ('executableSha256', 'b'*64), ('chromiumVersion', '151.0.7922.35'),
-                ('pid', 72), ('parentPid', 43), ('architecture', 'arm64'),
-                ('args', [self.identity['executablePath'], '--headless'])]:
+    def test_shell_binary_is_headless_without_headless_switch(self):
+        result=self.check()
+        self.assertEqual(result['status'],'PASS');self.assertEqual(result['browserMode'],'headless-shell')
+        self.assertNotIn('--headless',self.process['args']);self.assertTrue(result['fixedDefaultsValidated'])
+        self.assertTrue(result['experimentalArgumentsValidated']);self.assertFalse(result['nativeFlagsValidated'])
+        self.assertEqual(self.check(previous=result)['status'],'PASS')
+
+    def test_native_switches_are_exact_and_only_registered_set_passes(self):
+        process=copy.deepcopy(self.process);process['args']=[self.identity['executablePath'],*self.fixed,*self.native,
+            '--user-data-dir='+str(self.profile),*self.protocol['suffixArgs']]
+        self.assertTrue(self.check(process,required_args=self.native)['nativeFlagsValidated'])
+        with self.assertRaisesRegex(ValueError,'AP06_BROWSER_FLAGS_MISMATCH'):
+            self.check(required_args=['--autoplay-policy=no-user-gesture-required','--memlog=all'])
+
+    def test_pid_path_hash_version_arch_and_full_argv_mismatches_stop(self):
+        mutations=[('pid',72),('parentPid',43),('executablePath',str(self.root/'chrome.exe')),
+            ('executableSha256','b'*64),('executableBytes',124),('chromiumVersion','151.0.7922.35'),('architecture','arm64')]
+        for field,value in mutations:
             with self.subTest(field=field):
-                process = copy.deepcopy(self.process); process[field] = value
-                with self.assertRaises(ValueError): self.check(process)
-        frozen_chrome = dict(self.identity, executablePath='C:/owned/chrome.exe')
-        with self.assertRaises(ValueError):
-            validate_process(frozen_chrome, self.process, 71, 42, self.process['args'], [])
+                process=copy.deepcopy(self.process);process[field]=value
+                with self.assertRaises(ValueError):self.check(process)
+        for mutation in (
+            lambda args:args.__setitem__(args.index(self.autoplay[0]),'--autoplay-policy=no-user-gesture'),
+            lambda args:args.append('--disable-web-security'),
+            lambda args:args.__setitem__(args.index('--disable-background-networking'),'--disable-background-networking=0'),
+            lambda args:args.append('--headless'),
+            lambda args:args.__setitem__(args.index('--remote-debugging-pipe'),'--remote-debugging-port=0')):
+            process=copy.deepcopy(self.process);mutation(process['args'])
+            with self.assertRaisesRegex(ValueError,'AP06_BROWSER_FLAGS_MISMATCH'):self.check(process)
 
-    def test_pid_reuse_and_missing_os_evidence(self):
-        previous = self.check(); process = dict(self.process, creationTime=self.process['creationTime']+1)
-        with self.assertRaises(ValueError): self.check(process, previous)
-        for field in self.process:
-            process = dict(self.process); del process[field]
-            with self.subTest(field=field), self.assertRaises((ValueError, KeyError)):
-                self.check(process)
+    def test_parentage_creation_and_pid_reuse_fail_closed(self):
+        previous=self.check()
+        for process,parent in ((dict(self.process,creationTime=self.process['creationTime']+1),self.parent),
+            (self.process,dict(self.parent,creationTime=self.process['creationTime']+1)),
+            (self.process,dict(self.parent,pid=43))):
+            with self.assertRaises(ValueError):self.check(process,previous,parent=parent)
+        self.assertEqual(validate_creation_times(100000000000,100000000001,100000000000),100000000000)
+        with self.assertRaisesRegex(ValueError,'AP06_BROWSER_CREATION_CIM_MISMATCH'):validate_creation_times(1,10002,1)
+        with self.assertRaisesRegex(ValueError,'AP06_BROWSER_HANDLE_CREATION_CHANGED'):validate_creation_times(1,1,2)
+
+    def test_profile_must_be_a_fresh_child_of_the_session_temp_root(self):
+        process=copy.deepcopy(self.process)
+        process['args'][len(self.fixed)+len(self.autoplay)+1]='--user-data-dir='+str(self.root/'elsewhere')
+        with self.assertRaises(ValueError):self.check(process)
+        process=copy.deepcopy(self.process);process['args'][len(self.fixed)+len(self.autoplay)+1]='--user-data-dir='+str(self.profile_root)
+        with self.assertRaises(ValueError):self.check(process)
 
     @unittest.skipUnless(os.name=='nt','Windows APIs')
     def test_real_file_lease_hash_missing_installation_and_reparse(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp); image=root/'shell.exe'; shutil.copyfile(sys.executable,image)
-            package=root/'package.json'; package.write_text('{"version":"fixture"}')
+            root=Path(tmp);image=root/'shell.exe';shutil.copyfile(sys.executable,image)
+            package=root/'package.json';package.write_text('{"version":"fixture"}')
             from ap06_browser_identity import digest
             identity=dict(metadata(image),mode='headless-shell',installationDirectory=str(root),installationFiles={str(package):digest(package)})
             self.assertEqual(verify_identity(identity)['status'],'PASS')
@@ -75,10 +117,12 @@ class IdentityTests(unittest.TestCase):
             finally:os.rmdir(junction)
 
     @unittest.skipUnless(os.name=='nt','Windows APIs')
-    def test_actual_os_query_and_fail_closed(self):
+    def test_actual_os_query_correlates_handle_cim_and_command_line(self):
         row=process_information(os.getpid())
         self.assertEqual(row['pid'],os.getpid());self.assertEqual(row['parentPid'],os.getppid())
         self.assertGreater(row['creationTime'],0);self.assertTrue(Path(row['executablePath']).samefile(sys.executable))
+        self.assertTrue(Path(row['args'][0]).samefile(sys.executable))
+        self.assertEqual(validate_creation_times(row['creationTime'],row['creationTime'],row['creationTime']),row['creationTime'])
         with self.assertRaises(ValueError):process_information(4294967294)
 
 

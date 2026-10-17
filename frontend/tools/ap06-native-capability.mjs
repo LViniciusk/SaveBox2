@@ -12,7 +12,7 @@ let browser,trace,browserCdp;
 const save=()=>writeJsonAtomic(output,{...record,trace:trace?.receipt});
 save();
 try{
-  browser=await launchAttestedBrowser(chromium,{args:[...AUTOPLAY_ARGS,...NATIVE_ARGS]},record);record.browserLaunches=1;save();
+  browser=await launchAttestedBrowser(chromium,{args:[...AUTOPLAY_ARGS,...NATIVE_ARGS]},record,()=>{record.browserLaunches++;save();});
   if(browser.version()!==process.env.AP06_R5_CHROMIUM_VERSION)throw new Error('NATIVE_VERSION_CHANGED');
   browserCdp=await browser.newBrowserCDPSession();trace=new NativeTrace(process.env.AP06_NATIVE_TRACE);await trace.start(browser);
   const context=await browser.newContext({serviceWorkers:'block'}),page=await context.newPage();
@@ -23,7 +23,8 @@ try{
   await page.evaluate(()=>{window.nativeCapabilityAllocation=null;});await page.waitForTimeout(120000);await sample('idle-120s');
   const cdp=await context.newCDPSession(page);await cdp.send('HeapProfiler.collectGarbage');await sample('forced-GC-final');
   record.status='CAPTURED';
-}catch(error){record.failureClass=/^[A-Z0-9_]+$/.test(error.message)?error.message:'NATIVE_CAPABILITY_CAPTURE_FAILED';}
+}catch(error){record.failureClass=/^[A-Z0-9_]+$/.test(error.message)?error.message:'NATIVE_CAPABILITY_CAPTURE_FAILED';
+  record.failureStage??=record.browserIdentity?.failureStage??'native-capability';}
 finally{
   if(trace)try{await trace.stop();}catch(error){record.traceFailure=/^[A-Z0-9_]+$/.test(error.message)?error.message:'NATIVE_TRACE_STOP_FAILED';}
   if(browserCdp)try{for(const p of(await browserCdp.send('SystemInfo.getProcessInfo')).processInfo)pids.add(p.id);}catch{}
@@ -31,6 +32,7 @@ finally{
     try{await finishBrowserIdentity(browser);}catch{record.status='STOP';record.failureClass='AP06_BROWSER_IDENTITY_UNPROVEN';}
     finally{try{await browser.close();record.browserClosed=true;}finally{try{await closeBrowserIdentity(browser);}catch{record.status='STOP';record.failureClass='AP06_BROWSER_IDENTITY_UNPROVEN';}}}
   }
+  else if(record.browserIdentity?.browserClosed){record.browserClosed=true;record.processExitAudit=record.browserIdentity.failureCleanupAudit;}
   if(pids.size)record.processExitAudit=JSON.parse(execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R8_PID_AUDITOR,'--closed-pids',[...pids].join(',')],{encoding:'utf8',windowsHide:true}));
   save();
 }

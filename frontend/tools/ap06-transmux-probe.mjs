@@ -539,7 +539,7 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
     raw.runs.push(run); raw.launchAttempts++; flush();
     let browser = null, page = null, pageInitialized = false, closeObservation = null;
     try {
-      browser = await launchAttestedBrowser(chromium,launchOptions,run); raw.browserLaunches++; flush();
+      browser = await launchAttestedBrowser(chromium,launchOptions,run,()=>{raw.browserLaunches++;flush();});
       run.browserVersion = browser.version();
       if (run.browserVersion !== expectedChromiumVersion) throw new Error('CHROMIUM_VERSION_MISMATCH');
       const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block' });
@@ -591,6 +591,7 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
       run.functionalStatus = 'PASS'; run.cleanupStatus = 'PASS';
     } catch (error) {
       run.failureClass = error?.message?.match(/^[A-Z0-9_]+$/) ? error.message : error?.name || 'UNKNOWN_ERROR';
+      run.failureStage ??= run.browserIdentity?.failureStage;
       process.exitCode = 1;
     } finally {
       let cleanupOk = true;
@@ -616,6 +617,9 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
           }
         }
         catch { cleanupOk = false; }
+      } else if (run.browserIdentity?.browserLaunchSucceeded) {
+        run.processExitAudit=run.browserIdentity.failureCleanupAudit;
+        cleanupOk=run.browserIdentity.browserClosed===true&&run.browserIdentity.cleanupStatus==='PASS';
       }
       run.cleanupStatus = cleanupOk ? 'PASS' : 'FAIL';
       for (const sample of run.samples) {

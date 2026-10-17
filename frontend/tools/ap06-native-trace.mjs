@@ -1,7 +1,8 @@
 import {open} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
+import {getAttestedBrowserProof,NATIVE_ARGS} from './ap06-browser-identity.mjs';
 
-export const NATIVE_ARGS=Object.freeze(['--memlog=all','--memlog-stack-mode=native','--memlog-sampling-rate=16384','--memlog-keep-small-allocations']);
+export {NATIVE_ARGS};
 export const CHECKPOINTS=Object.freeze(['baseline','cycle-6-close','idle-120s','forced-GC-final']);
 async function bounded(promise,ms=30000){
   let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('NATIVE_CDP_TIMEOUT')),ms);})]);}
@@ -26,9 +27,9 @@ export async function writeTraceStream(cdp,handle,path,maxBytes=512*1024*1024){
 export class NativeTrace {
   constructor(path){this.path=path;this.receipt={complete:false,dataLossOccurred:null,activatedBeforeWorkload:false,checkpoints:[],flags:[...NATIVE_ARGS],samplingIntervalBytes:16384};}
   async start(browser){
+    const proof=getAttestedBrowserProof(browser);
+    if(!proof.nativeFlagsValidated)throw new Error('NATIVE_FLAGS_NOT_EFFECTIVE');
     this.cdp=await browser.newBrowserCDPSession();
-    const {arguments:args}=await bounded(this.cdp.send('Browser.getBrowserCommandLine'));
-    if(!NATIVE_ARGS.every(flag=>args.includes(flag)))throw new Error('NATIVE_FLAGS_NOT_EFFECTIVE');
     this.receipt.categories=(await bounded(this.cdp.send('Tracing.getCategories'))).categories.filter(c=>c==='disabled-by-default-memory-infra');
     if(!this.receipt.categories.length)throw new Error('NATIVE_MEMORYINFRA_UNAVAILABLE');
     await bounded(this.cdp.send('Tracing.start',{transferMode:'ReturnAsStream',streamFormat:'json',streamCompression:'none',tracingBackend:'chrome',
