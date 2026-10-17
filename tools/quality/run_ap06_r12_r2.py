@@ -17,21 +17,44 @@ PUBLISHER=Path(__file__).resolve()
 def configure_campaign(output,publisher,campaign):
     global OUTPUT,PUBLISHER,CAMPAIGN
     require((output,campaign) in (('.quality/readiness-wave12-r3-factorial','AP-06-R12-R3-factorial'),
-        ('.quality/readiness-wave12-r4-factorial','AP-06-R12-R4-factorial')),'R12R3_CAMPAIGN_INVALID')
+        ('.quality/readiness-wave12-r4-factorial','AP-06-R12-R4-factorial'),
+        ('.quality/readiness-wave12-r5-factorial','AP-06-R12-R5-factorial')),'R12R3_CAMPAIGN_INVALID')
     OUTPUT,PUBLISHER,CAMPAIGN=output,Path(publisher).resolve(),campaign
 
 def campaign_decision(value):
+    if CAMPAIGN=='AP-06-R12-R5-factorial':return dict(value,status=value['status'].replace('R12R2_','R12R5_'))
     if CAMPAIGN=='AP-06-R12-R4-factorial':return dict(value,status=value['status'].replace('R12R2_','R12R4_'))
     if CAMPAIGN=='AP-06-R12-R3-factorial':return dict(value,status=value['status'].replace('R12R2_','R12R3_'))
     return value
 
-def validate_browser_receipt(record,identity,native=False):
+def validate_browser_receipt(record,identity,native=False,process_samples=None):
     receipt=record.get('browserIdentity',{})
-    r4=CAMPAIGN=='AP-06-R12-R4-factorial';prefix='R12R4_' if r4 else 'R12R3_'
+    r5=CAMPAIGN=='AP-06-R12-R5-factorial';r4=CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial')
+    prefix='R12R5_' if r5 else 'R12R4_' if r4 else 'R12R3_'
     launched=(receipt.get('browserLaunchSucceeded') is True and receipt.get('attemptReserved') is True) if r4 else receipt.get('launchSucceeded') is True
     require(receipt.get('status')=='PASS' and receipt.get('readLease') is True and launched,prefix+'BROWSER_IDENTITY_REQUIRED')
     before,after=receipt.get('before',{}),receipt.get('after',{})
-    require(receipt.get('processExitAudit',{}).get('status')=='PASS' and before.get('identityBeforeWorkload') is True and after.get('identityBeforeWorkload') is False and
+    if r5:
+        if process_samples is None:
+            process_samples=record.get('processSamples',record.get('samples'))
+            if process_samples is None:
+                process_samples=[sample for case in record.get('cases',()) for sample in case.get('processSamples',())]
+        audit=record.get('processExitAudit');validate_process_audit_receipt(audit,process_samples)
+        require(receipt.get('processExitAudit')==audit and any(row['pid']==before.get('browserPid') and 'browser' in row['roles']
+            for row in audit['processes']),'R12R5_BROWSER_PROCESS_AUDIT_MISSING_ROOT')
+        release=record.get('handleRelease');process_handles=release.get('processHandles',{}) if isinstance(release,dict) else {}
+        executable_handles=release.get('executableHandles',{}) if isinstance(release,dict) else {}
+        require(receipt.get('handleRelease')==release and isinstance(release,dict) and set(release)=={'status','processHandles','executableHandles'} and
+            release.get('status')=='PASS' and set(process_handles)=={'releasedProcessHandles','closeFailures'} and
+            type(process_handles.get('releasedProcessHandles')) is int and process_handles.get('releasedProcessHandles')==audit['registeredProcessCount'] and
+            type(process_handles.get('closeFailures')) is int and process_handles.get('closeFailures')==0 and
+            set(executable_handles)=={'releasedExecutableHandles','closeFailures'} and
+            type(executable_handles.get('releasedExecutableHandles')) is int and
+            executable_handles.get('releasedExecutableHandles')==1+len(identity.get('installationFiles',{})) and
+            type(executable_handles.get('closeFailures')) is int and executable_handles.get('closeFailures')==0,
+            'R12R5_PROCESS_HANDLES_NOT_RELEASED')
+    process_audit=record.get('processExitAudit') if r5 else receipt.get('processExitAudit',{})
+    require((process_audit.get('status')=='PASS') and before.get('identityBeforeWorkload') is True and after.get('identityBeforeWorkload') is False and
         before.get('browserPid')==after.get('browserPid') and before.get('processCreationTime')==after.get('processCreationTime') and
         (not r4 or (before.get('parentPid')==after.get('parentPid') and before.get('parentCreationTime')==after.get('parentCreationTime') and
             before.get('ancestryValidated') is True and after.get('ancestryValidated') is True)) and
@@ -44,6 +67,36 @@ def validate_browser_receipt(record,identity,native=False):
                 row.get('experimentalArgumentsValidated') is True and row.get('profileDirectoryValidated') is True and row.get('nativeFlagsValidated') is native and
                 row.get('imageHashBoundByLease') is True)),
             prefix+'BROWSER_RECEIPT_INVALID')
+
+def validate_process_audit_receipt(receipt,process_samples=()):
+    keys={'status','method','registeredProcessCount','closedProcessCount','timedOutProcessCount','waitFailedProcessCount',
+        'reusedPidCount','deadlineMs','elapsedMs','closedHashVerified','processes'}
+    require(isinstance(receipt,dict) and set(receipt)==keys and isinstance(receipt['processes'],list) and receipt['status']=='PASS' and
+        receipt['method']=='retained-win32-process-handles' and receipt['closedHashVerified'] is True and
+        type(receipt['deadlineMs']) is int and receipt['deadlineMs']==10000 and type(receipt['elapsedMs']) is int and 0<=receipt['elapsedMs']<=10000 and
+        all(type(receipt[k]) is int and receipt[k]>=0 for k in ('registeredProcessCount','closedProcessCount',
+            'timedOutProcessCount','waitFailedProcessCount','reusedPidCount')) and
+        receipt['registeredProcessCount']==receipt['closedProcessCount']==len(receipt['processes']) and
+        receipt['registeredProcessCount']>0 and receipt['timedOutProcessCount']==receipt['waitFailedProcessCount']==0 and
+        receipt['reusedPidCount']<=receipt['registeredProcessCount'],
+        'R12R5_PROCESS_AUDIT_RECEIPT_INVALID')
+    require(isinstance(process_samples,(list,tuple)) and len(process_samples)>0,'R12R5_PROCESS_AUDIT_RAW_SAMPLES_MISSING')
+    identities=set();observed=set()
+    for row in receipt['processes']:
+        require(isinstance(row,dict) and set(row)=={'pid','creationTime','roles'} and type(row['pid']) is int and row['pid']>0 and
+            type(row['creationTime']) is int and row['creationTime']>0 and isinstance(row['roles'],list) and row['roles'] and
+            all(isinstance(role,str) and role and role.replace('_','').replace('-','').replace('.','').isalnum() for role in row['roles']) and
+            row['roles']==sorted(set(row['roles'])),
+            'R12R5_PROCESS_AUDIT_RECEIPT_INVALID')
+        identity=(row['pid'],row['creationTime']);require(identity not in identities,'R12R5_PROCESS_AUDIT_RECEIPT_INVALID')
+        identities.add(identity);observed.add((row['pid'],frozenset(row['roles'])))
+    for sample in process_samples:
+        processes=sample.get('processes',sample.get('processMemory',{}).get('processes',()))
+        require(isinstance(processes,(list,tuple)) and len(processes)>0,'R12R5_PROCESS_AUDIT_RAW_SAMPLES_MISSING')
+        for row in processes:
+            require(any(pid==row.get('pid') and row.get('type') in roles for pid,roles in observed),
+                'R12R5_PROCESS_AUDIT_RAW_PID_UNCOVERED')
+    return True
 CONDITIONS=dict(zip((f'r12r2.{i}' for i in range(4)),({'metadata':m,'payload':p} for m,p in (('xhr','xhr'),('fetch','xhr'),('xhr','fetch'),('fetch','fetch')))))
 PAIRS=(('r12r2.0','r12r2.2'),('r12r2.1','r12r2.3'),('r12r2.0','r12r2.1'),('r12r2.2','r12r2.3'))
 
@@ -65,10 +118,10 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
     try:
         require(condition in CONDITIONS and stage in ('triage','formal') and len(raw['runs'])==1,'R12R2_RUN_IDENTITY_CHANGED')
         run=raw['runs'][0];attempt=re.fullmatch(r'(triage|formal)-(\d{2})-(r12r2\.[0-3])',run['runId'])
-        if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial'):
-            validate_browser_receipt(run,freeze['browserIdentity'])
+        if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial'):
+            validate_browser_receipt(run,freeze['browserIdentity'],process_samples=run.get('samples',()))
             require(run['browserIdentity']['before']['browserPid']==next(p['pid'] for p in run['samples'][0]['processMemory']['processes'] if p['type']=='browser'),
-                ('R12R4_' if CAMPAIGN=='AP-06-R12-R4-factorial' else 'R12R3_')+'BROWSER_SAMPLE_PID_MISMATCH')
+                ('R12R5_' if CAMPAIGN=='AP-06-R12-R5-factorial' else 'R12R4_' if CAMPAIGN=='AP-06-R12-R4-factorial' else 'R12R3_')+'BROWSER_SAMPLE_PID_MISMATCH')
         require(attempt and attempt[1]==stage and attempt[3]==condition and
             (int(attempt[2])==list(CONDITIONS).index(condition)+1 if stage=='triage' else 5<=int(attempt[2])<=10),'R12R2_ATTEMPT_ORDER_CHANGED')
         identity={'videoPlayerComponentUsed':False,'videoStreamServiceUsed':False,'attributionDriverUsed':True,'httpWorkloadEquivalent':True,
@@ -97,19 +150,21 @@ def environment(wave,directory,condition,stage='triage',freeze=None):
     env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=PUBLISHER)
     env.update(AP06_R11_KEYS=str(wave.root/'tools/quality/ap06_r11_keys.py'),AP06_R11_AUTHORITY=str(wave.output/'baseline/authority-config.local.json'),
         AP06_R12R2_ATTEMPT=stage+'-'+directory.name)
-    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial'):
         env['AP06_BROWSER_IDENTITY']=str(wave.output/'baseline/browser-identity.json')
-    if CAMPAIGN=='AP-06-R12-R4-factorial':
+    if CAMPAIGN=='AP-06-R12-R5-factorial':env['AP06_R5_PROCESS_HANDLE_AUDIT']='1'
+    if CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial'):
         profile_root=checked_path((wave.output/'tooling/browser-temp').absolute());create=not profile_root.exists();profile_root.mkdir(exist_ok=True);private_permissions(profile_root,create=create)
         env.update(AP06_BROWSER_TEMP_ROOT=str(profile_root),TEMP=str(profile_root),TMP=str(profile_root))
     return env,assets
 
 def verify_campaign_freeze(wave,frozen):
     verify_r11_freeze(wave,frozen)
-    if CAMPAIGN=='AP-06-R12-R4-factorial':
+    if CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial'):
         from ap06_browser_identity import verify_identity
         identity=read(wave.output/'baseline/browser-identity.json')
-        require(frozen.get('browserIdentity')==identity,'R12R4_BROWSER_FREEZE_CHANGED')
+        prefix='R12R5' if CAMPAIGN=='AP-06-R12-R5-factorial' else 'R12R4'
+        require(frozen.get('browserIdentity')==identity,prefix+'_BROWSER_FREEZE_CHANGED')
         verify_identity(identity)
 
 def validate_classifier_result(result,mode,candidate=None):
@@ -148,10 +203,10 @@ def classify(wave,values,formal=None,candidate=None):
 def unit_browser(wave):
     checks=read(wave.output/'baseline/prechecks.json')
     require(not wave.git('status','--porcelain').strip() and all(checks.get(k)=='PASS' for k in ('status','secretScan','angularBuild','typescript','syntax','diff')),'R12R2_PRECHECKS_REQUIRED')
-    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial'):
         ci=read(wave.output/'baseline/ci.json')
         require(ci['headSha']==wave.git('rev-parse','HEAD').strip() and ci['conclusion']=='success' and len(ci['jobs'])==3 and
-            all(job['conclusion']=='success' for job in ci['jobs']),('R12R4_' if CAMPAIGN=='AP-06-R12-R4-factorial' else 'R12R3_')+'CI_REQUIRED')
+            all(job['conclusion']=='success' for job in ci['jobs']),('R12R5_' if CAMPAIGN=='AP-06-R12-R5-factorial' else 'R12R4_' if CAMPAIGN=='AP-06-R12-R4-factorial' else 'R12R3_')+'CI_REQUIRED')
     reservation=wave.output/'pipeline/development-reservation.json'
     with reservation.open('x') as stream:json.dump({'campaign':CAMPAIGN,'head':wave.git('rev-parse','HEAD'),'maximum':1,'retries':0},stream)
     publish(wave,'development-reserved',{'evidence/development-reservation.json':reservation})
@@ -163,7 +218,9 @@ def unit_browser(wave):
             if target.exists():publish(wave,'preflight-complete',{'evidence/preflight.raw.json':target})
             wave.save('pipeline/preflight-transport.json',stats)
     unit=read(target);require(unit['status']=='PASS' and unit['unitBrowserLaunchAttempts']==unit['unitBrowserLaunches']==1 and unit['browserClosed'] and unit['processExitAudit']['status']=='PASS','R12R2_PREFLIGHT_FAILED')
-    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial'):validate_browser_receipt(unit,read(wave.output/'baseline/browser-identity.json'))
+    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial'):
+        samples=[sample for case in unit['cases'] for sample in case.get('processSamples',())]
+        validate_browser_receipt(unit,read(wave.output/'baseline/browser-identity.json'),process_samples=samples)
     workload=read(wave.output/'baseline/workload.json');fixtures=read(wave.output/'fixtures/manifest.json');mapping=read(wave.output/'baseline/backend-authority.json')['fileMapping']
     for condition in CONDITIONS:
         network=unit['rangeNetworks'][condition];require(unit['transportProofs'][condition]==expected_proof('r10.1'),'R12R2_PREFLIGHT_DI_CHANGED')
@@ -176,12 +233,12 @@ def unit_browser(wave):
 def freeze(wave):
     require(read(wave.output/'baseline/preflight-ready.json')['status']=='PASS','R12R2_PREFLIGHT_REQUIRED')
     identity_files=()
-    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial'):
         from ap06_browser_identity import verify_identity
         identity=read(wave.output/'baseline/browser-identity.json');verify_identity(identity)
         validate_browser_receipt(read(wave.output/'tooling/angular-unit-1.json'),identity)
         ci=read(wave.output/'baseline/ci.json');require(ci['headSha']==wave.git('rev-parse','HEAD').strip() and ci['conclusion']=='success',
-            ('R12R4_' if CAMPAIGN=='AP-06-R12-R4-factorial' else 'R12R3_')+'CI_REQUIRED')
+            ('R12R5_' if CAMPAIGN=='AP-06-R12-R5-factorial' else 'R12R4_' if CAMPAIGN=='AP-06-R12-R4-factorial' else 'R12R3_')+'CI_REQUIRED')
         identity_files=('baseline/browser-identity.json','baseline/browser-identity-publication.json')
     freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r12-r2-probe.mjs',runner_path=PUBLISHER,extra_publications=('custody',),
         extra_files=('baseline/prechecks.json','baseline/preregistered-protocol.json','baseline/custody-readback.json','baseline/backend-isolation.json',
@@ -216,8 +273,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ap06-r12r2-') as tmp:
         wave.temp=Path(tmp)
         try:
-            if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial') and (args.unit_browser or args.freeze or args.run) and (wave.output/'final/STOP.json').exists():
-                prefix='R12R4' if CAMPAIGN=='AP-06-R12-R4-factorial' else 'R12R3'
+            if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial') and (args.unit_browser or args.freeze or args.run) and (wave.output/'final/STOP.json').exists():
+                prefix='R12R5' if CAMPAIGN=='AP-06-R12-R5-factorial' else 'R12R4' if CAMPAIGN=='AP-06-R12-R4-factorial' else 'R12R3'
                 print(json.dumps({'status':prefix+'_STOP','reason':prefix+'_NO_RETRY_OR_RESUME'}));return 1
             if args.validate_processes:
                 path=checked_path(args.validate_processes.absolute());require(path.is_relative_to(wave.output),'R12R2_PREFLIGHT_PATH_INVALID')

@@ -14,14 +14,30 @@ async function fixture(command, payload, env = environment) {
   return executeFixture({ command, payload, environment: env });
 }
 if (process.argv.includes('--cleanup')) {
+  const r5 = out.split(/[\\/]/).at(-1).startsWith('readiness-wave12-r5-');
   const credentials = JSON.parse(readFileSync(join(out, 'baseline/accounts.local.json'), 'utf8'));
-  const results = [];
-  for (const account of credentials) {
-    const result = await fixture('cleanup', { username: account.username });
-    assert.equal(result.result, 'PASS'); results.push({ status: result.result, fileIds: result.fileIds ?? [], removedFileCount: result.removedFileCount ?? null });
-    account.password = ''; account.vaultPhrase = '';
+  const results = []; let status = 'PASS';
+  try {
+    for (const account of credentials) {
+      const result = await fixture('cleanup', { username: account.username });
+      assert.equal(result.result, 'PASS'); results.push({ status: result.result, fileIds: result.fileIds ?? [], removedFileCount: result.removedFileCount ?? null });
+    }
+  } catch {
+    status = 'FAIL';
+    throw new Error('FIXTURE_ACCOUNT_CLEANUP_FAILED');
+  } finally {
+    if (r5) {
+      for (const account of credentials) { account.username = ''; account.password = ''; account.vaultPhrase = ''; }
+      save('baseline/accounts.local.json', []);
+      save('baseline/player-auth.local.json', { username: '', password: '', fileIds: {} });
+      save('pipeline/fixture-account-cleanup.json', { status, accountsRequested: credentials.length,
+        accountsCleaned: results.length, removedFiles: results.reduce((sum, row) => sum + (row.removedFileCount ?? 0), 0),
+        failureClass: status === 'PASS' ? null : 'FIXTURE_ACCOUNT_CLEANUP_FAILED' });
+      save('pipeline/backend-account-cleanup.json', { status, fixtureAccountCleanupStatus: status,
+        accountsCleaned: results.length, results });
+    }
   }
-  save('pipeline/backend-account-cleanup.json', { status: 'PASS', accounts: results.length, results });
+  if (!r5) save('pipeline/backend-account-cleanup.json', { status: 'PASS', accounts: results.length, results });
   console.log('R8 accounts/files cleaned through original fixture');
 } else {
   const tests = [], temporary = mkdtempSync(join(out, 'pipeline/guard-'));

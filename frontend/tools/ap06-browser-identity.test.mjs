@@ -8,7 +8,7 @@ import {execFileSync,spawn} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {once} from 'node:events';
 import {chromium} from '@playwright/test';
-import {frozenLaunchOptions,validateResolution,resolveBrowserIdentity,AUTOPLAY_ARGS,NATIVE_ARGS,launchWithIdentityLease,getAttestedBrowserProof,launchAttestedBrowser} from './ap06-browser-identity.mjs';
+import {frozenLaunchOptions,validateResolution,resolveBrowserIdentity,AUTOPLAY_ARGS,NATIVE_ARGS,launchWithIdentityLease,getAttestedBrowserProof,launchAttestedBrowser,closeBrowserIdentity,closeBrowserWithIdentity} from './ap06-browser-identity.mjs';
 import {NativeTrace} from './ap06-native-trace.mjs';
 
 const identity={mode:'headless-shell',executablePath:'C:/owned/chrome-headless-shell.exe',executableSha256:'a'.repeat(64),
@@ -44,16 +44,16 @@ test('every campaign caller uses one shared identity gate and persists launch af
   for(const name of ['ap06-transmux-probe.mjs','ap06-r12-preflight.mjs','ap06-native-capability.mjs']){
     const code=readFileSync(new URL(name,import.meta.url),'utf8');
     assert.match(code,/launchAttestedBrowser\(chromium/); assert.doesNotMatch(code,/chromium\.launch\(/);
-    assert.match(code,/finishBrowserIdentity/);
+    assert.match(code,/closeBrowserWithIdentity/);
   }
   const gate=readFileSync(new URL('ap06-browser-identity.mjs',import.meta.url),'utf8');
   assert.ok(gate.indexOf('onBrowserLaunched(browser);')<gate.lastIndexOf('const attested=await attestBrowserProcess(browser'));
   for(const name of ['ap06-browser-identity.mjs','ap06-native-trace.mjs'])
     assert.doesNotMatch(readFileSync(new URL(name,import.meta.url),'utf8'),/Browser\.getBrowserCommandLine/);
 });
-test('R3 and R4 cannot launch without their pre-registered identity manifest',async()=>{
+test('R3, R4 and R5 cannot launch without their pre-registered identity manifest',async()=>{
   const old=process.env.AP06_EXPERIMENT_ROOT,manifest=process.env.AP06_BROWSER_IDENTITY;
-  for(const root of ['.quality/readiness-wave12-r3-factorial','.quality/readiness-wave12-r4-factorial']){
+  for(const root of ['.quality/readiness-wave12-r3-factorial','.quality/readiness-wave12-r4-factorial','.quality/readiness-wave12-r5-factorial']){
     process.env.AP06_EXPERIMENT_ROOT=root;delete process.env.AP06_BROWSER_IDENTITY;let launched=false;
     try{await assert.rejects(launchAttestedBrowser({launch:()=>{launched=true;}},{args:AUTOPLAY_ARGS},{}));assert.equal(launched,false);}
     finally{if(manifest!==undefined)process.env.AP06_BROWSER_IDENTITY=manifest;else delete process.env.AP06_BROWSER_IDENTITY;}
@@ -64,14 +64,18 @@ test('R3 and R4 cannot launch without their pre-registered identity manifest',as
   const preflight=readFileSync(new URL('ap06-r12-preflight.mjs',import.meta.url),'utf8');
   assert.ok(preflight.indexOf('await launchAttestedBrowser')<preflight.indexOf('await page.goto(origin)'));
 });
-test('Windows CDP simulation attests a disposable real process and starts native trace only with OS-proved flags',
+test('R5 retains and audits a real Windows process handle through close',
   {skip:process.platform!=='win32'},async()=>{
     const root=mkdtempSync(join(tmpdir(),'ap06-identity-integration-')),profileRoot=join(root,'profiles');mkdirSync(profileRoot);
+    const keys=['TEMP','TMP','AP06_BROWSER_TEMP_ROOT','AP06_IDENTITY_PYTHON','WAVE1_PYTHON','AP06_R5_PROCESS_HANDLE_AUDIT'],old=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
     const shell=join(root,'chrome-headless-shell.exe'),script='setInterval(()=>{},1000)',profile=join(profileRoot,'playwright_chromiumdev_profile-test1234');
     copyFileSync(process.execPath,shell);
     const configuredPython=process.env.AP06_IDENTITY_PYTHON||process.env.WAVE1_PYTHON;
     const python=configuredPython||execFileSync('py',['-3','-c','import sys;print(sys.executable)'],{encoding:'utf8'}).trim();
     const pyPrefix=python.toLowerCase().endsWith('py.exe')?['-3']:[];
+    process.env.AP06_R5_PROCESS_HANDLE_AUDIT='1';
+    process.env.TEMP=profileRoot;process.env.TMP=profileRoot;process.env.AP06_BROWSER_TEMP_ROOT=profileRoot;
+    process.env.AP06_IDENTITY_PYTHON=python;
     const helper=fileURLToPath(new URL('../../tools/quality/ap06_browser_identity.py',import.meta.url));
     const observed=JSON.parse(execFileSync(python,[...pyPrefix,helper,'--inspect',shell],{encoding:'utf8',windowsHide:true}));
     const fixedArgs=['-e',script,'--'],suffixArgs=['--remote-debugging-pipe','--no-startup-window'];
@@ -84,11 +88,13 @@ test('Windows CDP simulation attests a disposable real process and starts native
     const lineIterator=createInterface({input:leaseChild.stdout})[Symbol.asyncIterator]();
     const receive=async()=>{const item=await lineIterator.next();assert.equal(item.done,false);return JSON.parse(item.value);};
     const ready=await receive();assert.equal(ready.status,'READY');
-    const lease={request:async query=>{leaseChild.stdin.write(JSON.stringify(query)+'\n');const result=await receive();if(result.status==='STOP')throw new Error(result.reason);return result;}};
+    const lease={child:leaseChild,request:async query=>{leaseChild.stdin.write(JSON.stringify(query)+'\n');const result=await receive();if(result.status==='STOP')throw new Error(result.reason);return result;}};
     const launchStartedMs=Date.now()-200;mkdirSync(profile);
     const child=spawn(shell,[...fixedArgs,...AUTOPLAY_ARGS,...NATIVE_ARGS,`--user-data-dir=${profile}`,...suffixArgs],{stdio:'ignore',windowsHide:true});
+    const foreign=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});
+    let browser;
     try{
-      await once(child,'spawn');
+      await Promise.all([once(child,'spawn'),once(foreign,'spawn')]);
       const calls=[],cdp={send:async(method)=>{
         calls.push(method);
         if(method==='SystemInfo.getProcessInfo')return {processInfo:[{type:'browser',id:child.pid}]};
@@ -97,7 +103,9 @@ test('Windows CDP simulation attests a disposable real process and starts native
         if(method==='Tracing.start')return {};
         throw new Error('UNEXPECTED_CDP_METHOD');
       }};
-      const browser={newBrowserCDPSession:async()=>cdp,version:()=>expected.chromiumVersion,close:async()=>{}};
+      browser={newBrowserCDPSession:async()=>cdp,version:()=>expected.chromiumVersion,close:async()=>{
+        if(child.exitCode===null&&child.signalCode===null){const done=once(child,'exit');child.kill();await done;}
+      }};
       const record={launchAttempts:1,browserLaunches:0,browserIdentity:{status:'PENDING',attemptReserved:true,readLease:true,browserLaunchSucceeded:false}};
       const launched=await launchWithIdentityLease({launch:async()=>browser},{args:[...AUTOPLAY_ARGS,...NATIVE_ARGS]},record,expected,lease,()=>{record.browserLaunches++;});
       assert.equal(launched,browser);assert.equal(record.browserLaunches,1);assert.equal(record.browserIdentity.browserLaunchSucceeded,true);
@@ -107,13 +115,24 @@ test('Windows CDP simulation attests a disposable real process and starts native
       assert.throws(()=>{proof.nativeFlagsValidated=false;});assert.equal(getAttestedBrowserProof(browser).nativeFlagsValidated,true);
       const trace=new NativeTrace('unused');await trace.start(browser);
       assert.equal(trace.receipt.activatedBeforeWorkload,true);assert.ok(!calls.includes('Browser.getBrowserCommandLine'));
-      assert.equal((await lease.request({action:'closed'})).closedHashVerified,true);
+      await browser.close();
+      const closed=await closeBrowserIdentity(browser);
+      assert.equal(closed.status,'PASS');assert.equal(record.processExitAudit.method,'retained-win32-process-handles');
+      assert.equal(record.processExitAudit.closedHashVerified,true);assert.deepEqual(record.processExitAudit.processes[0].roles,['browser']);
+      assert.equal(record.processExitAudit.processes[0].pid,child.pid);assert.equal(record.processExitAudit.timedOutProcessCount,0);
+      assert.equal(record.handleRelease.status,'PASS');assert.equal(record.handleRelease.processHandles.releasedProcessHandles,1);
+      assert.equal(record.handleRelease.processHandles.closeFailures,0);assert.equal(record.handleRelease.executableHandles.closeFailures,0);
+      assert.equal(foreign.exitCode,null);assert.equal(foreign.signalCode,null);
     }finally{
       const childDone=child.exitCode!==null||child.signalCode!==null?Promise.resolve():once(child,'exit');
       if(child.exitCode===null&&child.signalCode===null)child.kill();await childDone;
+      try{await closeBrowserIdentity(browser);}catch{}
+      const foreignDone=foreign.exitCode!==null||foreign.signalCode!==null?Promise.resolve():once(foreign,'exit');
+      if(foreign.exitCode===null&&foreign.signalCode===null)foreign.kill();await foreignDone;
       leaseChild.stdin.end();
       const leaseDone=leaseChild.exitCode!==null||leaseChild.signalCode!==null?Promise.resolve():once(leaseChild,'exit');
       if(leaseChild.exitCode===null&&leaseChild.signalCode===null){const exited=await Promise.race([leaseDone.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),3000))]);if(!exited){leaseChild.kill();await leaseDone;}}
+      for(const key of keys){if(old[key]===undefined)delete process.env[key];else process.env[key]=old[key];}
       rmSync(root,{recursive:true,force:true});
     }
   });
@@ -125,6 +144,25 @@ test('a failed attestation after launch still counts the browser and closes its 
     {chromiumVersion:'151.0.7922.34'},lease,()=>{record.browserLaunches++;}),/AP06_BROWSER_CDP_PROCESS_QUERY_FAILED/);
   assert.equal(record.browserLaunches,1);assert.equal(record.browserIdentity.browserLaunchSucceeded,true);
   assert.equal(record.browserIdentity.status,'STOP');assert.equal(record.browserIdentity.failureStage,'cdp-process-query');assert.equal(closed,true);
+});
+test('shared browser cleanup keeps the primary functional failure and records cleanup separately',async()=>{
+  const record={failureClass:'AP06_FUNCTIONAL_FAILURE'};let closed=false;
+  const result=await closeBrowserWithIdentity({close:async()=>{closed=true;}},record);
+  assert.equal(closed,true);assert.equal(result.status,'PASS');assert.equal(record.failureClass,'AP06_FUNCTIONAL_FAILURE');
+  assert.equal(record.cleanupStatus,'PASS');
+});
+test('a dead identity helper records cleanup failure without replacing the attestation failure',async()=>{
+  const old=process.env.AP06_R5_PROCESS_HANDLE_AUDIT;process.env.AP06_R5_PROCESS_HANDLE_AUDIT='1';
+  const record={launchAttempts:1,browserLaunches:0,browserIdentity:{status:'PENDING',attemptReserved:true,readLease:true,browserLaunchSucceeded:false}};
+  const lease={child:{stdin:{end(){}},kill(){},exitCode:1,signalCode:null},request:async()=>{throw new Error('AP06_BROWSER_OS_QUERY_FAILED');}};
+  let closed=false;const browser={newBrowserCDPSession:async()=>({send:async method=>method==='SystemInfo.getProcessInfo'?
+    {processInfo:[{type:'browser',id:22}]}:{product:'HeadlessShell/151.0.7922.34'}}),version:()=> '151.0.7922.34',close:async()=>{closed=true;}};
+  try{
+    await assert.rejects(launchWithIdentityLease({launch:async()=>browser},{args:[...AUTOPLAY_ARGS]},record,
+      {chromiumVersion:'151.0.7922.34'},lease),/AP06_BROWSER_OS_QUERY_FAILED/);
+    assert.equal(closed,true);assert.equal(record.browserIdentity.failureClass,'AP06_BROWSER_OS_QUERY_FAILED');
+    assert.equal(record.browserIdentity.cleanupStatus,'FAIL');assert.ok(record.browserIdentity.cleanupFailureClass);
+  }finally{if(old===undefined)delete process.env.AP06_R5_PROCESS_HANDLE_AUDIT;else process.env.AP06_R5_PROCESS_HANDLE_AUDIT=old;}
 });
 test('a failure after PID discovery closes and audits the owned process', {skip:process.platform!=='win32'},async()=>{
   const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});await once(child,'spawn');

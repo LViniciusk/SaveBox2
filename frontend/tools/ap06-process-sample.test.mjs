@@ -14,6 +14,13 @@ test('shared native collector keeps every owned PID and accounts AudioService in
   assert.equal(sends,1);assert.equal(calls,1);assert.equal(result.privateBytes,50);assert.equal(result.byCategory.utility.privateBytes,20);
   assert.equal(result.byType['audio.mojom.AudioService'].privateBytes,10);
 });
+test('registers the same CDP snapshot before process metrics are read',async()=>{
+  const processInfo=[{id:7,type:'browser'}],events=[];
+  await sampleOwnedProcesses({send:async()=>({processInfo})},async()=>{events.push('metrics');return{stdout:'[]'};},async rows=>{
+    assert.equal(rows,processInfo);events.push('register');
+  });
+  assert.deepEqual(events,['register','metrics']);
+});
 test('collector errors propagate without a retry or substitute process set',async()=>{
   let calls=0;
   await assert.rejects(sampleOwnedProcesses({send:async()=>({processInfo:[{id:1,type:'browser'}]})},async()=>{calls++;throw Error('NATIVE_FAILED');}),/NATIVE_FAILED/);

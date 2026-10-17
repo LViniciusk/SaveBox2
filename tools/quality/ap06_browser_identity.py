@@ -157,6 +157,120 @@ def process_information(pid, include_identity=True, check_argv0=True):
     finally: kernel.CloseHandle(handle)
 
 
+class WinProcessApi:
+    WAIT_OBJECT_0, WAIT_TIMEOUT, WAIT_FAILED = 0, 258, 0xFFFFFFFF
+
+    def __init__(self):
+        self.kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        self.kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        self.kernel.OpenProcess.restype = wintypes.HANDLE
+        self.kernel.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD)]
+        self.kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)]*4
+        self.kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.kernel.WaitForSingleObject.restype = wintypes.DWORD
+        self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.kernel.CloseHandle.restype = wintypes.BOOL
+
+    def open(self, pid):
+        handle = self.kernel.OpenProcess(0x1000 | 0x00100000, False, pid)  # Query limited information + synchronize.
+        require(handle, 'AP06_BROWSER_OS_QUERY_FAILED')
+        try:
+            size = wintypes.DWORD(32768); image = ctypes.create_unicode_buffer(size.value); times = (wintypes.FILETIME*4)()
+            require(self.kernel.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(size)) and
+                self.kernel.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]), 'AP06_BROWSER_OS_QUERY_FAILED')
+            creation = (times[0].dwHighDateTime << 32) + times[0].dwLowDateTime
+            return handle, creation, str(Path(image.value).resolve())
+        except BaseException as error:
+            try: closed = self.close(handle)
+            except Exception: closed = False
+            if not closed: raise ValueError('AP06_BROWSER_HANDLE_RELEASE_FAILED') from error
+            raise
+
+    def wait(self, handle, timeout_ms):
+        return self.kernel.WaitForSingleObject(handle, timeout_ms)
+
+    def close(self, handle):
+        return bool(self.kernel.CloseHandle(handle))
+
+
+class OwnedProcessAudit:
+    """Retain CDP-owned process handles until the bounded post-close audit."""
+    DEADLINE_MS = 10000
+
+    def __init__(self, identity, api=None, monotonic=time.monotonic):
+        require(os.name == 'nt' or api is not None, 'AP06_BROWSER_WINDOWS_REQUIRED')
+        self.api = api or WinProcessApi()
+        self.monotonic = monotonic
+        self.executable = os.path.normcase(os.path.normpath(identity['executablePath']))
+        self.entries = []
+        self.current = {}
+        self.reused_pid_count = 0
+        self.released = False
+
+    def register(self, processes):
+        require(isinstance(processes, list) and len(processes) <= 512, 'AP06_BROWSER_CDP_PROCESS_QUERY_FAILED')
+        for row in processes:
+            require(isinstance(row, dict) and type(row.get('id')) is int and row['id'] > 0 and
+                isinstance(row.get('type'), str) and 0 < len(row['type']) <= 64 and
+                row['type'].replace('_', '').replace('-', '').replace('.', '').isalnum(),
+                'AP06_BROWSER_CDP_PROCESS_QUERY_FAILED')
+            pid, role = row['id'], row['type']
+            previous = self.current.get(pid)
+            if previous:
+                state = self.api.wait(previous['handle'], 0)
+                if state == WinProcessApi.WAIT_TIMEOUT:
+                    previous['roles'].add(role)
+                    continue
+                require(state == WinProcessApi.WAIT_OBJECT_0, 'AP06_BROWSER_OS_QUERY_FAILED')
+            handle, creation, image = self.api.open(pid)
+            entry = {'pid': pid, 'creationTime': creation, 'roles': {role}, 'handle': handle}
+            if os.path.normcase(os.path.normpath(image)) != self.executable:
+                self.entries.append(entry)
+                require(False, 'AP06_BROWSER_IDENTITY_MISMATCH')
+            if previous and creation == previous['creationTime']:
+                previous['roles'].add(role)
+                try: closed = self.api.close(handle)
+                except Exception: closed = False
+                if not closed:
+                    self.entries.append(entry)
+                    require(False, 'AP06_BROWSER_HANDLE_RELEASE_FAILED')
+                continue
+            if previous:
+                self.reused_pid_count += 1
+            self.entries.append(entry); self.current[pid] = entry
+
+    def audit(self):
+        started = self.monotonic(); deadline = started + self.DEADLINE_MS/1000
+        closed = timed_out = failed = 0
+        for entry in self.entries:
+            remaining = max(0, int((deadline-self.monotonic())*1000))
+            result = self.api.wait(entry['handle'], remaining)
+            if result == WinProcessApi.WAIT_OBJECT_0: closed += 1
+            elif result == WinProcessApi.WAIT_TIMEOUT: timed_out += 1
+            else: failed += 1
+        elapsed = max(0, int((self.monotonic()-started)*1000))
+        ok = bool(self.entries) and timed_out == 0 and failed == 0 and elapsed <= self.DEADLINE_MS
+        return {'status': 'PASS' if ok else 'FAIL', 'method': 'retained-win32-process-handles',
+            'registeredProcessCount': len(self.entries), 'closedProcessCount': closed, 'timedOutProcessCount': timed_out,
+            'waitFailedProcessCount': failed, 'reusedPidCount': self.reused_pid_count, 'deadlineMs': self.DEADLINE_MS,
+            'elapsedMs': elapsed, 'closedHashVerified': False,
+            'processes': [{'pid': row['pid'], 'creationTime': row['creationTime'], 'roles': sorted(row['roles'])}
+                for row in sorted(self.entries, key=lambda item: (item['pid'], item['creationTime']))]}
+
+    def close(self):
+        if self.released: return {'releasedProcessHandles': 0, 'closeFailures': 0}
+        failures = 0
+        for entry in self.entries:
+            if entry['handle'] is not None:
+                try:
+                    if not self.api.close(entry['handle']): failures += 1
+                except Exception: failures += 1
+                finally: entry['handle'] = None
+        self.released = True
+        return {'releasedProcessHandles': len(self.entries), 'closeFailures': failures}
+
+
 class ExecutableLease:
     def __init__(self, identity):
         require(os.name == 'nt', 'AP06_BROWSER_WINDOWS_REQUIRED')
@@ -177,8 +291,10 @@ class ExecutableLease:
             self.close(); raise
 
     def close(self):
-        for handle in self.handles: self.kernel.CloseHandle(handle)
+        failures = sum(not self.kernel.CloseHandle(handle) for handle in self.handles)
+        count = len(self.handles)
         self.handles.clear()
+        return {'releasedExecutableHandles': count, 'closeFailures': failures}
 
 
 def verify_identity(identity):
@@ -208,14 +324,41 @@ def main():
         identity = json.loads(Path(args.verify or args.session).read_text(encoding='utf-8-sig'))
         if args.verify: print(json.dumps(verify_identity(identity))); return
         lease = ExecutableLease(identity)
+        owned = OwnedProcessAudit(identity) if os.environ.get('AP06_R5_PROCESS_HANDLE_AUDIT') == '1' else None
         try:
             print(json.dumps({'status':'READY', 'lease':'Windows read sharing only; write/delete denied'}), flush=True)
             previous = None
             for line in sys.stdin:
                 request = json.loads(line); require(len(line) <= 65536, 'AP06_BROWSER_QUERY_TOO_LARGE')
-                if request['action'] == 'closed':
+                action = request['action']
+                if action == 'closed':  # R3/R4 legacy protocol.
                     result = verify_identity(identity); result['closedHashVerified'] = True
                     print(json.dumps(result), flush=True); break
+                if action == 'register-processes':
+                    require(owned is not None and previous is not None and owned.entries, 'AP06_BROWSER_NOT_ATTESTED')
+                    owned.register(request['processes'])
+                    print(json.dumps({'status':'PASS','registeredProcessCount':len(owned.entries)}), flush=True)
+                    continue
+                if action == 'audit-closed':
+                    require(owned is not None, 'AP06_BROWSER_IDENTITY_UNPROVEN')
+                    receipt = owned.audit()
+                    try:
+                        verify_identity(identity); receipt['closedHashVerified'] = True
+                    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                        receipt['closedHashVerified'] = False
+                    if not receipt['closedHashVerified']: receipt['status'] = 'FAIL'
+                    print(json.dumps({'status':'PASS','receipt':receipt}), flush=True)
+                    continue
+                if action == 'release':
+                    require(owned is not None, 'AP06_BROWSER_IDENTITY_UNPROVEN')
+                    processes = owned.close(); files = lease.close()
+                    result = {'status':'PASS' if not processes['closeFailures'] and not files['closeFailures'] else 'STOP',
+                        'processHandles':processes,'executableHandles':files}
+                    if result['status'] == 'STOP': result['reason'] = 'AP06_BROWSER_HANDLE_RELEASE_FAILED'
+                    print(json.dumps(result), flush=True)
+                    if result['status'] == 'STOP': raise ValueError('AP06_BROWSER_HANDLE_RELEASE_FAILED')
+                    break
+                require(action == 'attest' and previous is None, 'AP06_BROWSER_IDENTITY_UNPROVEN')
                 observed = process_information(request['pid'],include_identity=False)
                 observed.update({key:identity[key] for key in ('executableSha256','executableBytes','architecture','productVersion')})
                 parent = process_information(request['parentPid'],include_identity=False,check_argv0=False)
@@ -224,9 +367,14 @@ def main():
                 require(observed['productVersion'] in (None, observed['chromiumVersion']), 'AP06_BROWSER_VERSION_MISMATCH')
                 result = validate_process(identity, observed, request['pid'], request['parentPid'], request['requiredArgs'], previous,
                     parent, request['nodeExecutable'], request['launchStartedMs'])
-                previous = previous or result
+                if owned is not None:
+                    owned.register([{'id':request['pid'],'type':'browser'}])
+                    require(owned.current[request['pid']]['creationTime']==result['processCreationTime'], 'AP06_BROWSER_PID_REUSED')
+                previous = result
                 print(json.dumps(result), flush=True)
-        finally: lease.close()
+        finally:
+            if owned is not None: owned.close()
+            lease.close()
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         reason=str(error)
         if not reason.startswith('AP06_BROWSER_') or not reason.replace('_','').isalnum(): reason='AP06_BROWSER_IDENTITY_UNPROVEN'

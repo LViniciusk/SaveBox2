@@ -14,9 +14,10 @@ from ap06_authorities import sha256, checked_path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / os.environ.get('AP06_EXPERIMENT_ROOT', '.quality/readiness-wave8')
-EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3','readiness-wave11-r3':'r10_r3','readiness-wave12':'r10_r3','readiness-wave12-r2-factorial':'r10_r3','readiness-wave12-r2-native':'r10_r3','readiness-wave12-r3-factorial':'r10_r3','readiness-wave12-r3-native':'r10_r3','readiness-wave12-r4-factorial':'r10_r3','readiness-wave12-r4-native':'r10_r3'}.get(OUTPUT.name,'r8')
+EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3','readiness-wave11-r3':'r10_r3','readiness-wave12':'r10_r3','readiness-wave12-r2-factorial':'r10_r3','readiness-wave12-r2-native':'r10_r3','readiness-wave12-r3-factorial':'r10_r3','readiness-wave12-r3-native':'r10_r3','readiness-wave12-r4-factorial':'r10_r3','readiness-wave12-r4-native':'r10_r3','readiness-wave12-r5-factorial':'r10_r3','readiness-wave12-r5-native':'r10_r3'}.get(OUTPUT.name,'r8')
 R3 = EXPERIMENT_ID == 'r10_r3'
 BACKEND_PORT, APP_PORT = 42187, 42088
+SPOOF_CLIENTS = ('127.0.0.2','127.0.0.3')
 
 def free_port(port=0):
     with socket.socket() as sock:
@@ -102,19 +103,77 @@ def verify_listener(server_pid):
     return {'status':'PASS','listeners':rows,'realRejectedConnections':rejected,'ownedBackendPid':server_pid}
 
 
-def verify_spoof_guard():
-    statuses=[]
-    for attempt in range(1,17):
-        conn=http.client.HTTPConnection('127.0.0.1',BACKEND_PORT,timeout=10,source_address=('127.0.0.2',0))
+def active_ban(pg_bin,runtime,env,database,address):
+    if address not in SPOOF_CLIENTS: raise RuntimeError('AP06_SPOOF_CLIENT_NOT_ALLOWED')
+    sql=f"BEGIN READ ONLY; SELECT EXISTS(SELECT 1 FROM banned_ips WHERE ip='{address}' AND expires_at>NOW()); COMMIT;"
+    output=subprocess.check_output([str(pg_bin/'psql.exe'),'-X','-A','-t','-v','ON_ERROR_STOP=1','-h','127.0.0.1',
+        '-p',env['DB_PORT'],'-U',env['DB_USER'],'-d',database,'-c',sql],cwd=runtime,env=env,text=True,
+        creationflags=subprocess.CREATE_NO_WINDOW)
+    rows=[row.strip() for row in output.splitlines() if row.strip() in ('t','f')]
+    if len(rows)!=1: raise RuntimeError('AP06_SPOOF_BAN_READ_FAILED')
+    return rows[0]=='t'
+
+
+def spoof_guard_history():
+    path=OUTPUT/'baseline/network-spoof-guard.json'
+    if not path.exists(): return []
+    value=json.loads(path.read_text(encoding='utf-8'))
+    return value.get('attempts',[value]) if isinstance(value,dict) else []
+
+
+def select_spoof_client(phase,previous,active_bans):
+    if set(active_bans)!=set(SPOOF_CLIENTS): raise RuntimeError('AP06_SPOOF_CLIENT_STATE_INCOMPLETE')
+    if phase=='fresh':
+        if any(active_bans.values()): raise RuntimeError('AP06_SPOOF_FRESH_STATE_NOT_CLEAN')
+        return '127.0.0.2'
+    expected=[401]*5+[429]*9+[403]*2
+    if (phase!='resume' or previous.get('status')!='PASS' or previous.get('phase')!='fresh' or
+            previous.get('sourceAddress')!='127.0.0.2' or previous.get('actualPeer')!='127.0.0.2' or previous.get('statuses')!=expected):
+        raise RuntimeError('AP06_SPOOF_PREVIOUS_STATE_UNPROVEN')
+    if not active_bans['127.0.0.2'] or active_bans['127.0.0.3']:
+        raise RuntimeError('AP06_SPOOF_INDEPENDENT_CLIENT_UNAVAILABLE')
+    return '127.0.0.3'
+
+
+def save_spoof_guard_attempt(attempt):
+    path=OUTPUT/'baseline/network-spoof-guard.json';attempts=spoof_guard_history();attempts.append(attempt)
+    save(path,{'status':'FAIL' if any(row.get('status')=='FAIL' for row in attempts) else 'PASS','attempts':attempts})
+
+
+def verify_spoof_guard(source_address,phase,previous_active_ban,candidate_active_ban):
+    if source_address not in SPOOF_CLIENTS or phase not in ('fresh','resume'):
+        raise RuntimeError('AP06_SPOOF_CLIENT_NOT_ALLOWED')
+    statuses=[];receipt={'phase':phase,'sourceAddress':source_address,'sourceBindVerified':False,'actualPeer':None,
+        'peerProofStatus':None,'previousActiveBan':previous_active_ban,'candidateActiveBan':candidate_active_ban,
+        'spoofedLocalHeaders':True,'authLimit':5,'banThreshold':15,'statuses':statuses,'status':'PENDING'}
+    try:
+        peer=http.client.HTTPConnection('127.0.0.1',BACKEND_PORT,timeout=10,source_address=(source_address,0))
         try:
-            conn.request('POST','/login',json.dumps({'username':'nanika_e2e_unknown','password':'synthetic-invalid-password'}),
-                {'Content-Type':'application/json','Host':'localhost','X-Real-IP':'127.0.0.1','X-Forwarded-For':'127.0.0.1, ::1'})
-            response=conn.getresponse();response.read();statuses.append(response.status)
-            expected=401 if attempt<=5 else 429 if attempt<15 else 403
-            if response.status!=expected: raise RuntimeError('AP06_REAL_PEER_SPOOF_GUARD_FAILED')
-        finally: conn.close()
-    save(OUTPUT/'baseline/network-spoof-guard.json',{'status':'PASS','actualPeer':'127.0.0.2',
-        'spoofedLocalHeaders':True,'statuses':statuses,'authLimit':5,'banThreshold':15})
+            peer.connect();receipt['sourceBindVerified']=peer.sock.getsockname()[0]==source_address
+            peer.request('GET','/__ap06/actual-peer',headers={'Host':'localhost','X-Real-IP':'127.0.0.1',
+                'X-Forwarded-For':'127.0.0.1, ::1'})
+            response=peer.getresponse();body=response.read(64).decode('ascii','strict').strip()
+            receipt['peerProofStatus']=response.status;receipt['actualPeer']=body
+            if response.status!=200 or body!=source_address or not receipt['sourceBindVerified']:
+                raise RuntimeError('AP06_REAL_PEER_SPOOF_GUARD_FAILED')
+        finally: peer.close()
+        for attempt in range(1,17):
+            conn=http.client.HTTPConnection('127.0.0.1',BACKEND_PORT,timeout=10,source_address=(source_address,0))
+            try:
+                conn.connect()
+                if conn.sock.getsockname()[0]!=source_address: raise RuntimeError('AP06_REAL_PEER_SPOOF_GUARD_FAILED')
+                conn.request('POST','/login',json.dumps({'username':'nanika_e2e_unknown','password':'synthetic-invalid-password'}),
+                    {'Content-Type':'application/json','Host':'localhost','X-Real-IP':'127.0.0.1','X-Forwarded-For':'127.0.0.1, ::1'})
+                response=conn.getresponse();response.read();statuses.append(response.status)
+                expected=401 if attempt<=5 else 429 if attempt<15 else 403
+                if response.status!=expected: raise RuntimeError('AP06_REAL_PEER_SPOOF_GUARD_FAILED')
+            finally: conn.close()
+        receipt['status']='PASS'
+    except Exception:
+        receipt['status']='FAIL';receipt['failureClass']='AP06_REAL_PEER_SPOOF_GUARD_FAILED'
+        save_spoof_guard_attempt(receipt)
+        raise RuntimeError('AP06_REAL_PEER_SPOOF_GUARD_FAILED') from None
+    save_spoof_guard_attempt(receipt)
 
 
 def verify_startup_rejections(binary,runtime,env,command):
@@ -171,6 +230,9 @@ def serve():
         free_port(port)
     else:
         runtime, storage, identity, env, port, database, password = create_runtime()
+        if OUTPUT.name.startswith('readiness-wave12-r5-'):
+            save(OUTPUT/'pipeline/fixture-account-cleanup.json',{'status':'NOT_RUN','accountsRequested':0,'accountsCleaned':0,
+                'removedFiles':0,'failureClass':None})
     pgdata = runtime/'pg'; pwfile = runtime/'pg-password'
     server = None; pg_started = False
     log = (runtime / 'process.log').open('a', encoding='utf-8')
@@ -217,7 +279,22 @@ def serve():
         else: raise RuntimeError('R8_BACKEND_HEALTH_TIMEOUT')
         if R3:
             save(OUTPUT/'baseline/listener-isolation.json',verify_listener(server.pid))
-            verify_spoof_guard()
+            if resume:
+                attempts=spoof_guard_history();previous=attempts[-1] if attempts else {}
+                active={address:active_ban(pg_bin,runtime,env,database,address) for address in SPOOF_CLIENTS}
+                source_address=select_spoof_client('resume',previous,active);old_ban=active['127.0.0.2'];candidate_ban=active[source_address]
+                save(OUTPUT/'baseline/network-spoof-recovery.json',{'status':'PASS','previousPeer':previous['actualPeer'],
+                    'previousActiveBan':old_ban,'selectedSourceAddress':source_address,'selectedAddressActiveBan':candidate_ban,
+                    'method':'read-only query of isolated banned_ips; no bans cleared'})
+                phase='resume'
+            else:
+                active={address:active_ban(pg_bin,runtime,env,database,address) for address in SPOOF_CLIENTS}
+                source_address=select_spoof_client('fresh',{},active);old_ban=active['127.0.0.2'];candidate_ban=active[source_address]
+                save(OUTPUT/'baseline/network-spoof-recovery.json',{'status':'PASS','previousActiveBan':False,
+                    'candidateActiveBan':False,'selectedSourceAddress':source_address,
+                    'method':'read-only query of isolated banned_ips; no bans cleared'})
+                phase='fresh'
+            verify_spoof_guard(source_address,phase,old_ban,candidate_ban)
         config = {'executable':str(binaries/'nanika_e2e_fixture.exe'), 'cwd':str(runtime),
             'storagePath':str(storage), 'storageId':identity, 'backendOrigin':f'http://127.0.0.1:{BACKEND_PORT}',
             'environment':{key:value for key,value in env.items() if key not in os.environ or os.environ.get(key) != value}}

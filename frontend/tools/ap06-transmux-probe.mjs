@@ -494,7 +494,7 @@ export async function captureNaturalIdle(page,capture,milliseconds) {
   if(milliseconds===120000){await page.waitForTimeout(90000);await capture('idle-120s',6);}
 }
 
-import {launchAttestedBrowser,finishBrowserIdentity,closeBrowserIdentity} from './ap06-browser-identity.mjs';
+import {launchAttestedBrowser,closeBrowserWithIdentity,registerBrowserProcesses,usesRetainedProcessAudit} from './ap06-browser-identity.mjs';
 
 export async function runTransmuxProbe({ pageScript = transmuxPageScript(), countersFactory = newTransmuxCounters,
   cleanupValidator = validateCleanupOwnership, functionalValidator = validateTransmuxOwnership, snapshot = ownershipSnapshot,
@@ -560,14 +560,17 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
       const capture = async (phase, cycle, gc = 'natural') => {
         if (gc === 'forced-diagnostic') await cdp.send('HeapProfiler.collectGarbage');
         const auxiliary = auxiliaryMetrics ? await auxiliaryMetrics(cdp,{phase,cycle,gc,browser,page}) : null;
+        let registrationFailure;
         const sample = await collectRawMetrics(cdp, { runId, scenarioId: mode, fixtureId: 'ABC-classic-MP4-corpus',
           mode, cycle, fixture: 'ABC-classic-MP4-corpus', phase, gc, browserVersion: run.browserVersion,
           sourceHash: process.env.AP06_R5_SOURCE_HASH, fixtureHash: manifestHash, harnessHash: process.env.AP06_R5_HARNESS_HASH,
           orchestratorHash: process.env.AP06_R5_RUNNER_SHA256, workerBundleHash: transpHash,
           cryptoWorkerBundleHash: cryptoWorkerHash, functionalStatus: 'PENDING' }, async () => {
           raw.processSampleCalls++;
-          return sampleOwnedProcesses(browserCdp);
+          try{return await sampleOwnedProcesses(browserCdp,undefined,processes=>registerBrowserProcesses(browser,processes));}
+          catch(error){if(String(error?.message).startsWith('AP06_BROWSER_'))registrationFailure=error;throw error;}
         }, auxiliary);
+        if(registrationFailure)throw registrationFailure;
         const state = await page.evaluate(() => ({ counters: { ...window.r5Counters }, mediaNodes: document.querySelectorAll('video,audio').length }));
         sample.counters = state.counters; sample.mediaNodes = state.mediaNodes;
         sample.ownership = snapshot(state.counters);
@@ -605,20 +608,18 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
         try { await closeObservation(); } catch { cleanupOk = false; }
       }
       if (browser) {
-        try {
-          try { await finishBrowserIdentity(browser); }
-          finally { try { await browser.close(); } finally { await closeBrowserIdentity(browser); } }
-          if (process.env.AP06_R8_PID_AUDITOR && run.samples.length) {
+        const lifecycle=await closeBrowserWithIdentity(browser,run);cleanupOk&&=lifecycle.status==='PASS';
+        if (!usesRetainedProcessAudit()&&process.env.AP06_R8_PID_AUDITOR && run.samples.length) {
+          try {
             const pids = [...new Set(run.samples.flatMap(sample => sample.processMemory.processes.map(row => row.pid)))];
             const { stdout } = await exec(process.env.WAVE1_PYTHON,
               [process.env.AP06_R8_PID_AUDITOR, '--closed-pids', pids.join(',')], { windowsHide: true });
             run.processExitAudit = JSON.parse(stdout);
             if (run.processExitAudit.status !== 'PASS') cleanupOk = false;
-          }
+          } catch { cleanupOk = false; }
         }
-        catch { cleanupOk = false; }
       } else if (run.browserIdentity?.browserLaunchSucceeded) {
-        run.processExitAudit=run.browserIdentity.failureCleanupAudit;
+        run.processExitAudit??=run.browserIdentity.processExitAudit??run.browserIdentity.failureCleanupAudit;
         cleanupOk=run.browserIdentity.browserClosed===true&&run.browserIdentity.cleanupStatus==='PASS';
       }
       run.cleanupStatus = cleanupOk ? 'PASS' : 'FAIL';

@@ -67,6 +67,19 @@ class RecoveryTests(unittest.TestCase):
             (factorial.OUTPUT,factorial.PUBLISHER,factorial.CAMPAIGN,native.OUTPUT,native.PUBLISHER,native.CAMPAIGN,
                 native.TRACE_PREFIX,native.FACTORIAL,native.FACTORIAL_STATUS)=old
 
+    def test_r5_namespaces_are_private_and_use_r5_publication_prefixes(self):
+        old=(factorial.OUTPUT,factorial.PUBLISHER,factorial.CAMPAIGN,native.OUTPUT,native.PUBLISHER,native.CAMPAIGN,
+            native.TRACE_PREFIX,native.FACTORIAL,native.FACTORIAL_STATUS)
+        try:
+            factorial.configure_campaign('.quality/readiness-wave12-r5-factorial','r5.py','AP-06-R12-R5-factorial')
+            self.assertEqual(factorial.campaign_decision({'status':'R12R2_FACTORIAL_CONFIRMED'})['status'],'R12R5_FACTORIAL_CONFIRMED')
+            native.configure_campaign('.quality/readiness-wave12-r5-native','r5-native.py')
+            self.assertEqual((native.TRACE_PREFIX,native.FACTORIAL,native.FACTORIAL_STATUS),
+                ('r12-r5-native','.quality/readiness-wave12-r5-factorial','R12R5_FACTORIAL_CONFIRMED'))
+        finally:
+            (factorial.OUTPUT,factorial.PUBLISHER,factorial.CAMPAIGN,native.OUTPUT,native.PUBLISHER,native.CAMPAIGN,
+                native.TRACE_PREFIX,native.FACTORIAL,native.FACTORIAL_STATUS)=old
+
     def test_r4_freeze_readback_checks_registered_identity(self):
         identity,record=self.receipt()
         with tempfile.TemporaryDirectory() as tmp:
@@ -83,12 +96,12 @@ class RecoveryTests(unittest.TestCase):
             from ap06_authorities import initialize,sha256,verify_publication
             initialize(authority,'b'*64,campaign='AP-06-R10');source=root/'report.json';source.write_text('{"status":"PASS"}')
             for name in ('readiness-wave12-r2-factorial','readiness-wave12-r3-factorial','readiness-wave12-r3-native',
-                'readiness-wave12-r4-factorial','readiness-wave12-r4-native'):
+                'readiness-wave12-r4-factorial','readiness-wave12-r4-native','readiness-wave12-r5-factorial','readiness-wave12-r5-native'):
                 output=root/name;(output/'baseline').mkdir(parents=True);(output/'pipeline').mkdir()
                 (output/'baseline/authority-config.local.json').write_text(json.dumps({'AP06_AUTHORITY_ROOT':str(authority),'identity':'b'*64}))
                 publish(SimpleNamespace(root=root,output=output),'identity',{'evidence/identity.json':source})
             for name in ('r12-r2-factorial-identity','r12-r3-factorial-identity','r12-r3-native-identity',
-                'r12-r4-factorial-identity','r12-r4-native-identity'):
+                'r12-r4-factorial-identity','r12-r4-native-identity','r12-r5-factorial-identity','r12-r5-native-identity'):
                 self.assertEqual(verify_publication(authority,'b'*64,name)['files'][0]['sha256'],sha256(source))
 
 

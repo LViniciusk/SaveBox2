@@ -12,7 +12,7 @@ import { sampleOwnedProcesses } from './ap06-process-sample.mjs';
 import { AUTOPLAY_ARGS } from './ap06-integration-probe.mjs';
 import { writeJsonAtomic } from './browser-memory-probe.mjs';
 import { networkGuardSnapshot,validateCleanNetwork } from './ap06-preflight.mjs';
-import {launchAttestedBrowser,finishBrowserIdentity,closeBrowserIdentity} from './ap06-browser-identity.mjs';
+import {launchAttestedBrowser,closeBrowserWithIdentity,registerBrowserProcesses,usesRetainedProcessAudit} from './ap06-browser-identity.mjs';
 
 export async function runHttpPreflight({conditions,cancellationCondition,configure,initialize,pageScript,validateFunctional,counterName}){
 const output=process.env.AP06_R7_UNIT_OUTPUT;if(!output)throw new Error('R12_OUTPUT_REQUIRED');
@@ -24,7 +24,9 @@ const result={status:'FAIL',unitBrowserLaunchAttempts:0,unitBrowserLaunches:0,br
   pageScriptSha256:hash(pageScript()),multiplexedContract:{fixtureHash:hash(readFileSync(process.env.AP06_R5_FIXTURE_MANIFEST)),
     workerHashes:{crypto:process.env.AP06_R5_CRYPTO_WORKER_SHA256,transmux:process.env.AP06_R5_TRANSMUX_WORKER_SHA256},initDataPerFixture:[1,1,1],initDataId:0}};
 const save=()=>writeJsonAtomic(output,result),pids=new Set();let browser,browserCdp;
-async function remember(){if(browserCdp)for(const p of(await browserCdp.send('SystemInfo.getProcessInfo')).processInfo)pids.add(p.id);result.ownedPids=[...pids];save();}
+async function remember(){if(browserCdp){const processes=(await browserCdp.send('SystemInfo.getProcessInfo')).processInfo;
+  if(usesRetainedProcessAudit())await registerBrowserProcesses(browser,processes);for(const p of processes)pids.add(p.id);}
+  result.ownedPids=[...pids];save();}
 try{
   result.unitBrowserLaunchAttempts++;save();browser=await launchAttestedBrowser(chromium,{args:AUTOPLAY_ARGS},result,()=>{result.unitBrowserLaunches++;save();});
   assert.equal(browser.version(),process.env.AP06_R5_CHROMIUM_VERSION);browserCdp=await browser.newBrowserCDPSession();await remember();
@@ -45,13 +47,13 @@ try{
         assert.deepEqual(record.cancellation,{rejected:true,active:false,pending:0,references:0});
       }else{
         result.transportProofs[condition]=proof;
-        record.processSamples=[{phase:'baseline',cycle:0,processMemory:await sampleOwnedProcesses(browserCdp)}];
+        record.processSamples=[{phase:'baseline',cycle:0,processMemory:await sampleOwnedProcesses(browserCdp,undefined,processes=>registerBrowserProcesses(browser,processes))}];
         for(const fixture of fixtures)await page.evaluate(f=>window.r7Run(f),fixture);
         const state=await page.evaluate(()=>({counters:window.r5Counters,media:document.querySelectorAll('video,audio').length}));
         validateFunctional(condition,state.counters,state.media);assert.equal(state.counters[counterName].sessionsCompleted,3);
         result.boundaryCounters[condition]=state.counters.observed;result.scalarCounters[condition]=state.counters[counterName];
         if(state.counters.routing){result.routingCounters??={};result.routingCounters[condition]=state.counters.routing;}
-        record.processSamples.push({phase:'cycle-1-close',cycle:1,processMemory:await sampleOwnedProcesses(browserCdp)});save();
+        record.processSamples.push({phase:'cycle-1-close',cycle:1,processMemory:await sampleOwnedProcesses(browserCdp,undefined,processes=>registerBrowserProcesses(browser,processes))});save();
         record.processValidation=JSON.parse(execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R9_PUBLISHER,'--validate-processes',output,'--condition',condition],{encoding:'utf8',windowsHide:true}));
         cdp=await context.newCDPSession(page);result.rendererMemory[condition]=await sampleRenderer(cdp);
         record.guards=networkGuardSnapshot(raw);validateCleanNetwork(raw,condition);
@@ -69,11 +71,11 @@ try{
   result.failureStage??=result.browserIdentity?.failureStage;process.exitCode=1;}
 finally{
   await remember();if(browser){
-    try{await finishBrowserIdentity(browser);}catch{result.status='FAIL';process.exitCode=1;}
-    finally{try{await browser.close();result.browserClosed=true;}finally{try{await closeBrowserIdentity(browser);}catch{result.status='FAIL';result.failureClass='AP06_BROWSER_IDENTITY_UNPROVEN';process.exitCode=1;}}}
+    const lifecycle=await closeBrowserWithIdentity(browser,result);
+    if(lifecycle.status!=='PASS'){result.status='FAIL';result.cleanupFailureClass??=lifecycle.failureClass;process.exitCode=1;}
   }
-  else if(result.browserIdentity?.browserClosed){result.browserClosed=true;result.processExitAudit=result.browserIdentity.failureCleanupAudit;}
-  if(pids.size){result.processExitAudit=JSON.parse(execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R8_PID_AUDITOR,'--closed-pids',[...pids].join(',')],{encoding:'utf8',windowsHide:true}));if(result.processExitAudit.status!=='PASS'){result.status='FAIL';process.exitCode=1;}}
+  else if(result.browserIdentity?.browserClosed){result.browserClosed=true;result.processExitAudit??=result.browserIdentity.processExitAudit??result.browserIdentity.failureCleanupAudit;}
+  if(pids.size&&!usesRetainedProcessAudit())try{result.processExitAudit=JSON.parse(execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R8_PID_AUDITOR,'--closed-pids',[...pids].join(',')],{encoding:'utf8',windowsHide:true}));if(result.processExitAudit.status!=='PASS'){result.status='FAIL';process.exitCode=1;}}catch{result.status='FAIL';result.cleanupFailureClass??='AP06_BROWSER_PROCESS_EXIT_AUDIT_FAILED';process.exitCode=1;}
   save();
 }
 

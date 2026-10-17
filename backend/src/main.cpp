@@ -153,6 +153,14 @@ int main() {
     // Acopla as rotas ao servidor
     router.setup_routes(app);
 
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+    CROW_ROUTE(app, "/__ap06/actual-peer")([&](const crow::request& req) {
+        crow::response response(200, req.remote_ip_address);
+        response.set_header("Cache-Control", "no-store");
+        return response;
+    });
+#endif
+
     uint16_t port = DotEnv::get_port();
 
     std::cout << "====================================================\n";
