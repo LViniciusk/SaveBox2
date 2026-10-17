@@ -161,8 +161,12 @@
     "browserLaunches": 0
   },
   "delivery": {
-    "draftPullRequest": "pending",
+    "draftPullRequest": 33,
+    "url": "https://github.com/LViniciusk/SaveBox2/pull/33",
+    "title": "investigation(ap06): R12-R6 scientific authority and factorial execution",
     "baseBranch": "investigation/ap06-r12-r5",
+    "headBranch": "investigation/ap06-r12-r6",
+    "state": "OPEN_DRAFT",
     "merged": false
   },
   "limitations": [
