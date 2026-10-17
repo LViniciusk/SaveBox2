@@ -41,6 +41,7 @@ describe('DriveStore public behavior', () => {
 
   beforeEach(() => {
     status.set(AppStatus.Unlocked);
+    localStorage.removeItem('preferred_storage_provider');
     drive = jasmine.createSpyObj('DriveService', [
       'getTree', 'getQuota', 'getPendingUploads', 'getTrash', 'createFolder', 'updateFolder',
       'updateFile', 'trashFolder', 'trashFile', 'hardDeleteFolder', 'hardDeleteFile',
