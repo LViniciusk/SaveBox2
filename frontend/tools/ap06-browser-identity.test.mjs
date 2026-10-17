@@ -103,7 +103,8 @@ test('Windows CDP simulation attests a disposable real process and starts native
       assert.equal(launched,browser);assert.equal(record.browserLaunches,1);assert.equal(record.browserIdentity.browserLaunchSucceeded,true);
       assert.equal(record.browserIdentity.before.status,'PASS');assert.equal(record.browserIdentity.before.browserMode,'headless-shell');
       assert.equal(record.browserIdentity.before.nativeFlagsValidated,true);assert.equal(record.browserIdentity.ownedPids[0],child.pid);
-      assert.equal(getAttestedBrowserProof(browser).nativeFlagsValidated,true);
+      const proof=getAttestedBrowserProof(browser);assert.equal(proof.nativeFlagsValidated,true);
+      assert.throws(()=>{proof.nativeFlagsValidated=false;});assert.equal(getAttestedBrowserProof(browser).nativeFlagsValidated,true);
       const trace=new NativeTrace('unused');await trace.start(browser);
       assert.equal(trace.receipt.activatedBeforeWorkload,true);assert.ok(!calls.includes('Browser.getBrowserCommandLine'));
       assert.equal((await lease.request({action:'closed'})).closedHashVerified,true);

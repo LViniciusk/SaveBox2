@@ -109,7 +109,7 @@ export async function attestBrowserProcess(browser,identity,lease,requiredArgs,l
     requiredArgs,launchStartedMs,browserVersion:version.product.split('/').at(-1)};
   const before=await lease.request(query);check(browser.version()===identity.chromiumVersion,'AP06_BROWSER_VERSION_MISMATCH');
   const nativeFlagsValidated=JSON.stringify(requiredArgs)===JSON.stringify([...AUTOPLAY_ARGS,...NATIVE_ARGS]);
-  const proof={status:'PASS',browserPid:roots[0].id,processCreationTime:before.processCreationTime,nativeFlagsValidated};proofs.set(browser,proof);
+  const proof=Object.freeze({status:'PASS',browserPid:roots[0].id,processCreationTime:before.processCreationTime,nativeFlagsValidated});proofs.set(browser,proof);
   return {cdp,pids,query,before,proof};
 }
 
