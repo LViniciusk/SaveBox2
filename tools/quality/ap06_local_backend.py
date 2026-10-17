@@ -10,11 +10,11 @@ import subprocess
 import sys
 import time
 from urllib.request import urlopen
-from ap06_authorities import sha256, checked_path
+from ap06_authorities import sha256, checked_path, private_permissions
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / os.environ.get('AP06_EXPERIMENT_ROOT', '.quality/readiness-wave8')
-EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3','readiness-wave11-r3':'r10_r3','readiness-wave12':'r10_r3','readiness-wave12-r2-factorial':'r10_r3','readiness-wave12-r2-native':'r10_r3','readiness-wave12-r3-factorial':'r10_r3','readiness-wave12-r3-native':'r10_r3','readiness-wave12-r4-factorial':'r10_r3','readiness-wave12-r4-native':'r10_r3','readiness-wave12-r5-factorial':'r10_r3','readiness-wave12-r5-native':'r10_r3'}.get(OUTPUT.name,'r8')
+EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3','readiness-wave11-r3':'r10_r3','readiness-wave12':'r10_r3','readiness-wave12-r2-factorial':'r10_r3','readiness-wave12-r2-native':'r10_r3','readiness-wave12-r3-factorial':'r10_r3','readiness-wave12-r3-native':'r10_r3','readiness-wave12-r4-factorial':'r10_r3','readiness-wave12-r4-native':'r10_r3','readiness-wave12-r5-factorial':'r10_r3','readiness-wave12-r5-native':'r10_r3','readiness-wave12-r6-factorial':'r10_r3','readiness-wave12-r6-native':'r10_r3'}.get(OUTPUT.name,'r8')
 R3 = EXPERIMENT_ID == 'r10_r3'
 BACKEND_PORT, APP_PORT = 42187, 42088
 SPOOF_CLIENTS = ('127.0.0.2','127.0.0.3')
@@ -176,6 +176,13 @@ def verify_spoof_guard(source_address,phase,previous_active_ban,candidate_active
     save_spoof_guard_attempt(receipt)
 
 
+def preserve_runtime_for_resume():
+    requested='--preserve-runtime-for-resume' in sys.argv
+    if requested and not OUTPUT.name.startswith('readiness-wave12-r6-'):
+        raise RuntimeError('AP06_RUNTIME_PRESERVE_R6_ONLY')
+    return requested
+
+
 def verify_startup_rejections(binary,runtime,env,command):
     dotenv=runtime/'.env'; original=dotenv.read_text()
     cases=[]
@@ -211,6 +218,7 @@ def verify_startup_rejections(binary,runtime,env,command):
 
 def serve():
     free_port(BACKEND_PORT); free_port(APP_PORT)
+    preserve_runtime=preserve_runtime_for_resume()
     if R3:
         verify_experimental_build()
         pg_bin=postgres_toolchain()
@@ -230,7 +238,7 @@ def serve():
         free_port(port)
     else:
         runtime, storage, identity, env, port, database, password = create_runtime()
-        if OUTPUT.name.startswith('readiness-wave12-r5-'):
+        if OUTPUT.name.startswith(('readiness-wave12-r5-','readiness-wave12-r6-')):
             save(OUTPUT/'pipeline/fixture-account-cleanup.json',{'status':'NOT_RUN','accountsRequested':0,'accountsCleaned':0,
                 'removedFiles':0,'failureClass':None})
     pgdata = runtime/'pg'; pwfile = runtime/'pg-password'
@@ -323,13 +331,18 @@ def serve():
         verify_storage(storage, identity)
         assert runtime.resolve().is_relative_to(OUTPUT.resolve()) and not runtime.is_symlink()
         assert (runtime/('.owned-'+EXPERIMENT_ID)).read_text() == identity
-        shutil.rmtree(runtime)
+        if preserve_runtime:
+            private_permissions(OUTPUT)
+            save(OUTPUT/'pipeline/runtime-preserved-for-resume.json',{'status':'PASS','runtimeRelativePath':runtime.relative_to(OUTPUT).as_posix(),
+                'ownedServerStopped':True,'ownedPostgresStopped':True,'privateOutputAclVerified':True})
+        else:shutil.rmtree(runtime)
         if R3:
             foreign_after=native_processes()
             save(OUTPUT/'pipeline/foreign-native-after.json',{'status':'PASS' if foreign_after==foreign_before else 'FAIL',
                 'sameForeignProcesses':foreign_after==foreign_before,'before':foreign_before,'after':foreign_after})
         save(OUTPUT/'pipeline/backend-runtime-cleanup.json',{'status':'PASS','ownedServerStopped':True,
-            'ownedPostgresStopped':True,'ownedClusterStorageAndDotenvRemoved':True,'personalServicesTouched':False})
+            'ownedPostgresStopped':True,'ownedClusterStorageAndDotenvRemoved':not preserve_runtime,
+            'runtimePreservedForResume':preserve_runtime,'personalServicesTouched':False})
         print('R8 owned native resources removed',flush=True)
 
 def create_runtime():

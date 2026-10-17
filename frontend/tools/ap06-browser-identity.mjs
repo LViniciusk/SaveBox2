@@ -160,7 +160,7 @@ export async function launchWithIdentityLease(chromium,launch,record,expected,le
 
 export async function launchAttestedBrowser(chromium,options,record,onBrowserLaunched=()=>{}){
   const manifest=process.env.AP06_BROWSER_IDENTITY;
-  if(!manifest){check(!/readiness-wave12-r(3|4|5)-/.test(process.env.AP06_EXPERIMENT_ROOT??''));const browser=await chromium.launch(options);onBrowserLaunched(browser);return browser;}
+  if(!manifest){check(!/readiness-wave12-r(3|4|5|6)-/.test(process.env.AP06_EXPERIMENT_ROOT??''));const browser=await chromium.launch(options);onBrowserLaunched(browser);return browser;}
   let stage='identity-resolution',expected,launch,lease;
   record.browserIdentity={status:'PENDING',attemptReserved:true,readLease:false,browserLaunchSucceeded:false};
   try{

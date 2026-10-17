@@ -225,5 +225,124 @@ class ReceiptAndRecoveryTests(unittest.TestCase):
                 self.assertIn('127.0.0.2',saved);self.assertNotIn('sensitive body',saved);self.assertNotIn('synthetic-invalid-password',saved)
             finally:local_backend.OUTPUT=old
 
+    def test_real_peer_guard_records_expected_middleware_status_sequence(self):
+        expected=[401]*5+[429]*9+[403]*2
+        connections=[]
+        login_attempts={}
+        class Response:
+            def __init__(self,status,body=b''):self.status=status;self.body=body
+            def read(self,_limit=None):return self.body
+        class Connection:
+            def __init__(self,host,port,timeout,source_address):
+                self.address=source_address[0];self.path='';self.headers={};self.sock=None;connections.append(self)
+            def connect(self):self.sock=type('Socket',(),{'getsockname':lambda _self:(self.address,44000)})()
+            def request(self,method,path,body=None,headers=None):self.path=path;self.headers=headers or {}
+            def getresponse(self):
+                if self.path=='/__ap06/actual-peer':return Response(200,self.address.encode())
+                index=login_attempts.get(self.address,0);login_attempts[self.address]=index+1
+                return Response(expected[index],b'synthetic body')
+            def close(self):pass
+        with tempfile.TemporaryDirectory() as tmp:
+            output=Path(tmp);(output/'baseline').mkdir();old=local_backend.OUTPUT;local_backend.OUTPUT=output
+            try:
+                with patch.object(local_backend.http.client,'HTTPConnection',Connection):
+                    local_backend.verify_spoof_guard('127.0.0.2','fresh',False,False)
+                    local_backend.verify_spoof_guard('127.0.0.3','resume',True,False)
+                saved=json.loads((output/'baseline/network-spoof-guard.json').read_text())
+                self.assertEqual(saved['status'],'PASS');self.assertEqual(len(saved['attempts']),2)
+                self.assertEqual([row['actualPeer'] for row in saved['attempts']],['127.0.0.2','127.0.0.3'])
+                self.assertTrue(all(row['statuses']==expected for row in saved['attempts']))
+                self.assertEqual(len(connections),34)
+                self.assertTrue(all(connection.address in ('127.0.0.2','127.0.0.3') for connection in connections))
+                self.assertTrue(all(connection.headers.get('X-Real-IP')=='127.0.0.1' and connection.headers.get('X-Forwarded-For')=='127.0.0.1, ::1' for connection in connections if connection.path=='/login'))
+                self.assertNotIn('synthetic body',(output/'baseline/network-spoof-guard.json').read_text())
+            finally:local_backend.OUTPUT=old
+
+
+class R6AuthorityTests(unittest.TestCase):
+    def make_wave(self,root,content=None):
+        root=Path(root);output=root/'.quality/readiness-wave12-r6-factorial';baseline=output/'baseline'
+        task=root/'quality/prompt.md';task.parent.mkdir(parents=True,exist_ok=True)
+        content=content if content is not None else (Path(__file__).resolve().parents[2]/'quality/prompt.md').read_bytes()
+        task.write_bytes(content);(baseline).mkdir(parents=True,exist_ok=True)
+        private_task=baseline/'task.md';private_task.write_bytes(content)
+        digest=r9.sha256(task)
+        conditions={key:value for key,value in factorial.CONDITIONS.items()}
+        expected_ranges=[[0,'bytes=0-131071'],[0,'bytes=114-4194433'],[0,'bytes=4194434-8388753'],
+            [1,'bytes=0-131071'],[1,'bytes=117-4194436'],[1,'bytes=4194437-8388756'],
+            [2,'bytes=0-131071'],[2,'bytes=114-4194433'],[2,'bytes=4194434-8388753']]
+        protocol={'campaign':'AP-06-R12-R6-factorial','implementationHead':'a'*40,
+            'hypotheses':'Fetch on payload chunks changes cycle-6 renderer private memory; metadata transport is the factorial control.',
+            'conditions':conditions,
+            'triageOrder':list(factorial.CONDITIONS),'formalOrder':'A,B,B,A,A,B',
+            'metrics':{'primary':'renderer-private-delta-cycle-6','secondary':'total-chromium-private-delta'},
+            'thresholds':{'controlMiB':300,'triageMiB':150,'formalSeparationMiB':150},
+            'order':[list(pair) for pair in factorial.PAIRS],
+            'budget':{'preflight':1,'triage':4,'formal':6,'nativeCapability':1,'nativeMeasurements':2,'maximum':14,'retries':0},
+            'corpus':{'fixtureCount':3,'bytesPerCycle':25559136,'metadataBytesPerCycle':393216,'payloadBytesPerCycle':25165920,'rangesPerCycle':expected_ranges},
+            'httpContract':{'status':206,'jwt':True,'contentRange':True,'contentLength':True,'rangeCountPerCycle':9,'noWorkerMseMediaOrPlayback':True,'blobOnly':True},
+            'security':{'loopbackBind':'127.0.0.1','testedRealPeers':['127.0.0.2','127.0.0.3'],'spoofHeadersIgnored':True,
+                'productionBypassOrEndpoint':False,'endpointExperimentalOnly':True,'externalAccessDenied':True},
+            'cleanup':{'accountAndFileCleanup':True,'readOnlyBanReadback':True},
+            'stop':{'noRetry':True,'stopOnGateFailure':True},'publication':{'draftOnly':True,'merge':False},
+            'nativeProfiling':{'onlyAfterFormalConfirmation':True,'capabilityBrowsers':1,'measurementBrowsers':2,'idleSeconds':120,
+                'samplingBytes':16384,'traceBytesMax':536870912,'eventBytesMax':33554432,'cdpTimeoutMs':30000,'streamTimeoutMs':120000,
+                'checkpoints':['baseline','cycle-6-close','idle-120s','forced-GC-final']},
+            'authoritySha256':digest,'authorityBytes':len(content)}
+        (baseline/'task-provenance.json').write_text(json.dumps({'sourceSha256':digest,'sourceBytes':len(content)}))
+        (baseline/'preregistered-protocol.json').write_text(json.dumps(protocol))
+        class Wave:
+            def __init__(self):self.root=root;self.output=output
+            def git(self,*args):return 'a'*40
+        return Wave(),protocol,content
+
+    def test_authority_checks_presence_hash_semantics_and_freeze(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wave,protocol,_=self.make_wave(tmp)
+            self.assertEqual(factorial.validate_r6_authority(wave),protocol['authoritySha256'])
+            changed=copy.deepcopy(protocol);changed['thresholds']['controlMiB']=299
+            with self.assertRaises(Exception):factorial.validate_r6_authority(wave,changed)
+            protocol['authoritySha256']='0'*64
+            (wave.output/'baseline/preregistered-protocol.json').write_text(json.dumps(protocol))
+            with self.assertRaises(Exception):factorial.validate_r6_authority(wave)
+        with tempfile.TemporaryDirectory() as tmp:
+            wave,protocol,content=self.make_wave(tmp,b'AP-06 R12-R6')
+            with self.assertRaises(Exception):factorial.validate_r6_authority(wave)
+            (wave.root/'quality/prompt.md').unlink()
+            with self.assertRaises(Exception):factorial.validate_r6_authority(wave)
+
+    def test_corpus_authority_rejects_changed_manifest_ranges_and_missing_fixtures(self):
+        expected_ranges=[[0,'bytes=0-131071'],[0,'bytes=114-4194433'],[0,'bytes=4194434-8388753'],
+            [1,'bytes=0-131071'],[1,'bytes=117-4194436'],[1,'bytes=4194437-8388756'],
+            [2,'bytes=0-131071'],[2,'bytes=114-4194433'],[2,'bytes=4194434-8388753']]
+        workload={'bytesPerCycle':25559136,'cycles':6,'requestsPerCycle':9,'rangesPerCycle':expected_ranges}
+        fixtures=[{'id':i,'path':f'video-{i}.mp4','bytes':i+1,'sha256':str(i)*64,'ciphertextBytes':i+11,
+            'ciphertextSha256':str(i+1)*64,'chunkBytes':4194304,'chunkCount':3,'lastChunkBytes':1,'authenticatedMetadata':True} for i in range(3)]
+        with tempfile.TemporaryDirectory() as tmp:
+            wave,_,_=self.make_wave(tmp);fixture_root=wave.output/'fixtures';(fixture_root/'plain').mkdir(parents=True);(fixture_root/'cipher').mkdir()
+            manifest=fixture_root/'manifest.json';manifest.write_text(json.dumps(fixtures));digest=r9.sha256(manifest)
+            receipt={'manifestSha256':digest,'workload':workload,'referenceCampaigns':['AP-06-R12','AP-06-R12-R2','AP-06-R12-R4'],
+                'historicalR6Identity':'NOT_PROVEN_NEW_R12R6_BASELINE','fixtures':[{'id':row['id'],'plainBytes':row['bytes'],
+                    'plainSha256':row['sha256'],'cipherBytes':row['ciphertextBytes'],'cipherSha256':row['ciphertextSha256'],
+                    'chunkBytes':row['chunkBytes'],'chunkCount':row['chunkCount'],'lastChunkBytes':row['lastChunkBytes']} for row in fixtures]}
+            (wave.output/'baseline/workload.json').write_text(json.dumps(workload))
+            receipt_path=wave.output/'baseline/corpus-provenance.json';receipt_path.write_text(json.dumps(receipt))
+            with self.assertRaises(Exception):factorial.validate_r6_corpus(wave)
+            manifest.write_text('[]')
+            with self.assertRaises(Exception):factorial.validate_r6_corpus(wave)
+            workload['rangesPerCycle'][0]=[0,'bytes=0-1023'];receipt['workload']=workload
+            manifest.write_text(json.dumps(fixtures));receipt['manifestSha256']=r9.sha256(manifest)
+            (wave.output/'baseline/workload.json').write_text(json.dumps(workload));receipt_path.write_text(json.dumps(receipt))
+            with self.assertRaises(Exception):factorial.validate_r6_corpus(wave)
+
+    def test_runtime_preservation_is_limited_to_r6_resume(self):
+        with patch.object(local_backend.sys,'argv',['ap06_local_backend.py','--preserve-runtime-for-resume']),\
+                patch.object(local_backend,'OUTPUT',Path('.quality/readiness-wave12-r6-factorial')):
+            self.assertTrue(local_backend.preserve_runtime_for_resume())
+        with patch.object(local_backend.sys,'argv',['ap06_local_backend.py','--preserve-runtime-for-resume']),\
+                patch.object(local_backend,'OUTPUT',Path('.quality/readiness-wave12-r5-factorial')):
+            with self.assertRaisesRegex(RuntimeError,'AP06_RUNTIME_PRESERVE_R6_ONLY'):
+                local_backend.preserve_runtime_for_resume()
+
 
 if __name__=='__main__':unittest.main()

@@ -33,7 +33,7 @@ def publish(wave, name, files):
         files = {'r10-r3/'+relative:source for relative,source in files.items()}
     if wave.output.name in ('readiness-wave11','readiness-wave11-r2','readiness-wave11-r3','readiness-wave12','readiness-wave12-r2-factorial','readiness-wave12-r2-native',
             'readiness-wave12-r3-factorial','readiness-wave12-r3-native','readiness-wave12-r4-factorial','readiness-wave12-r4-native',
-            'readiness-wave12-r5-factorial','readiness-wave12-r5-native'):
+            'readiness-wave12-r5-factorial','readiness-wave12-r5-native','readiness-wave12-r6-factorial','readiness-wave12-r6-native'):
         prefix=wave.output.name.replace('readiness-wave','r')
         name = name if name.startswith(prefix+'-') else prefix+'-'+name
         files = {prefix+'/'+relative:source for relative,source in files.items()}
@@ -148,7 +148,7 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
     files={path:wave.root/path for path in tracked}
     if wave.output.name in ('readiness-wave10-r3','readiness-wave11','readiness-wave11-r2','readiness-wave11-r3','readiness-wave12','readiness-wave12-r2-factorial','readiness-wave12-r2-native',
             'readiness-wave12-r3-factorial','readiness-wave12-r3-native','readiness-wave12-r4-factorial','readiness-wave12-r4-native',
-            'readiness-wave12-r5-factorial','readiness-wave12-r5-native'):
+            'readiness-wave12-r5-factorial','readiness-wave12-r5-native','readiness-wave12-r6-factorial','readiness-wave12-r6-native'):
         files['backend/include/crow_all.h'] = wave.root/'backend/include/crow_all.h'
     for path in products: files[path]=wave.root/path
     for name in ('savebox_server.exe','nanika_e2e_fixture.exe'):
@@ -162,7 +162,8 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
     config=read(wave.output/'baseline/authority-config.local.json');authority=Path(config['AP06_AUTHORITY_ROOT'])
     prefix = {'readiness-wave10-r3':'r10-r3-','readiness-wave11':'r11-','readiness-wave11-r2':'r11-r2-','readiness-wave11-r3':'r11-r3-','readiness-wave12':'r12-','readiness-wave12-r2-factorial':'r12-r2-factorial-','readiness-wave12-r2-native':'r12-r2-native-','readiness-wave12-r3-factorial':'r12-r3-factorial-','readiness-wave12-r3-native':'r12-r3-native-',
         'readiness-wave12-r4-factorial':'r12-r4-factorial-','readiness-wave12-r4-native':'r12-r4-native-',
-        'readiness-wave12-r5-factorial':'r12-r5-factorial-','readiness-wave12-r5-native':'r12-r5-native-'}.get(wave.output.name,'')
+        'readiness-wave12-r5-factorial':'r12-r5-factorial-','readiness-wave12-r5-native':'r12-r5-native-',
+        'readiness-wave12-r6-factorial':'r12-r6-factorial-','readiness-wave12-r6-native':'r12-r6-native-'}.get(wave.output.name,'')
     implementation_name = prefix+'implementation'
     freeze_name = prefix+'freeze'
     freeze={'campaign':'AP-06-R9-R2','status':'FROZEN','implementationHead':wave.git('rev-parse','HEAD').strip(),

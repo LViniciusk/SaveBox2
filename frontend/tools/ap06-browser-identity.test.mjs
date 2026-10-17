@@ -51,9 +51,9 @@ test('every campaign caller uses one shared identity gate and persists launch af
   for(const name of ['ap06-browser-identity.mjs','ap06-native-trace.mjs'])
     assert.doesNotMatch(readFileSync(new URL(name,import.meta.url),'utf8'),/Browser\.getBrowserCommandLine/);
 });
-test('R3, R4 and R5 cannot launch without their pre-registered identity manifest',async()=>{
+test('R3 through R6 cannot launch without their pre-registered identity manifest',async()=>{
   const old=process.env.AP06_EXPERIMENT_ROOT,manifest=process.env.AP06_BROWSER_IDENTITY;
-  for(const root of ['.quality/readiness-wave12-r3-factorial','.quality/readiness-wave12-r4-factorial','.quality/readiness-wave12-r5-factorial']){
+  for(const root of ['.quality/readiness-wave12-r3-factorial','.quality/readiness-wave12-r4-factorial','.quality/readiness-wave12-r5-factorial','.quality/readiness-wave12-r6-factorial']){
     process.env.AP06_EXPERIMENT_ROOT=root;delete process.env.AP06_BROWSER_IDENTITY;let launched=false;
     try{await assert.rejects(launchAttestedBrowser({launch:()=>{launched=true;}},{args:AUTOPLAY_ARGS},{}));assert.equal(launched,false);}
     finally{if(manifest!==undefined)process.env.AP06_BROWSER_IDENTITY=manifest;else delete process.env.AP06_BROWSER_IDENTITY;}

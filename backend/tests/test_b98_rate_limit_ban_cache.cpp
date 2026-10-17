@@ -79,6 +79,10 @@ struct RateLimitMiddlewareTestProbe {
         std::shared_lock<std::shared_timed_mutex> lock(mw.mutex_);
         return mw.clients_.at(ip).auth_count;
     }
+    static bool has_client(RateLimitMiddleware& mw, const std::string& ip) {
+        std::shared_lock<std::shared_timed_mutex> lock(mw.mutex_);
+        return mw.clients_.find(ip) != mw.clients_.end();
+    }
 };
 
 TEST_CASE("AP06 unverified and production loopback keep all native limits", "[ap06][rate_limiter][security]") {
@@ -603,9 +607,14 @@ TEST_CASE("AP06 verified local bypass precedes every mutation ban and protection
         }
         CHECK(RateLimitMiddlewareTestProbe::state(limiter) == before);
     }
-    for (const auto& peer : {"203.0.113.10", "192.168.1.10", "127.0.0.2", "localhost", "", "::ffff:127.0.0.1"}) {
+    for (const auto& peer : {"203.0.113.10", "192.168.1.10", "127.0.0.2", "127.0.0.3", "localhost", "", "::ffff:127.0.0.1"}) {
+        db.erase(peer);
         RateLimitMiddleware normal;
         normal.init_ap06_local(pool, runtime);
+        if (peer == std::string("127.0.0.2") || peer == std::string("127.0.0.3")) {
+            crow::request actual_peer; actual_peer.remote_ip_address = peer;
+            CHECK_FALSE(ClientIp::is_actual_loopback_peer(actual_peer));
+        }
         for (int i = 1; i <= 16; ++i) {
             crow::request req; req.remote_ip_address = peer; req.url = "/login";
             req.add_header("Host", "localhost"); req.add_header("X-Real-IP", "127.0.0.1");
@@ -613,6 +622,11 @@ TEST_CASE("AP06 verified local bypass precedes every mutation ban and protection
             crow::response res; RateLimitMiddleware::context ctx;
             normal.before_handle(req, res, ctx);
             CHECK(res.code == (i <= 5 ? 200 : i < 15 ? 429 : 403));
+        }
+        if (peer == std::string("127.0.0.2") || peer == std::string("127.0.0.3")) {
+            CHECK(RateLimitMiddlewareTestProbe::auth_count(normal, peer) == 15);
+            CHECK_FALSE(RateLimitMiddlewareTestProbe::has_client(normal, "127.0.0.1"));
+            CHECK(db.count(peer) == 1);
         }
     }
 }

@@ -14,7 +14,7 @@ async function fixture(command, payload, env = environment) {
   return executeFixture({ command, payload, environment: env });
 }
 if (process.argv.includes('--cleanup')) {
-  const r5 = out.split(/[\\/]/).at(-1).startsWith('readiness-wave12-r5-');
+  const r5 = /readiness-wave12-r[56]-/.test(out.split(/[\\/]/).at(-1));
   const credentials = JSON.parse(readFileSync(join(out, 'baseline/accounts.local.json'), 'utf8'));
   const results = []; let status = 'PASS';
   try {
