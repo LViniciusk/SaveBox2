@@ -34,7 +34,7 @@ def publish(wave, name, files):
     if wave.output.name in ('readiness-wave11','readiness-wave11-r2','readiness-wave11-r3','readiness-wave12','readiness-wave12-r2-factorial','readiness-wave12-r2-native',
             'readiness-wave12-r3-factorial','readiness-wave12-r3-native','readiness-wave12-r4-factorial','readiness-wave12-r4-native',
             'readiness-wave12-r5-factorial','readiness-wave12-r5-native','readiness-wave12-r6-factorial','readiness-wave12-r6-native',
-            'readiness-wave12-r7-factorial','readiness-wave12-r7-native'):
+            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native'):
         prefix=wave.output.name.replace('readiness-wave','r')
         name = name if name.startswith(prefix+'-') else prefix+'-'+name
         files = {prefix+'/'+relative:source for relative,source in files.items()}
@@ -150,8 +150,16 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
     if wave.output.name in ('readiness-wave10-r3','readiness-wave11','readiness-wave11-r2','readiness-wave11-r3','readiness-wave12','readiness-wave12-r2-factorial','readiness-wave12-r2-native',
             'readiness-wave12-r3-factorial','readiness-wave12-r3-native','readiness-wave12-r4-factorial','readiness-wave12-r4-native',
             'readiness-wave12-r5-factorial','readiness-wave12-r5-native','readiness-wave12-r6-factorial','readiness-wave12-r6-native',
-            'readiness-wave12-r7-factorial','readiness-wave12-r7-native'):
-        files['backend/include/crow_all.h'] = wave.root/'backend/include/crow_all.h'
+            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native'):
+        header=wave.root/'backend/include/crow_all.h'
+        if wave.output.name.startswith('readiness-wave12-r8-'):
+            backend=read(wave.output/'baseline/experimental-backend.json')
+            if header.is_file():
+                if sha256(header)!=backend.get('crowHeaderSha256'):raise WaveFailure('R12R8_CROW_HEADER_AUTHORITY_MISMATCH')
+                files['backend/include/crow_all.h']=header
+            elif backend.get('status')!='PASS' or not backend.get('crowHeaderSource','').startswith('reused R7 build receipt'):
+                raise WaveFailure('R12R8_CROW_HEADER_AUTHORITY_MISSING')
+        else:files['backend/include/crow_all.h']=header
     for path in products: files[path]=wave.root/path
     for name in ('savebox_server.exe','nanika_e2e_fixture.exe'):
         path=wave.output/'tooling/backend-build'/name;files[path.relative_to(wave.root).as_posix()]=path
@@ -166,7 +174,8 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
         'readiness-wave12-r4-factorial':'r12-r4-factorial-','readiness-wave12-r4-native':'r12-r4-native-',
         'readiness-wave12-r5-factorial':'r12-r5-factorial-','readiness-wave12-r5-native':'r12-r5-native-',
         'readiness-wave12-r6-factorial':'r12-r6-factorial-','readiness-wave12-r6-native':'r12-r6-native-',
-        'readiness-wave12-r7-factorial':'r12-r7-factorial-','readiness-wave12-r7-native':'r12-r7-native-'}.get(wave.output.name,'')
+        'readiness-wave12-r7-factorial':'r12-r7-factorial-','readiness-wave12-r7-native':'r12-r7-native-',
+        'readiness-wave12-r8-factorial':'r12-r8-factorial-','readiness-wave12-r8-native':'r12-r8-native-'}.get(wave.output.name,'')
     implementation_name = prefix+'implementation'
     freeze_name = prefix+'freeze'
     freeze={'campaign':'AP-06-R9-R2','status':'FROZEN','implementationHead':wave.git('rev-parse','HEAD').strip(),

@@ -1,17 +1,23 @@
 """AP-06-R8: authenticated control, real service, then the real Angular player."""
 import argparse
+from html.parser import HTMLParser
 import json
 import math
+import os
 from pathlib import Path
 import statistics
+import stat
 import subprocess
 import sys
 import tempfile
+from pathlib import PurePosixPath
+from urllib.parse import unquote, urlsplit
 
 from run_readiness_wave1 import Wave, WaveFailure, campaign, owner
 from run_ap06_transport_probe import media_server
 from run_ap06_transmux_probe import CRYPTO, DOES_NOT, REPRODUCES, INCONCLUSIVE, PHASES, validate_raw
 from run_ap06_orchestration_probe import checked_classification, individual_deltas
+from ap06_authorities import checked_path
 
 OUTPUT = '.quality/readiness-wave8'
 VERSION = '151.0.7922.34'
@@ -70,20 +76,136 @@ def claim_stage(output, condition, stage):
 
 
 def build_products(root, output=OUTPUT):
+    root = Path(root).resolve()
+    r12r8 = Path(output).as_posix() == '.quality/readiness-wave12-r8-factorial'
+
+    def fail(reason):
+        raise WaveFailure(reason if r12r8 else 'R8_EXECUTABLE_BUNDLES_MISSING')
+
     app = root / output / 'tooling/app'
-    assets = {'/': (app / 'browser/index.html', 'text/html; charset=utf-8')}
-    for path in (app / 'browser').iterdir():
+    if not r12r8:
+        assets = {'/': (app / 'browser/index.html', 'text/html; charset=utf-8')}
+        for path in (app / 'browser').iterdir():
+            if path.suffix in ('.js', '.css'):
+                assets['/' + path.name] = (path, 'text/javascript' if path.suffix == '.js' else 'text/css')
+        products = {path.relative_to(root).as_posix(): campaign.sha256_file(path) for path, _ in assets.values()}
+        workers = {}
+        for name, data in read(app / 'stats.json')['outputs'].items():
+            for kind in ('crypto', 'transmux'):
+                if data.get('entryPoint', '').endswith(f'/stream-{kind}.worker.ts'):
+                    path = app / 'browser' / name
+                    workers[kind] = {'path': path.relative_to(root).as_posix(), 'name': name, 'sha256': campaign.sha256_file(path)}
+        if set(workers) != {'crypto', 'transmux'} or not assets['/'][0].is_file():
+            fail('R8_EXECUTABLE_BUNDLES_MISSING')
+        return assets, products, workers
+
+    browser = app / 'browser'
+    try:
+        checked_path(app.absolute())
+        checked_path(browser.absolute())
+        app_root = (root / '.quality/readiness-wave12-r8-factorial').resolve(strict=True)
+        app_real = app.resolve(strict=True)
+        browser_real = browser.resolve(strict=True)
+        if not app_real.is_relative_to(app_root) or not browser_real.is_relative_to(app_real):
+            fail('R12R8_APP_PRODUCTS_MISSING')
+    except (OSError, ValueError):
+        fail('R12R8_APP_PRODUCTS_MISSING')
+    if not browser.is_dir():
+        fail('R12R8_APP_PRODUCTS_MISSING')
+
+    def regular_file(path):
+        try:
+            checked_path(path.absolute())
+            info = path.lstat()
+            return stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode) and not getattr(info, 'st_file_attributes', 0) & 0x400
+        except (OSError, ValueError):
+            return False
+
+    for directory, directories, files in os.walk(browser, followlinks=False):
+        for name in [*directories, *files]:
+            try:
+                checked_path((Path(directory) / name).absolute())
+            except ValueError:
+                fail('R12R8_APP_PRODUCTS_MISSING')
+
+    index = browser / 'index.html'
+    if not regular_file(index):
+        fail('R12R8_APP_PRODUCTS_MISSING')
+    stats_path = app / 'stats.json'
+    if not regular_file(stats_path):
+        fail('R12R8_APP_STATS_INVALID')
+    try:
+        stats = read(stats_path)
+        outputs = stats.get('outputs')
+        if not isinstance(outputs, dict) or not outputs or any(not isinstance(name, str) or not isinstance(data, dict) for name, data in outputs.items()):
+            fail('R12R8_APP_STATS_INVALID')
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        fail('R12R8_APP_STATS_INVALID')
+
+    def output_file(name):
+        if not isinstance(name, str) or not name:
+            fail('R12R8_APP_PRODUCTS_MISSING')
+        relative = PurePosixPath(name)
+        if not relative.parts or relative.is_absolute() or any(part in ('', '.', '..') for part in relative.parts) or '\\' in name or ':' in name:
+            fail('R12R8_APP_PRODUCTS_MISSING')
+        parts = relative.parts[1:] if relative.parts[0] == 'browser' else relative.parts
+        if not parts:
+            fail('R12R8_APP_PRODUCTS_MISSING')
+        path = browser.joinpath(*parts)
+        if not regular_file(path):
+            fail('R12R8_APP_PRODUCTS_MISSING')
+        try:
+            if not path.resolve(strict=True).is_relative_to(browser.resolve(strict=True)):
+                fail('R12R8_APP_PRODUCTS_MISSING')
+        except OSError:
+            fail('R12R8_APP_PRODUCTS_MISSING')
+        return path
+
+    class BundleReferences(HTMLParser):
+        def __init__(self):
+            super().__init__();self.paths=[]
+        def handle_starttag(self,tag,attrs):
+            attribute='src' if tag=='script' else 'href' if tag=='link' else None
+            reference=dict(attrs).get(attribute) if attribute else None
+            if isinstance(reference,str):
+                url=urlsplit(reference)
+                if not url.scheme and not url.netloc and PurePosixPath(url.path).suffix in ('.js','.css'):
+                    self.paths.append(unquote(url.path).lstrip('/'))
+        def handle_startendtag(self,tag,attrs):self.handle_starttag(tag,attrs)
+
+    try:
+        references=BundleReferences();references.feed(index.read_text(encoding='utf-8'))
+    except (OSError,UnicodeError):
+        fail('R12R8_APP_PRODUCTS_MISSING')
+    for name in references.paths:output_file(name)
+
+    for name in outputs:
+        if name.endswith(('.js', '.css')):
+            if name.endswith('.css') and outputs[name].get('ng-component') is True:
+                continue  # Angular records component CSS that it embeds in the JavaScript bundle.
+            output_file(name)
+
+    assets = {'/': (index, 'text/html; charset=utf-8')}
+    for path in browser.iterdir():
         if path.suffix in ('.js', '.css'):
+            if not regular_file(path):
+                fail('R12R8_APP_PRODUCTS_MISSING')
             assets['/' + path.name] = (path, 'text/javascript' if path.suffix == '.js' else 'text/css')
     products = {path.relative_to(root).as_posix(): campaign.sha256_file(path) for path, _ in assets.values()}
     workers = {}
-    for name, data in read(app / 'stats.json')['outputs'].items():
+    for name, data in outputs.items():
+        entry = data.get('entryPoint', '')
         for kind in ('crypto', 'transmux'):
-            if data.get('entryPoint', '').endswith(f'/stream-{kind}.worker.ts'):
-                path = app / 'browser' / name
-                workers[kind] = {'path': path.relative_to(root).as_posix(), 'name': name, 'sha256': campaign.sha256_file(path)}
-    if set(workers) != {'crypto', 'transmux'} or not assets['/'][0].is_file():
-        raise WaveFailure('R8_EXECUTABLE_BUNDLES_MISSING')
+            if isinstance(entry, str) and entry.endswith(f'/stream-{kind}.worker.ts'):
+                if kind in workers:
+                    fail('R12R8_WORKER_PRODUCTS_INVALID')
+                path = output_file(name)
+                digest = campaign.sha256_file(path)
+                if not isinstance(digest, str) or len(digest) != 64:
+                    fail('R12R8_WORKER_PRODUCTS_INVALID')
+                workers[kind] = {'path': path.relative_to(root).as_posix(), 'name': name, 'sha256': digest}
+    if set(workers) != {'crypto', 'transmux'}:
+        fail('R12R8_WORKER_PRODUCTS_INVALID')
     return assets, products, workers
 
 

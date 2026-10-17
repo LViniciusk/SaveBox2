@@ -1,13 +1,16 @@
 """R12-R2 factorial: strict mixed routing, shared HTTP samples and immutable measurement helpers."""
 import argparse,json,math,re,subprocess,tempfile
 from pathlib import Path
-from run_readiness_wave1 import Wave,WaveFailure
-from run_ap06_integration_probe import read,VERSION
+import socket
+from urllib.parse import urlsplit
+from run_readiness_wave1 import Wave,WaveFailure,owner
+from run_ap06_integration_probe import read,build_products,VERSION
 from run_ap06_r9 import publish,media_files,runtime_environment,freeze_implementation,measure,validate_network
 from run_ap06_r10 import expected_proof,validate_bootstrap_network
 from run_ap06_r11 import verify_r11_freeze,renderer_delta,validate_process_lifecycle,validate_memory
 from run_ap06_r12 import require,validate_scalars,validate_http_samples
 from run_ap06_transport_probe import media_server
+from run_test_matrix import npm_command
 from ap06_authorities import checked_path,private_permissions,sha256
 
 OUTPUT='.quality/readiness-wave12-r2-factorial'
@@ -20,11 +23,12 @@ def configure_campaign(output,publisher,campaign):
         ('.quality/readiness-wave12-r4-factorial','AP-06-R12-R4-factorial'),
         ('.quality/readiness-wave12-r5-factorial','AP-06-R12-R5-factorial'),
         ('.quality/readiness-wave12-r6-factorial','AP-06-R12-R6-factorial'),
-        ('.quality/readiness-wave12-r7-factorial','AP-06-R12-R7-factorial')),'R12R3_CAMPAIGN_INVALID')
+        ('.quality/readiness-wave12-r7-factorial','AP-06-R12-R7-factorial'),
+        ('.quality/readiness-wave12-r8-factorial','AP-06-R12-R8-factorial')),'R12R3_CAMPAIGN_INVALID')
     OUTPUT,PUBLISHER,CAMPAIGN=output,Path(publisher).resolve(),campaign
 
 def campaign_prefix():
-    return {'AP-06-R12-R7-factorial':'R12R7_','AP-06-R12-R6-factorial':'R12R6_','AP-06-R12-R5-factorial':'R12R5_',
+    return {'AP-06-R12-R8-factorial':'R12R8_','AP-06-R12-R7-factorial':'R12R7_','AP-06-R12-R6-factorial':'R12R6_','AP-06-R12-R5-factorial':'R12R5_',
         'AP-06-R12-R4-factorial':'R12R4_','AP-06-R12-R3-factorial':'R12R3_'}.get(CAMPAIGN,'R12R2_')
 
 def campaign_decision(value):
@@ -40,8 +44,9 @@ def validate_campaign_authority(wave,campaign,task_path,round_name,frozen_protoc
     require(content and content==private_task.read_bytes() and digest==provenance.get('sourceSha256')==protocol.get('authoritySha256') and
         task.stat().st_size==provenance.get('sourceBytes')==protocol.get('authorityBytes'),round_name+'_TASK_AUTHORITY_HASH_MISMATCH')
     text=content.decode('utf-8')
+    formal_order='A,B,B,A,A,B' if campaign.endswith('R8-factorial') else 'A, B, B, A, A, B'
     required=(f'AP-06 {round_name.replace("R12", "R12-").replace("R12--", "R12-")}',
-        '25.559.136','393.216','25.165.920','HTTP 206','A, B, B, A, A, B','300 MiB','150 MiB','MemoryInfra')
+        '25.559.136','393.216','25.165.920','HTTP 206',formal_order,'300 MiB','150 MiB','MemoryInfra')
     if campaign.endswith('R6-factorial'):required+=('127.0.0.2','127.0.0.3')
     require(all(value in text for value in required),round_name+'_TASK_SEMANTICS_MISSING')
     require('14 Chromium, zero retries.' in text if campaign.endswith('R7-factorial') else
@@ -53,7 +58,8 @@ def validate_campaign_authority(wave,campaign,task_path,round_name,frozen_protoc
     expected_ranges=[[0,'bytes=0-131071'],[0,'bytes=114-4194433'],[0,'bytes=4194434-8388753'],
         [1,'bytes=0-131071'],[1,'bytes=117-4194436'],[1,'bytes=4194437-8388756'],
         [2,'bytes=0-131071'],[2,'bytes=114-4194433'],[2,'bytes=4194434-8388753']]
-    require(isinstance(protocol,dict) and set(protocol)==fields and protocol['campaign']==campaign and
+    expected_fields=fields|({'offlinePreflight'} if campaign.endswith('R8-factorial') else set())
+    require(isinstance(protocol,dict) and set(protocol)==expected_fields and protocol['campaign']==campaign and
         isinstance(protocol['implementationHead'],str) and re.fullmatch(r'[0-9a-f]{40}',protocol['implementationHead']) and
         protocol['implementationHead']==wave.git('rev-parse','HEAD').strip() and protocol['conditions']==expected_conditions and
         protocol['triageOrder']==list(CONDITIONS) and protocol['formalOrder']=='A,B,B,A,A,B' and
@@ -81,6 +87,12 @@ def validate_campaign_authority(wave,campaign,task_path,round_name,frozen_protoc
         protocol['nativeProfiling'].get('streamTimeoutMs')==120000 and
         protocol['nativeProfiling'].get('checkpoints')==['baseline','cycle-6-close','idle-120s','forced-GC-final'],
         round_name+'_PROTOCOL_SCHEMA_INVALID')
+    if campaign.endswith('R8-factorial'):
+        gate=protocol.get('offlinePreflight',{})
+        require(gate.get('angularProject')=='ap06-r7' and gate.get('output')=='.quality/readiness-wave12-r8-factorial/tooling/app' and
+            gate.get('buildBeforeReservation') is True and gate.get('environmentBeforeReservation') is True and
+            gate.get('mediaServerReadyBeforeReservation') is True and gate.get('zeroReservationOnOfflineFailure') is True,
+            round_name+'_OFFLINE_PREFLIGHT_SCHEMA_INVALID')
     if frozen_protocol is not None:
         require(frozen_protocol==protocol,round_name+'_PROTOCOL_FREEZE_MISMATCH')
     return digest
@@ -90,6 +102,9 @@ def validate_r6_authority(wave,frozen_protocol=None):
 
 def validate_r7_authority(wave,frozen_protocol=None):
     return validate_campaign_authority(wave,'AP-06-R12-R7-factorial','quality/ap06-r12-r7.md','R12-R7',frozen_protocol)
+
+def validate_r8_authority(wave,frozen_protocol=None):
+    return validate_campaign_authority(wave,'AP-06-R12-R8-factorial','quality/ap06-r12-r8.md','R12-R8',frozen_protocol)
 
 def validate_r6_corpus(wave):
     manifest=wave.output/'fixtures/manifest.json';receipt=read(wave.output/'baseline/corpus-provenance.json')
@@ -116,10 +131,323 @@ def validate_r6_corpus(wave):
             'R12R6_FIXTURE_HASH_OR_SIZE_MISMATCH')
     return receipt
 
+def validate_r8_corpus(wave):
+    try:
+        receipt=validate_r6_corpus(wave)
+    except (WaveFailure,OSError,ValueError,KeyError,TypeError):
+        raise WaveFailure('R12R8_CORPUS_INVALID') from None
+    require(receipt.get('reusedFromCampaign')=='AP-06-R12-R7-factorial' and
+        receipt.get('sourceManifestSha256')==receipt.get('manifestSha256')=='d7fd432cefac1fa57a03d67dbda980799e6905e04a9ca0e2ed9b3b9d45bdae0b',
+        'R12R8_CORPUS_INVALID')
+    return receipt
+
+class R8PreflightFailure(WaveFailure):
+    def __init__(self,stage,failure_class,reservation_created=False,launch_attempts=0,browser_launches=0,
+            cleanup_status='NOT_REQUIRED',cleanup_failure_class=None):
+        super().__init__(failure_class)
+        self.stage=stage;self.failure_class=failure_class;self.reservation_created=reservation_created
+        self.launch_attempts=launch_attempts;self.browser_launches=browser_launches
+        self.cleanup_status=cleanup_status;self.cleanup_failure_class=cleanup_failure_class
+
+def preflight_build_inputs(root):
+    return {'angularJson':sha256(root/'frontend/angular.json'),'packageJson':sha256(root/'frontend/package.json'),
+        'packageLock':sha256(root/'frontend/package-lock.json'),
+        'projectSource':owner._tree_sha256(root,'frontend/experiments/ap06-r7'),
+        'appSource':owner._tree_sha256(root,'frontend/src')}
+
+def prepare_preflight_assets(wave):
+    app=wave.output/'tooling/app'
+    try:
+        require(wave.output.resolve()==(wave.root/'.quality/readiness-wave12-r8-factorial').resolve() and
+            not (wave.output/'tooling/freeze.json').exists() and
+            not (wave.output/'final/STOP.json').exists(),'R12R8_APP_BUILD_FAILED')
+        checked_path(app.absolute());private_permissions(wave.output)
+        inputs=preflight_build_inputs(wave.root)
+    except (WaveFailure,OSError,ValueError,subprocess.SubprocessError):
+        raise WaveFailure('R12R8_APP_BUILD_FAILED') from None
+    receipt_path=wave.output/'tooling/app-products.json'
+    if app.exists():
+        try:
+            command=read(wave.output/'pipeline/commands/r12-r8-angular-build.json');receipt=read(receipt_path)
+            require(command.get('status')=='PASS' and command.get('exitCode')==0 and receipt.get('inputs')==inputs,
+                'R12R8_APP_BUILD_FAILED')
+        except (WaveFailure,OSError,ValueError,TypeError):
+            raise WaveFailure('R12R8_APP_BUILD_FAILED') from None
+        assets,products,workers=build_products(wave.root,OUTPUT)
+        validate_r8_product_receipt(receipt,products,workers)
+        return assets,products,workers
+    try:
+        wave.command('r12-r8-angular-build',[npm_command(),'run','build','--','ap06-r7',
+            '--output-path=../.quality/readiness-wave12-r8-factorial/tooling/app'],wave.root/'frontend')
+    except (WaveFailure,OSError,ValueError,subprocess.SubprocessError):
+        raise WaveFailure('R12R8_APP_BUILD_FAILED') from None
+    assets,products,workers=build_products(wave.root,OUTPUT)
+    require(set(workers)=={'crypto','transmux'},'R12R8_WORKER_PRODUCTS_INVALID')
+    receipt={'status':'PASS','project':'ap06-r7','output':'.quality/readiness-wave12-r8-factorial/tooling/app',
+        'inputs':inputs,'products':products,'workers':workers}
+    wave.save('tooling/app-products.json',receipt)
+    return assets,products,workers
+
+def validate_r8_product_receipt(receipt,products,workers):
+    require(isinstance(receipt,dict) and receipt.get('status')=='PASS','R12R8_APP_PRODUCTS_MISSING')
+    require(receipt.get('workers')==workers,'R12R8_WORKER_HASH_MISMATCH')
+    require(receipt.get('products')==products,'R12R8_APP_PRODUCTS_MISSING')
+
+def validate_r8_native_tests(wave):
+    try:
+        summary=read(wave.output/'baseline/native-tests-summary.json');reuse=read(wave.output/'baseline/native-binary-reuse.json')
+        backend=read(wave.output/'baseline/experimental-backend.json');artifacts=reuse.get('artifacts',{});suites=summary.get('suites',{})
+        require(summary.get('status')=='PASS' and summary.get('seed')==60102 and set(suites)=={'production','experimental'} and
+            all(row.get('status')=='PASS' and row.get('assertionsFailed')==row.get('casesFailed')==row.get('expectedFailures')==0 and
+                type(row.get('assertionsPassed')) is int and row['assertionsPassed']>0 and type(row.get('casesPassed')) is int and
+                row['casesPassed']>0 and row.get('xmlSha256')==sha256(wave.output/'baseline'/f'native-{kind}.xml')
+                for kind,row in suites.items()),'R12R8_PREFLIGHT_NOT_READY')
+        require(reuse.get('status')=='PASS' and backend.get('status')=='PASS' and
+            artifacts.get('server')==backend.get('binarySha256') and artifacts.get('compileCommands')==backend.get('compileCommandsSha256') and
+            artifacts.get('cmakeCache')==backend.get('cmakeCacheSha256') and backend.get('crowHeaderSha256') and
+            ((wave.root/'backend/include/crow_all.h').is_file() and sha256(wave.root/'backend/include/crow_all.h')==backend.get('crowHeaderSha256') or
+                not (wave.root/'backend/include/crow_all.h').exists() and backend.get('crowHeaderSource','').startswith('reused R7 build receipt')) and
+            all(artifacts.get(name)==sha256(wave.output/'tooling/backend-build'/path) for name,path in (
+                ('server','nanika_ap06_local_server.exe'),('compileCommands','compile_commands.json'),('cmakeCache','CMakeCache.txt'),
+                ('productionTests','savebox_tests.exe'),('experimentalTests','nanika_ap06_tests.exe'))),
+            'R12R8_PREFLIGHT_NOT_READY')
+        return summary
+    except (WaveFailure,OSError,ValueError,KeyError,TypeError,AttributeError):
+        raise WaveFailure('R12R8_PREFLIGHT_NOT_READY') from None
+
+def validate_r8_global_quality(wave):
+    known=('docs/arquitetura/visao-geral.md','docs/arquitetura/frontend.md','docs/arquitetura/backend.md','docs/arquitetura/deployment.md')
+    try:
+        record=read(wave.output/'baseline/global-quality-r8.json')
+        require(record.get('status')=='DOCUMENTED_EXCEPTION' and type(record.get('tests')) is int and record['tests']>0 and
+            record.get('failures')==4 and record.get('errors')==0 and record.get('failureClass')=='preexisting documentation boundaries' and
+            record.get('failureFiles')==list(known) and record.get('historicalFailureDocumentsUnchanged') is True and
+            isinstance(record.get('snapshotSha256'),str) and re.fullmatch(r'[0-9a-f]{64}',record['snapshotSha256']) is not None,
+            'R12R8_PREFLIGHT_NOT_READY')
+        return record
+    except (WaveFailure,OSError,ValueError,KeyError,TypeError,AttributeError):
+        raise WaveFailure('R12R8_PREFLIGHT_NOT_READY') from None
+
+def validate_r8_dependency_audit(wave):
+    try:
+        audit=read(wave.output/'baseline/dependency-audit.json');reports=audit.get('reports',{})
+        all_report=reports.get('all',{});runtime=reports.get('runtime',{})
+        require(audit.get('status')=='RECORDED_NO_UPGRADES' and audit.get('upgradePerformed') is False and
+            audit.get('packageLockSha256')==sha256(wave.root/'frontend/package-lock.json') and
+            all_report.get('status')=='PASS' and all_report.get('counts')=={'info':0,'low':0,'moderate':7,'high':20,'critical':3,'total':30} and
+            len(all_report.get('findings',[]))==30 and runtime.get('status')=='PASS' and
+            runtime.get('counts')=={'info':0,'low':0,'moderate':0,'high':1,'critical':0,'total':1} and
+            len(runtime.get('findings',[]))==1 and runtime['findings'][0].get('package')=='@angular/router' and
+            runtime['findings'][0].get('severity')=='high','R12R8_PREFLIGHT_NOT_READY')
+        return audit
+    except (WaveFailure,OSError,ValueError,KeyError,TypeError,AttributeError):
+        raise WaveFailure('R12R8_PREFLIGHT_NOT_READY') from None
+
+def validate_r8_secret_scan(wave):
+    try:
+        receipt=read(wave.output/'baseline/secret-scan-receipt.json')
+        findings=read(wave.output/'baseline/secret-scan.json')
+        require(receipt.get('status')=='PASS' and receipt.get('scanner')=='gitleaks' and receipt.get('version')=='v8.30.1' and
+            receipt.get('findings')==0 and receipt.get('stagedFiles')==10 and findings==[],'R12R8_PREFLIGHT_NOT_READY')
+        return receipt
+    except (WaveFailure,OSError,ValueError,KeyError,TypeError,AttributeError):
+        raise WaveFailure('R12R8_PREFLIGHT_NOT_READY') from None
+
+def verify_preflight_dependencies(wave,env,assets,files):
+    try:
+        identity=read(wave.output/'baseline/browser-identity.json')
+        from ap06_browser_identity import verify_identity
+        observed=verify_identity(identity)
+        require(observed['productVersion']==VERSION and identity.get('chromiumVersion')==VERSION,
+            'R12R8_PREFLIGHT_NOT_READY')
+        require(set(assets)>= {'/'} and all(path.is_file() and not path.is_symlink() for path,_ in assets.values()),
+            'R12R8_PREFLIGHT_NOT_READY')
+        receipt=read(wave.output/'tooling/app-products.json')
+        _,products,workers=build_products(wave.root,OUTPUT)
+        validate_r8_product_receipt(receipt,products,workers)
+        config=read(wave.output/'baseline/authority-config.local.json')
+        authority=Path(config['AP06_AUTHORITY_ROOT'])
+        from ap06_authorities import validate_owned_destination
+        validate_owned_destination(authority,config['identity'],campaign='AP-06-R10')
+        backend=read(wave.output/'baseline/backend-runtime.local.json')
+        live=read(wave.output/'pipeline/backend-live.json')
+        runtime=checked_path(Path(backend['cwd']).absolute());storage=checked_path(Path(backend['storagePath']).absolute())
+        origin=urlsplit(backend['backendOrigin'])
+        require(runtime.resolve().is_relative_to(wave.output.resolve()) and storage==runtime/'storage' and
+            (runtime/'.owned-r10_r3').read_text()==backend['storageId'] and
+            (storage/'.nanika-e2e-storage-id').read_text()==backend['storageId'] and
+            Path(backend['executable']).is_file() and (runtime/'process.log').is_file() and
+            origin.scheme=='http' and origin.hostname=='127.0.0.1' and origin.port==42187 and
+            live.get('status')=='READY' and live.get('isolated') is True and live.get('backendOrigin')==backend['backendOrigin'] and
+            type(live.get('backendPid')) is int and type(live.get('postgresPid')) is int,
+            'R12R8_PREFLIGHT_NOT_READY')
+        with socket.create_connection((origin.hostname,origin.port),timeout=3):pass
+        for relative in ('baseline/player-auth.local.json','baseline/backend-runtime.local.json',
+                'baseline/backend-authority.json','baseline/experimental-backend.json','baseline/backend-isolation.json',
+                'baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json',
+                'tooling/backend-build/nanika_ap06_local_server.exe','tooling/backend-build/CMakeCache.txt',
+                'tooling/backend-build/compile_commands.json'):
+            path=checked_path((wave.output/relative).absolute())
+            require(path.is_file(),'R12R8_PREFLIGHT_NOT_READY')
+        custody=read(wave.output/'baseline/runtime-credentials-custody.json')
+        readback=read(wave.output/'baseline/runtime-credentials-readback.json')
+        require(custody.get('manifestSha256')==validate_r8_corpus(wave)['manifestSha256'] and
+            custody.get('protectedSha256')==sha256(wave.output/'baseline/runtime-credentials.dpapi') and
+            readback.get('status')=='PASS' and readback.get('identity')==config['identity'] and
+            readback.get('manifestSha256')==custody['manifestSha256'] and readback.get('plaintextPersisted') is False,
+            'R12R8_PREFLIGHT_NOT_READY')
+        # Validate current-user DPAPI access in memory; never persist or print the recovered synthetic keys.
+        result=subprocess.run([sys.executable,str(wave.root/'tools/quality/ap06_r11_keys.py'),
+            str(wave.output/'baseline/authority-config.local.json')],cwd=wave.root,capture_output=True,check=True)
+        keys=json.loads(result.stdout)
+        require(isinstance(keys,dict) and len(keys)==3,'R12R8_PREFLIGHT_NOT_READY')
+        del keys,result
+        expected={f'/video-{row["id"]}.mp4':row for row in validate_r8_corpus(wave)['fixtures']}
+        require(set(files)==set(expected),'R12R8_CORPUS_INVALID')
+        for url,path in files.items():
+            checked_path(path.absolute())
+            row=expected[url]
+            require(path.is_file() and sha256(path)==row['cipherSha256'] and path.stat().st_size==row['cipherBytes'],
+                'R12R8_CORPUS_INVALID')
+        for name in ('AP06_R5_FIXTURE_MANIFEST','AP06_R9_PRIVATE_KEYS','AP06_R9_BACKEND_LOG',
+                'AP06_R7_APP_PRODUCTS','AP06_BROWSER_IDENTITY'):
+            require(bool(env.get(name)),'R12R8_PREFLIGHT_NOT_READY')
+        require(Path(env['AP06_R5_FIXTURE_MANIFEST']).is_file() and Path(env['AP06_R9_PRIVATE_KEYS']).is_file() and
+            Path(env['AP06_BROWSER_IDENTITY']).is_file(),'R12R8_PREFLIGHT_NOT_READY')
+        receipt=publish(wave,'browser-identity',{'evidence/browser-identity.json':wave.output/'baseline/browser-identity.json'})
+        wave.save('baseline/browser-identity-publication.json',{'status':'PASS','publication':'r12-r8-factorial-browser-identity',
+            'manifestSha256':receipt['manifestSha256'],'identitySha256':sha256(wave.output/'baseline/browser-identity.json')})
+        return identity
+    except R8PreflightFailure:
+        raise
+    except WaveFailure as error:
+        if str(error).startswith('R12R8_'):raise
+        raise WaveFailure('R12R8_PREFLIGHT_NOT_READY') from None
+    except (OSError,ValueError,TypeError,KeyError,subprocess.SubprocessError):
+        raise WaveFailure('R12R8_PREFLIGHT_NOT_READY') from None
+
+def validate_r8_preflight_authority(wave):
+    try:
+        validate_r8_authority(wave);validate_r8_corpus(wave)
+        require(not wave.git('status','--porcelain').strip(),'R12R8_PREFLIGHT_NOT_READY')
+        checks=read(wave.output/'baseline/prechecks.json')
+        require(all(checks.get(key)=='PASS' for key in ('status','secretScan','angularBuild','typescript','syntax','diff','nativeTests')) and
+            checks.get('globalTests')=='DOCUMENTED_EXCEPTION' and checks.get('dependencyAudit')=='PASS',
+            'R12R8_PREFLIGHT_NOT_READY')
+        validate_r8_native_tests(wave)
+        validate_r8_global_quality(wave)
+        validate_r8_dependency_audit(wave)
+        validate_r8_secret_scan(wave)
+        budget=read(wave.output/'baseline/budget.json')
+        require(budget.get('approved') is True and budget.get('developmentMaximum')==1 and
+            budget.get('globalMaximum')==14 and budget.get('triageMaximum')==4 and budget.get('formalMaximum')==6 and
+            budget.get('nativeCapabilityMaximum')==1 and budget.get('nativeMeasurementMaximum')==2 and
+            budget.get('measurementRetries')==0,'R12R8_PREFLIGHT_NOT_READY')
+        ci=read(wave.output/'baseline/ci.json');head=wave.git('rev-parse','HEAD').strip()
+        require(ci.get('headSha')==head and ci.get('conclusion')=='success' and len(ci.get('jobs',[]))==3 and
+            all(job.get('conclusion')=='success' for job in ci['jobs']),'R12R8_PREFLIGHT_NOT_READY')
+        quality=read(wave.output/'baseline/quality-baseline-ci.json')
+        require(quality.get('headSha')==head and quality.get('conclusion')=='success','R12R8_PREFLIGHT_NOT_READY')
+        require(not (wave.output/'final/STOP.json').exists() and
+            not (wave.output/'pipeline/development-reservation.json').exists() and
+            not (wave.output/'tooling/freeze.json').exists(),'R12R8_PREFLIGHT_NOT_READY')
+    except (WaveFailure,OSError,ValueError,KeyError,TypeError):
+        raise WaveFailure('R12R8_PREFLIGHT_NOT_READY') from None
+
+def unit_browser_r8(wave):
+    reservation=wave.output/'pipeline/development-reservation.json';target=wave.output/'tooling/angular-unit-1.json'
+    started=wave.output/'pipeline/preflight-started.json'
+    reservation_created=False;launch_attempts=browser_launches=0;cleanup_status='NOT_REQUIRED';cleanup_failure=None
+    stage='offline-authority'
+    try:
+        started.parent.mkdir(parents=True,exist_ok=True)
+        with started.open('x',encoding='utf-8') as stream:
+            json.dump({'campaign':CAMPAIGN,'head':wave.git('rev-parse','HEAD'),'retries':0},stream)
+        validate_r8_preflight_authority(wave)
+        stage='offline-app-build'
+        assets,products,workers=prepare_preflight_assets(wave)
+        stage='offline-environment'
+        env,assets=environment(wave,wave.output/'tooling','r12r2.0')
+        env['AP06_R7_UNIT_OUTPUT']=str(target)
+        files=media_files(wave)
+        identity=verify_preflight_dependencies(wave,env,assets,files)
+        stage='offline-media-server'
+        primary=None;server_started=False
+        try:
+            with media_server(files,True,'application/octet-stream',assets,port=42088) as (origin,stats):
+                server_started=True;cleanup_status='PASS';env['AP06_R5_MEDIA_ORIGIN']=origin
+                try:
+                    parsed=urlsplit(origin)
+                    with socket.create_connection((parsed.hostname,parsed.port),timeout=3):pass
+                    require(not reservation.exists(),'R12R8_PREFLIGHT_NOT_READY')
+                    reservation.parent.mkdir(parents=True,exist_ok=True)
+                    with reservation.open('x',encoding='utf-8') as stream:
+                        json.dump({'campaign':CAMPAIGN,'head':wave.git('rev-parse','HEAD'),'maximum':1,'retries':0,
+                            'appProductsSha256':sha256(wave.output/'tooling/app-products.json')},stream)
+                    reservation_created=True
+                    publish(wave,'development-reserved',{'evidence/development-reservation.json':reservation})
+                    stage='preflight-execution'
+                    try:
+                        wave.command('r12-r8-preflight',[wave.node,'tools/ap06-r12-preflight.mjs'],wave.root/'frontend',env)
+                    except (WaveFailure,OSError,subprocess.SubprocessError):
+                        primary=R8PreflightFailure(stage,'R12R8_PREFLIGHT_EXECUTION_FAILED',True,0,0,cleanup_status)
+                    if target.exists():
+                        raw=read(target);launch_attempts=raw.get('unitBrowserLaunchAttempts',0);browser_launches=raw.get('unitBrowserLaunches',0)
+                        publish(wave,'preflight-complete',{'evidence/preflight.raw.json':target})
+                    wave.save('pipeline/preflight-transport.json',stats)
+                except (WaveFailure,OSError,ValueError,TypeError,KeyError,subprocess.SubprocessError) as error:
+                    if primary is None:
+                        failure='R12R8_PREFLIGHT_NOT_READY' if not reservation_created else 'R12R8_PREFLIGHT_EXECUTION_FAILED'
+                        primary=R8PreflightFailure(stage,failure,reservation_created,launch_attempts,browser_launches,cleanup_status)
+                if primary is not None:
+                    primary.launch_attempts=launch_attempts;primary.browser_launches=browser_launches
+        except (OSError,ValueError,RuntimeError,WaveFailure) as error:
+            if primary is None:
+                failure='R12R8_PREFLIGHT_NOT_READY' if not reservation_created else 'R12R8_PREFLIGHT_EXECUTION_FAILED'
+                primary=R8PreflightFailure(stage,failure,reservation_created,launch_attempts,browser_launches,
+                    'FAIL' if server_started else 'NOT_STARTED',
+                    'MEDIA_SERVER_CLEANUP_FAILED' if server_started and 'CLEANUP' in str(error) else None)
+            else:
+                primary.cleanup_status='FAIL';primary.cleanup_failure_class='MEDIA_SERVER_CLEANUP_FAILED'
+        if primary is not None:raise primary
+        stage='preflight-validation'
+        unit=read(target)
+        require(unit.get('status')=='PASS' and unit.get('unitBrowserLaunchAttempts')==unit.get('unitBrowserLaunches')==1 and
+            unit.get('browserClosed') is True and unit.get('processExitAudit',{}).get('status')=='PASS' and
+            unit.get('browserIdentity',{}).get('before',{}).get('browserPid')==unit.get('browserIdentity',{}).get('after',{}).get('browserPid') and
+            unit.get('browserIdentity',{}).get('before',{}).get('processCreationTime')==unit.get('browserIdentity',{}).get('after',{}).get('processCreationTime'),
+            'R12R8_PREFLIGHT_EXECUTION_FAILED')
+        validate_browser_receipt(unit,identity,process_samples=[sample for case in unit['cases'] for sample in case.get('processSamples',())])
+        workload=read(wave.output/'baseline/workload.json');fixtures=read(wave.output/'fixtures/manifest.json')
+        mapping=read(wave.output/'baseline/backend-authority.json')['fileMapping']
+        for condition in CONDITIONS:
+            network=unit['rangeNetworks'][condition]
+            require(unit['transportProofs'][condition]==expected_proof('r10.1'),'R12R8_PREFLIGHT_EXECUTION_FAILED')
+            require(validate_mixed_network({'rangeNetwork':network['cdp'],'backendTraffic':network['backend']},condition,
+                workload['rangesPerCycle'],fixtures,mapping)==workload['bytesPerCycle'],'R12R8_PREFLIGHT_EXECUTION_FAILED')
+            validate_scalars(unit['scalarCounters'][condition],'r12.0',3,workload['bytesPerCycle'])
+            require(unit['routingCounters'][condition]==transport_counts(condition,3),'R12R8_PREFLIGHT_EXECUTION_FAILED')
+        require(len(unit.get('cases',[]))==5 and all(row.get('status')=='PASS' and row.get('contextClosed') for row in unit['cases']),
+            'R12R8_PREFLIGHT_EXECUTION_FAILED')
+        ready={'status':'PASS','developmentChromium':1,'retries':0,'reservationCreated':True,
+            'launchAttempts':launch_attempts,'browserLaunches':browser_launches,'cleanupStatus':cleanup_status,
+            'appProductsSha256':sha256(wave.output/'tooling/app-products.json')}
+        wave.save('baseline/preflight-ready.json',ready)
+        publish(wave,'preflight-ready',{'evidence/preflight-ready.json':wave.output/'baseline/preflight-ready.json'})
+    except R8PreflightFailure:
+        raise
+    except (WaveFailure,OSError,ValueError,RuntimeError,subprocess.SubprocessError,KeyError,TypeError,IndexError) as error:
+        reason=str(error)
+        failure=reason if reason.startswith('R12R8_') else (
+            'R12R8_PREFLIGHT_EXECUTION_FAILED' if reservation_created else 'R12R8_PREFLIGHT_NOT_READY')
+        if stage=='offline-app-build' and failure=='R12R8_PREFLIGHT_NOT_READY':failure='R12R8_APP_BUILD_FAILED'
+        if stage=='offline-media-server' and failure=='R12R8_PREFLIGHT_NOT_READY':failure='R12R8_PREFLIGHT_NOT_READY'
+        raise R8PreflightFailure(stage,failure,reservation_created,launch_attempts,browser_launches,cleanup_status,cleanup_failure) from None
+
 def validate_browser_receipt(record,identity,native=False,process_samples=None):
     receipt=record.get('browserIdentity',{})
-    r5=CAMPAIGN in ('AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial')
-    r4=CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial');prefix=campaign_prefix()
+    r5=CAMPAIGN in ('AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial')
+    r4=CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial');prefix=campaign_prefix()
     launched=(receipt.get('browserLaunchSucceeded') is True and receipt.get('attemptReserved') is True) if r4 else receipt.get('launchSucceeded') is True
     require(receipt.get('status')=='PASS' and receipt.get('readLease') is True and launched,prefix+'BROWSER_IDENTITY_REQUIRED')
     before,after=receipt.get('before',{}),receipt.get('after',{})
@@ -207,7 +535,7 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
     try:
         require(condition in CONDITIONS and stage in ('triage','formal') and len(raw['runs'])==1,'R12R2_RUN_IDENTITY_CHANGED')
         run=raw['runs'][0];attempt=re.fullmatch(r'(triage|formal)-(\d{2})-(r12r2\.[0-3])',run['runId'])
-        if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
+        if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial'):
             validate_browser_receipt(run,freeze['browserIdentity'],process_samples=run.get('samples',()))
             require(run['browserIdentity']['before']['browserPid']==next(p['pid'] for p in run['samples'][0]['processMemory']['processes'] if p['type']=='browser'),
                 campaign_prefix()+'BROWSER_SAMPLE_PID_MISMATCH')
@@ -234,7 +562,7 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
 def check_budget(budget,previous,requested):
     require(budget.get('approved') is True and budget.get('developmentMaximum')==1 and budget.get('measurementMaximum')==10 and
         budget.get('measurementRetries')==0 and type(previous) is int and 0<=previous<10 and type(requested) is int and requested==1 and
-        (CAMPAIGN not in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial') or (budget.get('globalMaximum')==14 and budget.get('triageMaximum')==4 and
+        (CAMPAIGN not in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial') or (budget.get('globalMaximum')==14 and budget.get('triageMaximum')==4 and
             budget.get('formalMaximum')==6 and budget.get('nativeCapabilityMaximum')==1 and budget.get('nativeMeasurementMaximum')==2)),
         campaign_prefix()+'BROWSER_BUDGET_EXCEEDED')
 
@@ -242,20 +570,23 @@ def environment(wave,directory,condition,stage='triage',freeze=None):
     env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=PUBLISHER)
     env.update(AP06_R11_KEYS=str(wave.root/'tools/quality/ap06_r11_keys.py'),AP06_R11_AUTHORITY=str(wave.output/'baseline/authority-config.local.json'),
         AP06_R12R2_ATTEMPT=stage+'-'+directory.name)
-    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial'):
         env['AP06_BROWSER_IDENTITY']=str(wave.output/'baseline/browser-identity.json')
-    if CAMPAIGN in ('AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):env['AP06_R5_PROCESS_HANDLE_AUDIT']='1'
-    if CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial'):env['AP06_R5_PROCESS_HANDLE_AUDIT']='1'
+    if CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial'):
         profile_root=checked_path((wave.output/'tooling/browser-temp').absolute());create=not profile_root.exists();profile_root.mkdir(exist_ok=True);private_permissions(profile_root,create=create)
         env.update(AP06_BROWSER_TEMP_ROOT=str(profile_root),TEMP=str(profile_root),TMP=str(profile_root))
     return env,assets
 
 def verify_campaign_freeze(wave,frozen):
     verify_r11_freeze(wave,frozen)
+    if CAMPAIGN=='AP-06-R12-R8-factorial':
+        validate_r8_authority(wave,frozen.get('protocol'))
+        validate_r8_corpus(wave)
     if CAMPAIGN in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
         (validate_r7_authority if CAMPAIGN.endswith('R7-factorial') else validate_r6_authority)(wave,frozen.get('protocol'))
         validate_r6_corpus(wave)
-    if CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial'):
         from ap06_browser_identity import verify_identity
         identity=read(wave.output/'baseline/browser-identity.json')
         prefix=campaign_prefix().removesuffix('_')
@@ -296,6 +627,8 @@ def classify(wave,values,formal=None,candidate=None):
     except (OSError,subprocess.SubprocessError,UnicodeError,ValueError,KeyError,TypeError):raise WaveFailure('R12R2_CLASSIFIER_BRIDGE_FAILED') from None
 
 def unit_browser(wave):
+    if CAMPAIGN=='AP-06-R12-R8-factorial':
+        return unit_browser_r8(wave)
     if CAMPAIGN in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
         (validate_r7_authority if CAMPAIGN.endswith('R7-factorial') else validate_r6_authority)(wave)
         validate_r6_corpus(wave)
@@ -330,21 +663,28 @@ def unit_browser(wave):
 
 def freeze(wave):
     require(read(wave.output/'baseline/preflight-ready.json')['status']=='PASS','R12R2_PREFLIGHT_REQUIRED')
-    if CAMPAIGN in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
+    if CAMPAIGN=='AP-06-R12-R8-factorial':
+        validate_r8_authority(wave);validate_r8_corpus(wave)
+    elif CAMPAIGN in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
         (validate_r7_authority if CAMPAIGN.endswith('R7-factorial') else validate_r6_authority)(wave)
         validate_r6_corpus(wave)
     identity_files=()
-    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial'):
         from ap06_browser_identity import verify_identity
         identity=read(wave.output/'baseline/browser-identity.json');verify_identity(identity)
         validate_browser_receipt(read(wave.output/'tooling/angular-unit-1.json'),identity)
         ci=read(wave.output/'baseline/ci.json');require(ci['headSha']==wave.git('rev-parse','HEAD').strip() and ci['conclusion']=='success',
             campaign_prefix()+'CI_REQUIRED')
         identity_files=('baseline/browser-identity.json','baseline/browser-identity-publication.json')
-    freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r12-r2-probe.mjs',runner_path=PUBLISHER,extra_publications=('custody',),
+    freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r12-r2-probe.mjs',runner_path=PUBLISHER,
+        extra_publications=('custody','r12-r8-factorial-browser-identity') if CAMPAIGN=='AP-06-R12-R8-factorial' else ('custody',),
         extra_files=('baseline/prechecks.json','baseline/preregistered-protocol.json','baseline/custody-readback.json','baseline/backend-isolation.json',
-            *(('baseline/task-provenance.json','baseline/corpus-provenance.json') if CAMPAIGN in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial') else ()),
-            'baseline/experimental-backend.json','baseline/ci.json','baseline/preflight-ready.json','baseline/prior-publications.json','pipeline/development-reservation.json',
+            *(('baseline/task-provenance.json','baseline/corpus-provenance.json','tooling/app-products.json','pipeline/preflight-started.json') if CAMPAIGN=='AP-06-R12-R8-factorial' else
+                ('baseline/task-provenance.json','baseline/corpus-provenance.json') if CAMPAIGN in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial') else ()),
+            'baseline/experimental-backend.json','baseline/ci.json',*(('baseline/quality-baseline-ci.json','baseline/dependency-audit.json',
+                'baseline/native-binary-reuse.json','baseline/native-tests-summary.json','baseline/global-quality-r8.json',
+                'baseline/secret-scan-receipt.json','baseline/secret-scan.json') if CAMPAIGN=='AP-06-R12-R8-factorial' else ()),
+            'baseline/preflight-ready.json','baseline/prior-publications.json','pipeline/development-reservation.json',
             'tooling/backend-build/nanika_ap06_local_server.exe','tooling/backend-build/CMakeCache.txt','tooling/backend-build/compile_commands.json',
             'baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json',*identity_files),
         protocol={'campaign':CAMPAIGN,**({'browserIdentity':identity} if identity_files else {}),'protocol':read(wave.output/'baseline/preregistered-protocol.json'),
@@ -375,6 +715,23 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ap06-r12r2-') as tmp:
         wave.temp=Path(tmp)
         try:
+            if CAMPAIGN=='AP-06-R12-R8-factorial':
+                stop_path=wave.output/'final/STOP.json';reservation=wave.output/'pipeline/development-reservation.json'
+                started=wave.output/'pipeline/preflight-started.json';ready=wave.output/'baseline/preflight-ready.json'
+                terminal=stop_path.exists() or (args.unit_browser and (reservation.exists() or started.exists())) or (
+                    args.run and reservation.exists() and (not ready.is_file() or read(ready).get('status')!='PASS'))
+                if terminal:
+                    if stop_path.is_file():
+                        print(json.dumps({'status':'R12R8_STOP','reason':'R12R8_NO_RETRY_OR_RESUME',
+                            'reservationCreated':reservation.exists()}));return 1
+                    raw=wave.output/'tooling/angular-unit-1.json';receipt=read(raw) if raw.is_file() else {}
+                    stop={'status':'R12R8_STOP','reason':'R12R8_NO_RETRY_OR_RESUME','failureStage':'retry-guard',
+                        'failureClass':'R12R8_NO_RETRY_OR_RESUME','reservationCreated':reservation.exists(),
+                        'launchAttempts':receipt.get('unitBrowserLaunchAttempts',0),'browserLaunches':receipt.get('unitBrowserLaunches',0),
+                        'cleanupStatus':receipt.get('browserIdentity',{}).get('cleanupStatus','NOT_REQUIRED'),'retries':0}
+                    wave.save('final/STOP.json',stop)
+                    publish(wave,'stop-retry-guard',{'evidence/STOP-retry-guard.json':stop_path})
+                    print(json.dumps(stop));return 1
             if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial') and (args.unit_browser or args.freeze or args.run) and (wave.output/'final/STOP.json').exists():
                 prefix=campaign_prefix().removesuffix('_')
                 print(json.dumps({'status':prefix+'_STOP','reason':prefix+'_NO_RETRY_OR_RESUME'}));return 1
@@ -391,9 +748,26 @@ def main():
                 path=checked_path(args.publish_raw.absolute());require(path.is_relative_to(wave.output) and re.fullmatch(r'(triage|formal)-\d{2}-r12r2\.[0-3]',args.snapshot or ''),'R12R2_RAW_PATH_INVALID')
                 publish(wave,'raw-'+args.snapshot,{f'evidence/raws/{args.snapshot}.json':path})
             else:parser.error('action required')
+        except R8PreflightFailure as error:
+            stop={'status':'R12R8_STOP','reason':error.failure_class,'failureStage':error.stage,'failureClass':error.failure_class,
+                'reservationCreated':error.reservation_created,'launchAttempts':error.launch_attempts,
+                'browserLaunches':error.browser_launches,'cleanupStatus':error.cleanup_status,'retries':0}
+            if error.cleanup_failure_class:stop['cleanupFailureClass']=error.cleanup_failure_class
+            wave.save('final/STOP.json',stop)
+            publish(wave,'stop-'+error.stage,{'evidence/STOP-'+error.stage+'.json':wave.output/'final/STOP.json'})
+            print(json.dumps(stop));return 1
         except (WaveFailure,ValueError,OSError,subprocess.SubprocessError,KeyError,TypeError,IndexError) as error:
             reason=str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+',str(error)) else 'R12R2_EXECUTION_FAILED'
-            phase='preflight' if args.unit_browser else 'campaign';stop=campaign_decision({'status':'R12R2_STOP','reason':reason,'ap06':'OPEN'});wave.save('final/STOP.json',stop)
+            phase='preflight' if args.unit_browser else 'campaign'
+            if CAMPAIGN=='AP-06-R12-R8-factorial':
+                raw=wave.output/'tooling/angular-unit-1.json';receipt=read(raw) if raw.is_file() else {}
+                reservation=(wave.output/'pipeline/development-reservation.json').exists()
+                stop={'status':'R12R8_STOP','reason':reason,'failureStage':phase,'failureClass':reason,
+                    'reservationCreated':reservation,'launchAttempts':receipt.get('unitBrowserLaunchAttempts',0),
+                    'browserLaunches':receipt.get('unitBrowserLaunches',0),
+                    'cleanupStatus':receipt.get('browserIdentity',{}).get('cleanupStatus','NOT_REQUIRED'),'retries':0}
+            else:stop=campaign_decision({'status':'R12R2_STOP','reason':reason,'ap06':'OPEN'})
+            wave.save('final/STOP.json',stop)
             publish(wave,'stop-'+phase,{'evidence/STOP-'+phase+'.json':wave.output/'final/STOP.json'});print(json.dumps(stop));return 1
     return 0
 

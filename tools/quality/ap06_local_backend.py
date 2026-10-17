@@ -14,7 +14,7 @@ from ap06_authorities import sha256, checked_path, private_permissions
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / os.environ.get('AP06_EXPERIMENT_ROOT', '.quality/readiness-wave8')
-EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3','readiness-wave11-r3':'r10_r3','readiness-wave12':'r10_r3','readiness-wave12-r2-factorial':'r10_r3','readiness-wave12-r2-native':'r10_r3','readiness-wave12-r3-factorial':'r10_r3','readiness-wave12-r3-native':'r10_r3','readiness-wave12-r4-factorial':'r10_r3','readiness-wave12-r4-native':'r10_r3','readiness-wave12-r5-factorial':'r10_r3','readiness-wave12-r5-native':'r10_r3','readiness-wave12-r6-factorial':'r10_r3','readiness-wave12-r6-native':'r10_r3','readiness-wave12-r7-factorial':'r10_r3','readiness-wave12-r7-native':'r10_r3'}.get(OUTPUT.name,'r8')
+EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3','readiness-wave11-r3':'r10_r3','readiness-wave12':'r10_r3','readiness-wave12-r2-factorial':'r10_r3','readiness-wave12-r2-native':'r10_r3','readiness-wave12-r3-factorial':'r10_r3','readiness-wave12-r3-native':'r10_r3','readiness-wave12-r4-factorial':'r10_r3','readiness-wave12-r4-native':'r10_r3','readiness-wave12-r5-factorial':'r10_r3','readiness-wave12-r5-native':'r10_r3','readiness-wave12-r6-factorial':'r10_r3','readiness-wave12-r6-native':'r10_r3','readiness-wave12-r7-factorial':'r10_r3','readiness-wave12-r7-native':'r10_r3','readiness-wave12-r8-factorial':'r10_r3','readiness-wave12-r8-native':'r10_r3'}.get(OUTPUT.name,'r8')
 R3 = EXPERIMENT_ID == 'r10_r3'
 BACKEND_PORT, APP_PORT = 42187, 42088
 SPOOF_CLIENTS = ('127.0.0.2','127.0.0.3')
@@ -63,9 +63,18 @@ def verify_experimental_build():
     binary = build/'nanika_ap06_local_server.exe'
     version = subprocess.check_output([str(binary),'--version'],text=True).strip()
     if version != 'Nanika AP06 local laboratory R10-R3': raise RuntimeError('AP06_BINARY_VERSION_INVALID')
+    crow = ROOT/'backend/include/crow_all.h'
+    if crow.is_file():crow_hash=sha256(crow);crow_source='worktree'
+    else:
+        previous=json.loads((OUTPUT/'baseline/experimental-backend.json').read_text(encoding='utf-8'))
+        if (not OUTPUT.name.startswith('readiness-wave12-r8-') or previous.get('status')!='PASS' or
+                previous.get('binarySha256')!=sha256(binary) or previous.get('compileCommandsSha256')!=sha256(build/'compile_commands.json') or
+                previous.get('cmakeCacheSha256')!=sha256(build/'CMakeCache.txt') or not previous.get('crowHeaderSha256')):
+            raise RuntimeError('AP06_EXPERIMENTAL_BUILD_REUSE_INVALID')
+        crow_hash=previous['crowHeaderSha256'];crow_source='reused R7 build receipt; ignored amalgamated header unavailable'
     result = {'status':'PASS','target':'nanika_ap06_local_server','version':version,
         'binarySha256':sha256(binary),'compileCommandsSha256':sha256(build/'compile_commands.json'),
-        'cmakeCacheSha256':sha256(build/'CMakeCache.txt'),'crowHeaderSha256':sha256(ROOT/'backend/include/crow_all.h'),
+        'cmakeCacheSha256':sha256(build/'CMakeCache.txt'),'crowHeaderSha256':crow_hash,'crowHeaderSource':crow_source,
         'compilerVersion':subprocess.check_output(['C:/msys64/ucrt64/bin/g++.exe','-dumpfullversion'],text=True).strip(),
         'productionTargetHasBypass':False,'configuration':'Debug','bind':'127.0.0.1','trustProxyHeaders':False}
     save(OUTPUT/'baseline/experimental-backend.json',result)
@@ -178,7 +187,7 @@ def verify_spoof_guard(source_address,phase,previous_active_ban,candidate_active
 
 def preserve_runtime_for_resume():
     requested='--preserve-runtime-for-resume' in sys.argv
-    if requested and not OUTPUT.name.startswith('readiness-wave12-r6-'):
+    if requested and not OUTPUT.name.startswith(('readiness-wave12-r6-','readiness-wave12-r8-')):
         raise RuntimeError('AP06_RUNTIME_PRESERVE_R6_ONLY')
     return requested
 
@@ -238,7 +247,7 @@ def serve():
         free_port(port)
     else:
         runtime, storage, identity, env, port, database, password = create_runtime()
-        if OUTPUT.name.startswith(('readiness-wave12-r5-','readiness-wave12-r6-','readiness-wave12-r7-')):
+        if OUTPUT.name.startswith(('readiness-wave12-r5-','readiness-wave12-r6-','readiness-wave12-r7-','readiness-wave12-r8-')):
             save(OUTPUT/'pipeline/fixture-account-cleanup.json',{'status':'NOT_RUN','accountsRequested':0,'accountsCleaned':0,
                 'removedFiles':0,'failureClass':None})
     pgdata = runtime/'pg'; pwfile = runtime/'pg-password'
