@@ -1,0 +1,188 @@
+{
+  "ap06Status": "OPEN",
+  "authority": {
+    "protocolSha256": "667ef63513558bd22e031328ab8c0e5ec8cf4e0b11c6643c48f9ed9cb95aa3a6",
+    "protocolStatus": "PASS",
+    "sourcePath": "./quality/prompt.md",
+    "sourceSha256": "f14295a9a7ab54a2bd70ca6134288854b46f8a76f867d5b865f021e8760a97fe",
+    "taskBytes": 15257,
+    "taskPath": "quality/ap06-r12-r7.md",
+    "taskSha256": "87a819de692cfce64f518c09bb622c08a334dc5a52523ebec96e75212e523c49",
+    "transcription": "Faithful Markdown copy; four trailing-space hard breaks were converted to explicit <br> for diff checks, preserving rendered line breaks."
+  },
+  "browserIdentity": {
+    "chromiumVersion": "151.0.7922.34",
+    "executableSha256": "ce4635cd0e5dc0e21494542a701f347e91c1f1d821970578d97ed8df4ced50ef",
+    "processAttestation": "NOT_RUN",
+    "status": "PASS_OFFLINE"
+  },
+  "budget": {
+    "actualChromiumLaunches": 0,
+    "developmentReservation": 1,
+    "measurementLaunches": 0,
+    "remainingBudgetMayBeUsedAfterStop": false,
+    "retries": 0,
+    "userApprovedMaximum": 14
+  },
+  "campaign": "AP-06 R12-R7",
+  "ci": {
+    "backend": {
+      "conclusion": "success",
+      "jobs": [
+        {
+          "conclusion": "success",
+          "name": "Backend / Linux Coverage"
+        },
+        {
+          "assertions": 14340,
+          "cases": 322,
+          "conclusion": "success",
+          "name": "Backend / Linux GCC"
+        },
+        {
+          "assertions": 14331,
+          "cases": 320,
+          "conclusion": "success",
+          "name": "Backend / Windows MSVC"
+        }
+      ],
+      "runId": 39046048960
+    },
+    "implementationHead": "4869a1be40a7e009ec0aff523d72f2e8a3ba7187",
+    "qualityBaseline": {
+      "conclusion": "success",
+      "frontendTests": 1530,
+      "jobs": [
+        {
+          "conclusion": "success",
+          "name": "quality-report"
+        },
+        {
+          "conclusion": "success",
+          "name": "e2e"
+        }
+      ],
+      "runId": 39046048951
+    }
+  },
+  "cleanup": {
+    "accountsCleaned": 2,
+    "backendListenerCountAfterCleanup": 0,
+    "backendStopped": true,
+    "existingServicesTouched": false,
+    "fixtureFilesRemoved": 3,
+    "ownedProcessesAlive": 0,
+    "postgresStopped": true,
+    "status": "PASS"
+  },
+  "corpus": {
+    "bitrateKbps": 2400,
+    "chunkBytes": 4194304,
+    "chunksPerFixture": 3,
+    "fixtureCount": 3,
+    "manifestSha256": "d7fd432cefac1fa57a03d67dbda980799e6905e04a9ca0e2ed9b3b9d45bdae0b",
+    "newCorpusAuthorizedByUser": true,
+    "originalR6ByteIdentityProven": false,
+    "originalR6Mp4sAvailable": false,
+    "resolution": "640x360",
+    "scientificMeasurements": 0,
+    "status": "PASS_BYTE_IDENTICAL_REUSE_OF_REGENERATED_R6"
+  },
+  "globalQuality": {
+    "command": "py -3 -m unittest discover -s tools/quality -p test_*.py",
+    "documentsChangedSinceR6": false,
+    "errors": 0,
+    "failureFiles": [
+      "docs/arquitetura/visao-geral.md",
+      "docs/arquitetura/frontend.md",
+      "docs/arquitetura/backend.md",
+      "docs/arquitetura/deployment.md"
+    ],
+    "failures": 4,
+    "generatedSnapshot": {
+      "backendAssertions": 14340,
+      "backendCases": 322,
+      "deterministic": true,
+      "fixtureChecks": 11,
+      "fixtureFiles": 3,
+      "frontendTests": 1530,
+      "generator": "tools/quality/generate_baseline.py",
+      "jsonSha256": "012ce50f0f1e9b4c2cbda869283121192a56c422aa964e29c706e534f718ae3d",
+      "markdownSha256": "35be2439047b569c3172cdadfa7452f41e9991971d3b041bf8c0b9e000f2907e"
+    },
+    "sameFourFailuresAsR5R6": true,
+    "status": "DOCUMENTED_EXCEPTION",
+    "tests": 518
+  },
+  "implementation": {
+    "baseBranch": "investigation/ap06-r12-r6",
+    "branch": "investigation/ap06-r12-r7",
+    "implementationHead": "4869a1be40a7e009ec0aff523d72f2e8a3ba7187",
+    "productionLogicChanged": false
+  },
+  "notRun": [
+    "factorial triage",
+    "formal confirmation",
+    "native capability",
+    "native profiling"
+  ],
+  "preflight": {
+    "chromiumLaunchAttempts": 0,
+    "chromiumLaunches": 0,
+    "commandRecordExists": false,
+    "developmentSlotReserved": 1,
+    "freezeCreated": false,
+    "retries": 0,
+    "rootCause": "Likely missing tooling/app/browser products, inferred because environment/build_products fails before wave.command; the original exception was reduced to the generic runner reason.",
+    "runnerInvocation": 1,
+    "runnerReason": "R12R2_EXECUTION_FAILED",
+    "status": "STOP",
+    "transportRecordExists": false,
+    "unitReceiptExists": false
+  },
+  "risks": [
+    "No scientific conclusion about renderer-private memory can be drawn.",
+    "Four preexisting documentation-boundary failures remain in the global Python suite.",
+    "The R6 original MP4 files were unavailable; historical byte identity is not claimed.",
+    "The dependency audit reported 30 findings: 7 moderate, 20 high, and 3 critical."
+  ],
+  "schemaVersion": 1,
+  "secretScan": {
+    "matches": 0,
+    "patterns": 22,
+    "plaintextFdksPersisted": false,
+    "publicFilesAfterReport": 581,
+    "publicFilesBeforeReport": 579,
+    "rawFiles": 0,
+    "status": "PASS"
+  },
+  "status": "R12R7_STOP",
+  "tests": {
+    "angularBuild": "PASS",
+    "diffCheck": "PASS",
+    "localCppExperimental": {
+      "assertions": 26021,
+      "cases": 17,
+      "failures": 0
+    },
+    "localCppProduction": {
+      "assertions": 14330,
+      "cases": 320,
+      "failures": 0
+    },
+    "node": {
+      "passed": 12,
+      "total": 12
+    },
+    "pythonAp06AndRunners": {
+      "passed": 50,
+      "total": 50
+    },
+    "startupRejections": {
+      "passed": 12,
+      "total": 12
+    },
+    "syntax": "PASS",
+    "typescript": "PASS"
+  }
+}
