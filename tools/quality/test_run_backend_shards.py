@@ -51,9 +51,13 @@ class BackendShardRunnerTests(unittest.TestCase):
             env.write_text("DB_NAME=base\nDB_PASSWORD=secret\nNANIKA_STORAGE_PATH=old\n", encoding="utf-8")
             blocklist = root / "disposable_domains.txt"
             blocklist.write_text("example.invalid\n", encoding="utf-8")
+            docs = root / "docs"
+            (docs / "swagger-ui").mkdir(parents=True)
+            (docs / "swagger.yaml").write_text("openapi: 3.0.0\n", encoding="utf-8")
+            (docs / "swagger-ui" / "swagger-init.js").write_text("swagger init", encoding="utf-8")
             config = runner.read_dotenv(env)
             shard_root = root / "run" / "backend" / "shard-0"
-            cwd = runner.create_shard_workspace(shard_root, config, "nanika_shard_a1b2c3_0", blocklist)
+            cwd = runner.create_shard_workspace(shard_root, config, "nanika_shard_a1b2c3_0", blocklist, docs)
             shard_env = runner.read_dotenv(shard_root / ".env")
             self.assertEqual(shard_env["DB_PASSWORD"], "secret")
             self.assertEqual(shard_env["DB_NAME"], "nanika_shard_a1b2c3_0")
@@ -64,6 +68,8 @@ class BackendShardRunnerTests(unittest.TestCase):
                 (shard_root / "config" / "disposable_domains.txt").resolve(),
             )
             self.assertEqual((shard_root / "config" / "disposable_domains.txt").read_text(encoding="utf-8"), "example.invalid\n")
+            self.assertEqual((cwd / "../../docs/swagger.yaml").read_text(encoding="utf-8"), "openapi: 3.0.0\n")
+            self.assertEqual((cwd / "../../docs/swagger-ui/swagger-init.js").read_text(encoding="utf-8"), "swagger init")
             report = runner._process_summary(
                 runner.ShardResult(0, "nanika_shard_a1b2c3_0", "backend/shard-0/work/run", root / "log", root / "report", 0.1, 0, None, False, {"cases": 2, "assertions": 7, "case_failures": 0, "assertion_failures": 0, "expected_failures": 0, "names": ["case-a", "case-b"]}),
                 root,
@@ -168,6 +174,8 @@ class BackendShardRunnerTests(unittest.TestCase):
             root = Path(temporary)
             (root / "config").mkdir()
             (root / "config" / "disposable_domains.txt").write_text("example.invalid\n", encoding="utf-8")
+            (root / "docs" / "swagger-ui").mkdir(parents=True)
+            (root / "docs" / "swagger.yaml").write_text("openapi: 3.0.0\n", encoding="utf-8")
             (root / ".env").write_text("DB_USER=tester\nDB_NAME=base\n", encoding="utf-8")
             binary = root / "savebox_tests.exe"
             binary.write_text("fake", encoding="utf-8")

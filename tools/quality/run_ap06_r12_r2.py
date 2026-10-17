@@ -19,11 +19,12 @@ def configure_campaign(output,publisher,campaign):
     require((output,campaign) in (('.quality/readiness-wave12-r3-factorial','AP-06-R12-R3-factorial'),
         ('.quality/readiness-wave12-r4-factorial','AP-06-R12-R4-factorial'),
         ('.quality/readiness-wave12-r5-factorial','AP-06-R12-R5-factorial'),
-        ('.quality/readiness-wave12-r6-factorial','AP-06-R12-R6-factorial')),'R12R3_CAMPAIGN_INVALID')
+        ('.quality/readiness-wave12-r6-factorial','AP-06-R12-R6-factorial'),
+        ('.quality/readiness-wave12-r7-factorial','AP-06-R12-R7-factorial')),'R12R3_CAMPAIGN_INVALID')
     OUTPUT,PUBLISHER,CAMPAIGN=output,Path(publisher).resolve(),campaign
 
 def campaign_prefix():
-    return {'AP-06-R12-R6-factorial':'R12R6_','AP-06-R12-R5-factorial':'R12R5_',
+    return {'AP-06-R12-R7-factorial':'R12R7_','AP-06-R12-R6-factorial':'R12R6_','AP-06-R12-R5-factorial':'R12R5_',
         'AP-06-R12-R4-factorial':'R12R4_','AP-06-R12-R3-factorial':'R12R3_'}.get(CAMPAIGN,'R12R2_')
 
 def campaign_decision(value):
@@ -31,17 +32,20 @@ def campaign_decision(value):
     if prefix!='R12R2_':return dict(value,status=value['status'].replace('R12R2_',prefix))
     return value
 
-def validate_r6_authority(wave, frozen_protocol=None):
-    task=wave.root/'quality/prompt.md';private_task=wave.output/'baseline/task.md'
+def validate_campaign_authority(wave,campaign,task_path,round_name,frozen_protocol=None):
+    task=wave.root/task_path;private_task=wave.output/'baseline/task.md'
     provenance=read(wave.output/'baseline/task-provenance.json');protocol=read(wave.output/'baseline/preregistered-protocol.json')
-    require(task.is_file() and private_task.is_file(),'R12R6_TASK_AUTHORITY_MISSING')
+    require(task.is_file() and private_task.is_file(),round_name+'_TASK_AUTHORITY_MISSING')
     content=task.read_bytes();digest=sha256(task)
     require(content and content==private_task.read_bytes() and digest==provenance.get('sourceSha256')==protocol.get('authoritySha256') and
-        task.stat().st_size==provenance.get('sourceBytes')==protocol.get('authorityBytes'),'R12R6_TASK_AUTHORITY_HASH_MISMATCH')
+        task.stat().st_size==provenance.get('sourceBytes')==protocol.get('authorityBytes'),round_name+'_TASK_AUTHORITY_HASH_MISMATCH')
     text=content.decode('utf-8')
-    required=('AP-06 R12-R6','25.559.136','393.216','25.165.920','HTTP 206','127.0.0.2','127.0.0.3',
-        'Máximo: 14 Chromium. Zero retries.','A, B, B, A, A, B','≥300 MiB','150 MiB','MemoryInfra','120 segundos')
-    require(all(value in text for value in required),'R12R6_TASK_SEMANTICS_MISSING')
+    required=(f'AP-06 {round_name.replace("R12", "R12-").replace("R12--", "R12-")}',
+        '25.559.136','393.216','25.165.920','HTTP 206','A, B, B, A, A, B','300 MiB','150 MiB','MemoryInfra')
+    if campaign.endswith('R6-factorial'):required+=('127.0.0.2','127.0.0.3')
+    require(all(value in text for value in required),round_name+'_TASK_SEMANTICS_MISSING')
+    require('14 Chromium, zero retries.' in text if campaign.endswith('R7-factorial') else
+        '14 Chromium. Zero retries.' in text,round_name+'_TASK_BUDGET_INVALID')
     fields={'campaign','implementationHead','hypotheses','conditions','triageOrder','formalOrder','corpus','metrics','thresholds','order','budget',
         'httpContract','security','cleanup','stop','publication','nativeProfiling','authoritySha256','authorityBytes'}
     expected_conditions={key:CONDITIONS[key] for key in CONDITIONS}
@@ -49,7 +53,7 @@ def validate_r6_authority(wave, frozen_protocol=None):
     expected_ranges=[[0,'bytes=0-131071'],[0,'bytes=114-4194433'],[0,'bytes=4194434-8388753'],
         [1,'bytes=0-131071'],[1,'bytes=117-4194436'],[1,'bytes=4194437-8388756'],
         [2,'bytes=0-131071'],[2,'bytes=114-4194433'],[2,'bytes=4194434-8388753']]
-    require(isinstance(protocol,dict) and set(protocol)==fields and protocol['campaign']=='AP-06-R12-R6-factorial' and
+    require(isinstance(protocol,dict) and set(protocol)==fields and protocol['campaign']==campaign and
         isinstance(protocol['implementationHead'],str) and re.fullmatch(r'[0-9a-f]{40}',protocol['implementationHead']) and
         protocol['implementationHead']==wave.git('rev-parse','HEAD').strip() and protocol['conditions']==expected_conditions and
         protocol['triageOrder']==list(CONDITIONS) and protocol['formalOrder']=='A,B,B,A,A,B' and
@@ -76,10 +80,16 @@ def validate_r6_authority(wave, frozen_protocol=None):
         protocol['nativeProfiling'].get('eventBytesMax')==33554432 and protocol['nativeProfiling'].get('cdpTimeoutMs')==30000 and
         protocol['nativeProfiling'].get('streamTimeoutMs')==120000 and
         protocol['nativeProfiling'].get('checkpoints')==['baseline','cycle-6-close','idle-120s','forced-GC-final'],
-        'R12R6_PROTOCOL_SCHEMA_INVALID')
+        round_name+'_PROTOCOL_SCHEMA_INVALID')
     if frozen_protocol is not None:
-        require(frozen_protocol==protocol,'R12R6_PROTOCOL_FREEZE_MISMATCH')
+        require(frozen_protocol==protocol,round_name+'_PROTOCOL_FREEZE_MISMATCH')
     return digest
+
+def validate_r6_authority(wave,frozen_protocol=None):
+    return validate_campaign_authority(wave,'AP-06-R12-R6-factorial','quality/prompt.md','R12-R6',frozen_protocol)
+
+def validate_r7_authority(wave,frozen_protocol=None):
+    return validate_campaign_authority(wave,'AP-06-R12-R7-factorial','quality/ap06-r12-r7.md','R12-R7',frozen_protocol)
 
 def validate_r6_corpus(wave):
     manifest=wave.output/'fixtures/manifest.json';receipt=read(wave.output/'baseline/corpus-provenance.json')
@@ -108,8 +118,8 @@ def validate_r6_corpus(wave):
 
 def validate_browser_receipt(record,identity,native=False,process_samples=None):
     receipt=record.get('browserIdentity',{})
-    r5=CAMPAIGN in ('AP-06-R12-R5-factorial','AP-06-R12-R6-factorial')
-    r4=CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial');prefix=campaign_prefix()
+    r5=CAMPAIGN in ('AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial')
+    r4=CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial');prefix=campaign_prefix()
     launched=(receipt.get('browserLaunchSucceeded') is True and receipt.get('attemptReserved') is True) if r4 else receipt.get('launchSucceeded') is True
     require(receipt.get('status')=='PASS' and receipt.get('readLease') is True and launched,prefix+'BROWSER_IDENTITY_REQUIRED')
     before,after=receipt.get('before',{}),receipt.get('after',{})
@@ -197,7 +207,7 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
     try:
         require(condition in CONDITIONS and stage in ('triage','formal') and len(raw['runs'])==1,'R12R2_RUN_IDENTITY_CHANGED')
         run=raw['runs'][0];attempt=re.fullmatch(r'(triage|formal)-(\d{2})-(r12r2\.[0-3])',run['runId'])
-        if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial'):
+        if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
             validate_browser_receipt(run,freeze['browserIdentity'],process_samples=run.get('samples',()))
             require(run['browserIdentity']['before']['browserPid']==next(p['pid'] for p in run['samples'][0]['processMemory']['processes'] if p['type']=='browser'),
                 campaign_prefix()+'BROWSER_SAMPLE_PID_MISMATCH')
@@ -224,7 +234,7 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
 def check_budget(budget,previous,requested):
     require(budget.get('approved') is True and budget.get('developmentMaximum')==1 and budget.get('measurementMaximum')==10 and
         budget.get('measurementRetries')==0 and type(previous) is int and 0<=previous<10 and type(requested) is int and requested==1 and
-        (CAMPAIGN!='AP-06-R12-R6-factorial' or (budget.get('globalMaximum')==14 and budget.get('triageMaximum')==4 and
+        (CAMPAIGN not in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial') or (budget.get('globalMaximum')==14 and budget.get('triageMaximum')==4 and
             budget.get('formalMaximum')==6 and budget.get('nativeCapabilityMaximum')==1 and budget.get('nativeMeasurementMaximum')==2)),
         campaign_prefix()+'BROWSER_BUDGET_EXCEEDED')
 
@@ -232,20 +242,20 @@ def environment(wave,directory,condition,stage='triage',freeze=None):
     env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=PUBLISHER)
     env.update(AP06_R11_KEYS=str(wave.root/'tools/quality/ap06_r11_keys.py'),AP06_R11_AUTHORITY=str(wave.output/'baseline/authority-config.local.json'),
         AP06_R12R2_ATTEMPT=stage+'-'+directory.name)
-    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
         env['AP06_BROWSER_IDENTITY']=str(wave.output/'baseline/browser-identity.json')
-    if CAMPAIGN in ('AP-06-R12-R5-factorial','AP-06-R12-R6-factorial'):env['AP06_R5_PROCESS_HANDLE_AUDIT']='1'
-    if CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):env['AP06_R5_PROCESS_HANDLE_AUDIT']='1'
+    if CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
         profile_root=checked_path((wave.output/'tooling/browser-temp').absolute());create=not profile_root.exists();profile_root.mkdir(exist_ok=True);private_permissions(profile_root,create=create)
         env.update(AP06_BROWSER_TEMP_ROOT=str(profile_root),TEMP=str(profile_root),TMP=str(profile_root))
     return env,assets
 
 def verify_campaign_freeze(wave,frozen):
     verify_r11_freeze(wave,frozen)
-    if CAMPAIGN=='AP-06-R12-R6-factorial':
-        validate_r6_authority(wave,frozen.get('protocol'))
+    if CAMPAIGN in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
+        (validate_r7_authority if CAMPAIGN.endswith('R7-factorial') else validate_r6_authority)(wave,frozen.get('protocol'))
         validate_r6_corpus(wave)
-    if CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
         from ap06_browser_identity import verify_identity
         identity=read(wave.output/'baseline/browser-identity.json')
         prefix=campaign_prefix().removesuffix('_')
@@ -286,12 +296,12 @@ def classify(wave,values,formal=None,candidate=None):
     except (OSError,subprocess.SubprocessError,UnicodeError,ValueError,KeyError,TypeError):raise WaveFailure('R12R2_CLASSIFIER_BRIDGE_FAILED') from None
 
 def unit_browser(wave):
-    if CAMPAIGN=='AP-06-R12-R6-factorial':
-        validate_r6_authority(wave)
+    if CAMPAIGN in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
+        (validate_r7_authority if CAMPAIGN.endswith('R7-factorial') else validate_r6_authority)(wave)
         validate_r6_corpus(wave)
     checks=read(wave.output/'baseline/prechecks.json')
     require(not wave.git('status','--porcelain').strip() and all(checks.get(k)=='PASS' for k in ('status','secretScan','angularBuild','typescript','syntax','diff')),'R12R2_PRECHECKS_REQUIRED')
-    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
         ci=read(wave.output/'baseline/ci.json')
         require(ci['headSha']==wave.git('rev-parse','HEAD').strip() and ci['conclusion']=='success' and len(ci['jobs'])==3 and
             all(job['conclusion']=='success' for job in ci['jobs']),campaign_prefix()+'CI_REQUIRED')
@@ -306,7 +316,7 @@ def unit_browser(wave):
             if target.exists():publish(wave,'preflight-complete',{'evidence/preflight.raw.json':target})
             wave.save('pipeline/preflight-transport.json',stats)
     unit=read(target);require(unit['status']=='PASS' and unit['unitBrowserLaunchAttempts']==unit['unitBrowserLaunches']==1 and unit['browserClosed'] and unit['processExitAudit']['status']=='PASS','R12R2_PREFLIGHT_FAILED')
-    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
         samples=[sample for case in unit['cases'] for sample in case.get('processSamples',())]
         validate_browser_receipt(unit,read(wave.output/'baseline/browser-identity.json'),process_samples=samples)
     workload=read(wave.output/'baseline/workload.json');fixtures=read(wave.output/'fixtures/manifest.json');mapping=read(wave.output/'baseline/backend-authority.json')['fileMapping']
@@ -320,11 +330,11 @@ def unit_browser(wave):
 
 def freeze(wave):
     require(read(wave.output/'baseline/preflight-ready.json')['status']=='PASS','R12R2_PREFLIGHT_REQUIRED')
-    if CAMPAIGN=='AP-06-R12-R6-factorial':
-        validate_r6_authority(wave)
+    if CAMPAIGN in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
+        (validate_r7_authority if CAMPAIGN.endswith('R7-factorial') else validate_r6_authority)(wave)
         validate_r6_corpus(wave)
     identity_files=()
-    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial'):
+    if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial'):
         from ap06_browser_identity import verify_identity
         identity=read(wave.output/'baseline/browser-identity.json');verify_identity(identity)
         validate_browser_receipt(read(wave.output/'tooling/angular-unit-1.json'),identity)
@@ -333,7 +343,7 @@ def freeze(wave):
         identity_files=('baseline/browser-identity.json','baseline/browser-identity-publication.json')
     freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r12-r2-probe.mjs',runner_path=PUBLISHER,extra_publications=('custody',),
         extra_files=('baseline/prechecks.json','baseline/preregistered-protocol.json','baseline/custody-readback.json','baseline/backend-isolation.json',
-            *(('baseline/task-provenance.json','baseline/corpus-provenance.json') if CAMPAIGN=='AP-06-R12-R6-factorial' else ()),
+            *(('baseline/task-provenance.json','baseline/corpus-provenance.json') if CAMPAIGN in ('AP-06-R12-R6-factorial','AP-06-R12-R7-factorial') else ()),
             'baseline/experimental-backend.json','baseline/ci.json','baseline/preflight-ready.json','baseline/prior-publications.json','pipeline/development-reservation.json',
             'tooling/backend-build/nanika_ap06_local_server.exe','tooling/backend-build/CMakeCache.txt','tooling/backend-build/compile_commands.json',
             'baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json',*identity_files),
@@ -365,7 +375,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ap06-r12r2-') as tmp:
         wave.temp=Path(tmp)
         try:
-            if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial') and (args.unit_browser or args.freeze or args.run) and (wave.output/'final/STOP.json').exists():
+            if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial') and (args.unit_browser or args.freeze or args.run) and (wave.output/'final/STOP.json').exists():
                 prefix=campaign_prefix().removesuffix('_')
                 print(json.dumps({'status':prefix+'_STOP','reason':prefix+'_NO_RETRY_OR_RESUME'}));return 1
             if args.validate_processes:

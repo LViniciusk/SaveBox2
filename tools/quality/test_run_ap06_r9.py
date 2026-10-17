@@ -41,6 +41,18 @@ def fixture_run(condition='r9-r2.0', stage='triage'):
 
 
 class R9Tests(unittest.TestCase):
+    def test_r7_publications_use_their_own_private_prefix(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);output=root/'.quality/readiness-wave12-r7-factorial'
+            (output/'baseline').mkdir(parents=True)
+            (output/'baseline/authority-config.local.json').write_text(json.dumps({'AP06_AUTHORITY_ROOT':str(root/'authority'),'identity':'unit'}))
+            source=root/'task.md';source.write_text('R7')
+            wave=type('UnitWave',(),{'root':root,'output':output})()
+            with patch.object(r9,'publish_snapshot',return_value={'status':'PASS'}) as publish:
+                r9.publish(wave,'implementation',{'task.md':source})
+            self.assertEqual(publish.call_args.args[2],'r12-r7-factorial-implementation')
+            self.assertEqual(set(publish.call_args.args[3]),{'r12-r7-factorial/task.md'})
+
     def test_exact_decision_tree(self):
         self.assertEqual(r9.following('r9-r2.0',r9.REPRODUCES),('triage','r9-r2.1'))
         self.assertIsNone(r9.following('r9-r2.0',r9.DOES_NOT))

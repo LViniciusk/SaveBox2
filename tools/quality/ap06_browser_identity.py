@@ -327,54 +327,76 @@ def main():
         owned = OwnedProcessAudit(identity) if os.environ.get('AP06_R5_PROCESS_HANDLE_AUDIT') == '1' else None
         try:
             print(json.dumps({'status':'READY', 'lease':'Windows read sharing only; write/delete denied'}), flush=True)
-            previous = None
+            state, initial_identity, failure_seen = 'READY', None, False
             for line in sys.stdin:
-                request = json.loads(line); require(len(line) <= 65536, 'AP06_BROWSER_QUERY_TOO_LARGE')
-                action = request['action']
-                if action == 'closed':  # R3/R4 legacy protocol.
-                    result = verify_identity(identity); result['closedHashVerified'] = True
-                    print(json.dumps(result), flush=True); break
-                if action == 'register-processes':
-                    require(owned is not None and previous is not None and owned.entries, 'AP06_BROWSER_NOT_ATTESTED')
-                    owned.register(request['processes'])
-                    print(json.dumps({'status':'PASS','registeredProcessCount':len(owned.entries)}), flush=True)
-                    continue
-                if action == 'audit-closed':
-                    require(owned is not None, 'AP06_BROWSER_IDENTITY_UNPROVEN')
-                    receipt = owned.audit()
-                    try:
-                        verify_identity(identity); receipt['closedHashVerified'] = True
-                    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
-                        receipt['closedHashVerified'] = False
-                    if not receipt['closedHashVerified']: receipt['status'] = 'FAIL'
-                    print(json.dumps({'status':'PASS','receipt':receipt}), flush=True)
-                    continue
-                if action == 'release':
-                    require(owned is not None, 'AP06_BROWSER_IDENTITY_UNPROVEN')
-                    processes = owned.close(); files = lease.close()
-                    result = {'status':'PASS' if not processes['closeFailures'] and not files['closeFailures'] else 'STOP',
-                        'processHandles':processes,'executableHandles':files}
-                    if result['status'] == 'STOP': result['reason'] = 'AP06_BROWSER_HANDLE_RELEASE_FAILED'
-                    print(json.dumps(result), flush=True)
-                    if result['status'] == 'STOP': raise ValueError('AP06_BROWSER_HANDLE_RELEASE_FAILED')
-                    break
-                require(action == 'attest' and previous is None, 'AP06_BROWSER_IDENTITY_UNPROVEN')
-                observed = process_information(request['pid'],include_identity=False)
-                observed.update({key:identity[key] for key in ('executableSha256','executableBytes','architecture','productVersion')})
-                parent = process_information(request['parentPid'],include_identity=False,check_argv0=False)
-                # The shell has no PE VERSIONINFO; bind its CDP product version to the OS-attested root PID.
-                observed['chromiumVersion'] = request['browserVersion']
-                require(observed['productVersion'] in (None, observed['chromiumVersion']), 'AP06_BROWSER_VERSION_MISMATCH')
-                result = validate_process(identity, observed, request['pid'], request['parentPid'], request['requiredArgs'], previous,
-                    parent, request['nodeExecutable'], request['launchStartedMs'])
-                if owned is not None:
-                    owned.register([{'id':request['pid'],'type':'browser'}])
-                    require(owned.current[request['pid']]['creationTime']==result['processCreationTime'], 'AP06_BROWSER_PID_REUSED')
-                previous = result
-                print(json.dumps(result), flush=True)
+                action = None
+                try:
+                    require(len(line) <= 65536, 'AP06_BROWSER_QUERY_TOO_LARGE')
+                    request = json.loads(line); action = request['action']
+                    if action == 'closed':  # R3/R4 legacy protocol.
+                        result = verify_identity(identity); result['closedHashVerified'] = True
+                        print(json.dumps(result), flush=True); break
+                    if action == 'release':
+                        processes = owned.close() if owned is not None else {'releasedProcessHandles':0,'closeFailures':0}
+                        files = lease.close()
+                        result = {'status':'PASS' if not processes['closeFailures'] and not files['closeFailures'] else 'STOP',
+                            'processHandles':processes,'executableHandles':files}
+                        if result['status'] == 'STOP':
+                            failure_seen = True; result['reason'] = 'AP06_BROWSER_HANDLE_RELEASE_FAILED'
+                        state = 'RELEASED'; print(json.dumps(result), flush=True); break
+                    if action == 'audit-closed':
+                        require(owned is not None and state in ('AFTER_ATTESTED','FAILED'),
+                            'AP06_BROWSER_ATTESTATION_ORDER_INVALID')
+                        receipt = owned.audit()
+                        try:
+                            verify_identity(identity); receipt['closedHashVerified'] = True
+                        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                            receipt['closedHashVerified'] = False
+                        if not receipt['closedHashVerified']: receipt['status'] = 'FAIL'
+                        if receipt['status'] != 'PASS':
+                            state = 'FAILED'; failure_seen = True
+                            reason = 'AP06_BROWSER_EXECUTABLE_CHANGED' if not receipt['closedHashVerified'] else 'AP06_BROWSER_PROCESS_EXIT_AUDIT_FAILED'
+                            print(json.dumps({'status':'STOP','reason':reason,'receipt':receipt}), flush=True)
+                        else:
+                            if state != 'FAILED': state = 'AUDITED'
+                            print(json.dumps({'status':'PASS','receipt':receipt}), flush=True)
+                        continue
+                    if action == 'register-processes':
+                        require(state in ('BEFORE_ATTESTED','AFTER_ATTESTED'), 'AP06_BROWSER_ATTESTATION_ORDER_INVALID')
+                        require(owned is not None, 'AP06_BROWSER_IDENTITY_UNPROVEN')
+                        owned.register(request['processes'])
+                        print(json.dumps({'status':'PASS','registeredProcessCount':len(owned.entries)}), flush=True)
+                        continue
+                    if action == 'attest':
+                        require(state in ('READY','BEFORE_ATTESTED'), 'AP06_BROWSER_ATTESTATION_ORDER_INVALID')
+                        first = state == 'READY'
+                        verify_identity(identity)
+                        observed = process_information(request['pid'],include_identity=False)
+                        observed.update({key:identity[key] for key in ('executableSha256','executableBytes','architecture','productVersion')})
+                        parent = process_information(request['parentPid'],include_identity=False,check_argv0=False)
+                        # The shell has no PE VERSIONINFO; bind its CDP product version to the OS-attested root PID.
+                        observed['chromiumVersion'] = request['browserVersion']
+                        require(observed['productVersion'] in (None, observed['chromiumVersion']), 'AP06_BROWSER_VERSION_MISMATCH')
+                        result = validate_process(identity, observed, request['pid'], request['parentPid'], request['requiredArgs'],
+                            None if first else initial_identity, parent, request['nodeExecutable'], request['launchStartedMs'])
+                        if owned is not None:
+                            owned.register([{'id':request['pid'],'type':'browser'}])
+                            require(owned.current[request['pid']]['creationTime']==result['processCreationTime'], 'AP06_BROWSER_PID_REUSED')
+                        if first: initial_identity, state = result, 'BEFORE_ATTESTED'
+                        else: state = 'AFTER_ATTESTED'
+                        print(json.dumps(result), flush=True); continue
+                    require(False, 'AP06_BROWSER_ATTESTATION_ORDER_INVALID')
+                except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+                    failure_seen = True
+                    state = 'FAILED'
+                    reason = str(error)
+                    if not reason.startswith('AP06_BROWSER_') or not reason.replace('_','').isalnum():
+                        reason = 'AP06_BROWSER_IDENTITY_UNPROVEN'
+                    print(json.dumps({'status':'STOP', 'reason':reason}), flush=True)
         finally:
             if owned is not None: owned.close()
             lease.close()
+        if failure_seen: raise SystemExit(1)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
         reason=str(error)
         if not reason.startswith('AP06_BROWSER_') or not reason.replace('_','').isalnum(): reason='AP06_BROWSER_IDENTITY_UNPROVEN'

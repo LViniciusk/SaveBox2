@@ -61,18 +61,21 @@ try{
       record.status='PASS';
     }finally{
       if(page){const state=await page.evaluate(()=>({counters:window.r5Counters,media:document.querySelectorAll('video,audio').length}));validateIntegrationCleanup(state.counters,state.media);}
-      await remember();if(observer)await observer();if(cdp)await cdp.detach();
+      try{await remember();}catch(error){result.status='FAIL';result.failureClass??=/^[A-Z0-9_]+$/.test(error.message)?error.message:'AP06_BROWSER_CDP_PROCESS_QUERY_FAILED';process.exitCode=1;}
+      if(observer)await observer();if(cdp)await cdp.detach();
       result.rangeNetworks[condition]={cdp:raw.rangeNetwork,backend:raw.backendTraffic};
       await context.unrouteAll({behavior:'wait'});await context.close();record.contextClosed=true;save();
     }
   }
-  result.status='PASS';
-}catch(error){result.failureClass=/^[A-Z0-9_]+$/.test(error.message)?error.message:'R12_PREFLIGHT_FAILED';
+  if(!result.failureClass)result.status='PASS';
+}catch(error){result.failureClass??=/^[A-Z0-9_]+$/.test(error.message)?error.message:'R12_PREFLIGHT_FAILED';
   result.failureStage??=result.browserIdentity?.failureStage;process.exitCode=1;}
 finally{
-  await remember();if(browser){
+  try{await remember();}catch(error){result.status='FAIL';result.failureClass??=/^[A-Z0-9_]+$/.test(error.message)?error.message:'AP06_BROWSER_CDP_PROCESS_QUERY_FAILED';process.exitCode=1;}
+  if(browser){
     const lifecycle=await closeBrowserWithIdentity(browser,result);
-    if(lifecycle.status!=='PASS'){result.status='FAIL';result.cleanupFailureClass??=lifecycle.failureClass;process.exitCode=1;}
+    if(lifecycle.status!=='PASS'){result.status='FAIL';result.cleanupFailureClass??=lifecycle.failureClass??'AP06_BROWSER_PROCESS_EXIT_AUDIT_FAILED';process.exitCode=1;}
+    if(result.failureClass){result.status='FAIL';process.exitCode=1;}
   }
   else if(result.browserIdentity?.browserClosed){result.browserClosed=true;result.processExitAudit??=result.browserIdentity.processExitAudit??result.browserIdentity.failureCleanupAudit;}
   if(pids.size&&!usesRetainedProcessAudit())try{result.processExitAudit=JSON.parse(execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R8_PID_AUDITOR,'--closed-pids',[...pids].join(',')],{encoding:'utf8',windowsHide:true}));if(result.processExitAudit.status!=='PASS'){result.status='FAIL';process.exitCode=1;}}catch{result.status='FAIL';result.cleanupFailureClass??='AP06_BROWSER_PROCESS_EXIT_AUDIT_FAILED';process.exitCode=1;}

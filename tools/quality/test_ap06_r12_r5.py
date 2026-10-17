@@ -1,4 +1,5 @@
 import copy
+import importlib
 import json
 from pathlib import Path
 import tempfile
@@ -146,20 +147,26 @@ class ReceiptAndRecoveryTests(unittest.TestCase):
         record={'processExitAudit':audit,'handleRelease':release,'processSamples':[{'processMemory':{'processes':[{'pid':201,'type':'browser'}]}}],
             'browserIdentity':{'status':'PASS','readLease':True,'attemptReserved':True,'browserLaunchSucceeded':True,
                 'before':before,'after':after,'closed':{'closedHashVerified':True},'processExitAudit':audit,'handleRelease':release}}
-        with patch.object(factorial,'CAMPAIGN','AP-06-R12-R5-factorial'):
-            validate_browser_receipt(record,identity,process_samples=record['processSamples'])
-            invalid=copy.deepcopy(record);invalid['handleRelease']['processHandles']['releasedProcessHandles']=0
-            invalid['browserIdentity']['handleRelease']['processHandles']['releasedProcessHandles']=0
-            with self.assertRaises(Exception):validate_browser_receipt(invalid,identity,process_samples=invalid['processSamples'])
-            preflight=copy.deepcopy(record);preflight.pop('processSamples')
-            preflight['cases']=[{'processSamples':record['processSamples']}]
-            validate_browser_receipt(preflight,identity)
-            preflight['cases'][0]['processSamples'][0]['processMemory']['processes'][0]['pid']=202
-            with self.assertRaises(Exception):validate_browser_receipt(preflight,identity)
-            with self.assertRaises(Exception):validate_browser_receipt(record|{'processSamples':[]},identity)
+        for campaign in ('AP-06-R12-R5-factorial','AP-06-R12-R7-factorial'):
+            with self.subTest(campaign=campaign),patch.object(factorial,'CAMPAIGN',campaign):
+                validate_browser_receipt(record,identity,process_samples=record['processSamples'])
+                invalid=copy.deepcopy(record);invalid['handleRelease']['processHandles']['releasedProcessHandles']=0
+                invalid['browserIdentity']['handleRelease']['processHandles']['releasedProcessHandles']=0
+                with self.assertRaises(Exception):validate_browser_receipt(invalid,identity,process_samples=invalid['processSamples'])
+                for mutate in (lambda row:row.update(browserPid=202),lambda row:row.update(processCreationTime=9002),
+                    lambda row:row.update(identityBeforeWorkload=True)):
+                    invalid=copy.deepcopy(record);mutate(invalid['browserIdentity']['after'])
+                    with self.assertRaises(Exception):validate_browser_receipt(invalid,identity,process_samples=invalid['processSamples'])
+                preflight=copy.deepcopy(record);preflight.pop('processSamples')
+                preflight['cases']=[{'processSamples':copy.deepcopy(record['processSamples'])}]
+                validate_browser_receipt(preflight,identity)
+                preflight['cases'][0]['processSamples'][0]['processMemory']['processes'][0]['pid']=202
+                with self.assertRaises(Exception):validate_browser_receipt(preflight,identity)
+                with self.assertRaises(Exception):validate_browser_receipt(record|{'processSamples':[]},identity)
 
-    def test_r5_freeze_includes_git_ignored_crow_header_for_both_namespaces(self):
-        for namespace in ('readiness-wave12-r5-factorial','readiness-wave12-r5-native'):
+    def test_freeze_includes_git_ignored_crow_header_for_r5_and_r7_namespaces(self):
+        for namespace in ('readiness-wave12-r5-factorial','readiness-wave12-r5-native',
+            'readiness-wave12-r7-factorial','readiness-wave12-r7-native'):
             with self.subTest(namespace=namespace),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);output=root/'.quality'/namespace
                 (output/'tooling').mkdir(parents=True);(output/'fixtures').mkdir()
@@ -260,10 +267,51 @@ class ReceiptAndRecoveryTests(unittest.TestCase):
 
 
 class R6AuthorityTests(unittest.TestCase):
-    def make_wave(self,root,content=None):
-        root=Path(root);output=root/'.quality/readiness-wave12-r6-factorial';baseline=output/'baseline'
-        task=root/'quality/prompt.md';task.parent.mkdir(parents=True,exist_ok=True)
-        content=content if content is not None else (Path(__file__).resolve().parents[2]/'quality/prompt.md').read_bytes()
+    def test_r7_preflight_requires_the_os_attestation_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);output=root/'.quality/readiness-wave12-r7-factorial'
+            (output/'baseline').mkdir(parents=True);(output/'pipeline').mkdir();(output/'tooling').mkdir()
+            head='a'*40;target=output/'tooling/angular-unit-1.json'
+            unit={'status':'PASS','unitBrowserLaunchAttempts':1,'unitBrowserLaunches':1,'browserClosed':True,
+                'processExitAudit':{'status':'PASS'},'cases':[{'status':'PASS','contextClosed':True} for _ in range(5)]}
+            class Wave:
+                node='node'
+                def __init__(self):self.root=root;self.output=output
+                def git(self,*args):return '' if args[0]=='status' else head
+                def save(self,name,value):
+                    path=self.output/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))
+                def command(self,*args):pass
+            def read(path):
+                path=Path(path)
+                if path==output/'baseline/prechecks.json':return {'status':'PASS','secretScan':'PASS','angularBuild':'PASS','typescript':'PASS','syntax':'PASS','diff':'PASS'}
+                if path==output/'baseline/ci.json':return {'headSha':head,'conclusion':'success','jobs':[{'conclusion':'success'}]*3}
+                if path==output/'baseline/browser-identity.json':return {'status':'PASS'}
+                if path==target:return unit
+                raise AssertionError(f'unexpected read: {path.name}')
+            with patch.object(factorial,'CAMPAIGN','AP-06-R12-R7-factorial'),\
+                    patch.object(factorial,'validate_r7_authority'),patch.object(factorial,'validate_r6_corpus'),\
+                    patch.object(factorial,'read',side_effect=read),patch.object(factorial,'publish'),\
+                    patch.object(factorial,'environment',return_value=({'AP06_R7_UNIT_OUTPUT':str(target)},{})),\
+                    patch.object(factorial,'media_files',return_value=[]),\
+                    patch.object(factorial,'media_server') as media_server,\
+                    patch.object(factorial,'validate_browser_receipt',side_effect=RuntimeError('RECEIPT_REQUIRED')) as validate:
+                media_server.return_value.__enter__.return_value=('http://127.0.0.1:42088',{})
+                with self.assertRaisesRegex(RuntimeError,'RECEIPT_REQUIRED'):factorial.unit_browser(Wave())
+                validate.assert_called_once_with(unit,{'status':'PASS'},process_samples=[])
+
+    def test_r7_local_backend_uses_its_owned_r10_r3_runtime(self):
+        with patch.dict(local_backend.os.environ,{'AP06_EXPERIMENT_ROOT':'.quality/readiness-wave12-r7-factorial'}):
+            importlib.reload(local_backend)
+            self.assertEqual(local_backend.OUTPUT.name,'readiness-wave12-r7-factorial')
+            self.assertEqual(local_backend.EXPERIMENT_ID,'r10_r3')
+            self.assertTrue(local_backend.R3)
+        importlib.reload(local_backend)
+
+    def make_wave(self,root,content=None,r7=False):
+        root=Path(root);round_name='r7' if r7 else 'r6';output=root/f'.quality/readiness-wave12-{round_name}-factorial';baseline=output/'baseline'
+        task=root/f'quality/ap06-r12-{round_name}.md' if r7 else root/'quality/prompt.md';task.parent.mkdir(parents=True,exist_ok=True)
+        source=Path(__file__).resolve().parents[2]/('quality/ap06-r12-r7.md' if r7 else 'quality/prompt.md')
+        content=content if content is not None else source.read_bytes()
         task.write_bytes(content);(baseline).mkdir(parents=True,exist_ok=True)
         private_task=baseline/'task.md';private_task.write_bytes(content)
         digest=r9.sha256(task)
@@ -271,7 +319,7 @@ class R6AuthorityTests(unittest.TestCase):
         expected_ranges=[[0,'bytes=0-131071'],[0,'bytes=114-4194433'],[0,'bytes=4194434-8388753'],
             [1,'bytes=0-131071'],[1,'bytes=117-4194436'],[1,'bytes=4194437-8388756'],
             [2,'bytes=0-131071'],[2,'bytes=114-4194433'],[2,'bytes=4194434-8388753']]
-        protocol={'campaign':'AP-06-R12-R6-factorial','implementationHead':'a'*40,
+        protocol={'campaign':f'AP-06-R12-{round_name.upper()}-factorial','implementationHead':'a'*40,
             'hypotheses':'Fetch on payload chunks changes cycle-6 renderer private memory; metadata transport is the factorial control.',
             'conditions':conditions,
             'triageOrder':list(factorial.CONDITIONS),'formalOrder':'A,B,B,A,A,B',
@@ -311,6 +359,14 @@ class R6AuthorityTests(unittest.TestCase):
             (wave.root/'quality/prompt.md').unlink()
             with self.assertRaises(Exception):factorial.validate_r6_authority(wave)
 
+    def test_r7_authority_is_bound_to_its_own_task_file_and_protocol(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wave,protocol,_=self.make_wave(tmp,r7=True)
+            self.assertEqual(factorial.validate_r7_authority(wave),protocol['authoritySha256'])
+            self.assertFalse((wave.root/'quality/prompt.md').exists())
+            changed=copy.deepcopy(protocol);changed['campaign']='AP-06-R12-R6-factorial'
+            with self.assertRaises(Exception):factorial.validate_r7_authority(wave,changed)
+
     def test_corpus_authority_rejects_changed_manifest_ranges_and_missing_fixtures(self):
         expected_ranges=[[0,'bytes=0-131071'],[0,'bytes=114-4194433'],[0,'bytes=4194434-8388753'],
             [1,'bytes=0-131071'],[1,'bytes=117-4194436'],[1,'bytes=4194437-8388756'],
@@ -341,6 +397,10 @@ class R6AuthorityTests(unittest.TestCase):
             self.assertTrue(local_backend.preserve_runtime_for_resume())
         with patch.object(local_backend.sys,'argv',['ap06_local_backend.py','--preserve-runtime-for-resume']),\
                 patch.object(local_backend,'OUTPUT',Path('.quality/readiness-wave12-r5-factorial')):
+            with self.assertRaisesRegex(RuntimeError,'AP06_RUNTIME_PRESERVE_R6_ONLY'):
+                local_backend.preserve_runtime_for_resume()
+        with patch.object(local_backend.sys,'argv',['ap06_local_backend.py','--preserve-runtime-for-resume']),\
+                patch.object(local_backend,'OUTPUT',Path('.quality/readiness-wave12-r7-factorial')):
             with self.assertRaisesRegex(RuntimeError,'AP06_RUNTIME_PRESERVE_R6_ONLY'):
                 local_backend.preserve_runtime_for_resume()
 

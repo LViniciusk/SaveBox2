@@ -168,6 +168,7 @@ def create_shard_workspace(
     config: dict[str, str],
     database: str,
     blocklist_source: Path,
+    docs_source: Path,
 ) -> Path:
     shard_root.mkdir(parents=True, exist_ok=False)
     (shard_root / "config").mkdir()
@@ -179,6 +180,10 @@ def create_shard_workspace(
     write_dotenv(shard_root / ".env", shard_config)
     target_blocklist = shard_root / "config" / "disposable_domains.txt"
     shutil.copy2(blocklist_source, target_blocklist)
+    target_docs = shard_root / "docs"
+    target_docs.mkdir()
+    shutil.copy2(docs_source / "swagger.yaml", target_docs / "swagger.yaml")
+    shutil.copytree(docs_source / "swagger-ui", target_docs / "swagger-ui")
     return run_cwd
 
 
@@ -546,7 +551,7 @@ def execute_backend(
                 databases.append(database)
                 shard_root = run_root / "backend" / f"shard-{index}"
                 workspaces.append(shard_root)
-                cwd = create_shard_workspace(shard_root, config, database, blocklist)
+                cwd = create_shard_workspace(shard_root, config, database, blocklist, root / "docs")
                 report = run_root / "reports" / f"backend-shard-{index}.xml"
                 log = run_root / "logs" / f"backend-shard-{index}.log"
                 child_env = os.environ.copy()

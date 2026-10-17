@@ -22,7 +22,8 @@ const allowedFailures=new Set(['AP06_BROWSER_WINDOWS_REQUIRED','AP06_BROWSER_EXE
   'AP06_BROWSER_READ_LEASE_FAILED','AP06_BROWSER_PROFILE_PATH_INVALID','AP06_BROWSER_ANCESTRY_INVALID',
   'AP06_BROWSER_IDENTITY_MISMATCH','AP06_BROWSER_IDENTITY_UNPROVEN','AP06_BROWSER_EXECUTABLE_MISSING',
   'AP06_BROWSER_LAUNCH_FAILED','AP06_BROWSER_ATTESTATION_FAILED','AP06_BROWSER_PROCESS_EXIT_AUDIT_FAILED',
-  'AP06_BROWSER_HANDLE_RELEASE_FAILED','AP06_BROWSER_CDP_PROCESS_QUERY_FAILED','AP06_BROWSER_PROCESS_REGISTRATION_FAILED']);
+  'AP06_BROWSER_HANDLE_RELEASE_FAILED','AP06_BROWSER_CDP_PROCESS_QUERY_FAILED','AP06_BROWSER_PROCESS_REGISTRATION_FAILED',
+  'AP06_BROWSER_ATTESTATION_ORDER_INVALID','AP06_BROWSER_POST_ATTESTATION_FAILED','AP06_BROWSER_AUDIT_HELPER_FAILED']);
 export const usesRetainedProcessAudit=()=>process.env.AP06_R5_PROCESS_HANDLE_AUDIT==='1';
 function auditClosed(pids){
   check(process.env.AP06_R8_PID_AUDITOR&&pids.length,'AP06_BROWSER_PROCESS_EXIT_AUDIT_FAILED');
@@ -88,7 +89,7 @@ async function openLease(manifest){
     let timer;
     try{
       const row=await Promise.race([lines.next(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('AP06_BROWSER_IDENTITY_TIMEOUT')),30000);})]);
-      check(!row.done&&row.value.length<=65536,'AP06_BROWSER_OS_QUERY_FAILED');const result=JSON.parse(row.value);
+      check(!row.done,'AP06_BROWSER_AUDIT_HELPER_FAILED');check(row.value.length<=65536,'AP06_BROWSER_OS_QUERY_FAILED');const result=JSON.parse(row.value);
       if(result.status==='STOP'){const error=new Error(allowedFailures.has(result.reason)?result.reason:'AP06_BROWSER_IDENTITY_UNPROVEN');error.response=result;throw error;}
       check(['READY','PASS'].includes(result.status),'AP06_BROWSER_IDENTITY_UNPROVEN');return result;
     }finally{clearTimeout(timer);}
@@ -124,16 +125,17 @@ export async function attestBrowserProcess(browser,identity,lease,requiredArgs,l
   return {cdp,pids,query,before,proof};
 }
 
-export async function launchWithIdentityLease(chromium,launch,record,expected,lease,onBrowserLaunched=()=>{}){
+export async function launchWithIdentityLease(chromium,launch,record,expected,lease,onBrowserLaunched=()=>{},resolveIdentity=resolveBrowserIdentity){
   let stage='playwright-launch',browser,cdp,pids=[];
   try{
     const launchStartedMs=Date.now();browser=await chromium.launch(launch);
     record.browserIdentity.browserLaunchSucceeded=true;record.browserIdentity.launchSucceeded=true;onBrowserLaunched(browser);
     const attested=await attestBrowserProcess(browser,expected,lease,launch.args,launchStartedMs,record,next=>{stage=next;});
     cdp=attested.cdp;pids=attested.pids;record.browserIdentity.before=attested.before;record.browserIdentity.status='PASS';
-    leases.set(browser,{...lease,query:attested.query,record,cdp,pids,proof:attested.proof});return browser;
+    leases.set(browser,{...lease,query:attested.query,record,cdp,pids,proof:attested.proof,resolveIdentity});return browser;
   }catch(error){
     const failure=safeFailure(error,stage);record.browserIdentity.status='STOP';record.browserIdentity.failureStage=stage;record.browserIdentity.failureClass=failure;
+    record.failureStage??=stage;record.failureClass??=failure;
     pids=record.browserIdentity.ownedPids??[];
     if(browser){
       try{await browser.close();record.browserIdentity.browserClosed=true;}
@@ -158,37 +160,46 @@ export async function launchWithIdentityLease(chromium,launch,record,expected,le
   }
 }
 
-export async function launchAttestedBrowser(chromium,options,record,onBrowserLaunched=()=>{}){
+export async function launchAttestedBrowser(chromium,options,record,onBrowserLaunched=()=>{},resolveIdentity=resolveBrowserIdentity){
   const manifest=process.env.AP06_BROWSER_IDENTITY;
-  if(!manifest){check(!/readiness-wave12-r(3|4|5|6)-/.test(process.env.AP06_EXPERIMENT_ROOT??''));const browser=await chromium.launch(options);onBrowserLaunched(browser);return browser;}
+  if(!manifest){check(!/readiness-wave12-r(3|4|5|6|7)-/.test(process.env.AP06_EXPERIMENT_ROOT??''));const browser=await chromium.launch(options);onBrowserLaunched(browser);return browser;}
   let stage='identity-resolution',expected,launch,lease;
   record.browserIdentity={status:'PENDING',attemptReserved:true,readLease:false,browserLaunchSucceeded:false};
   try{
     check(python()&&options&&Object.keys(options).every(key=>key==='args'));
-    expected=JSON.parse(readFileSync(manifest,'utf8'));validateResolution(expected,await resolveBrowserIdentity());
+    expected=JSON.parse(readFileSync(manifest,'utf8'));validateResolution(expected,await resolveIdentity());
     const profileRoot=expected.launchProtocol.profileRoot;
     check(realpathSync(tmpdir())===profileRoot&&readdirSync(profileRoot).length===0,'AP06_BROWSER_PROFILE_PATH_INVALID');
     launch=frozenLaunchOptions(expected,options.args??[]);
     stage='read-lease';lease=await openLease(manifest);record.browserIdentity.readLease=true;
   }catch(error){
     const failure=safeFailure(error,stage);record.browserIdentity.status='STOP';record.browserIdentity.failureStage=stage;record.browserIdentity.failureClass=failure;
+    record.failureStage??=stage;record.failureClass??=failure;
     if(lease){lease.child.stdin.end();lease.child.kill();}throw new Error(failure);
   }
-  return launchWithIdentityLease(chromium,launch,record,expected,lease,onBrowserLaunched);
+  return launchWithIdentityLease(chromium,launch,record,expected,lease,onBrowserLaunched,resolveIdentity);
 }
 
 export async function finishBrowserIdentity(browser){
   const lease=leases.get(browser);if(!lease)return;
   const {record,request,query,cdp}=lease;
   try{
-    record.browserIdentity.after=await request(query);
+    const after=await request(query);
+    check(after.browserPid===lease.proof.browserPid&&after.processCreationTime===lease.proof.processCreationTime&&
+      after.identityBeforeWorkload===false,'AP06_BROWSER_POST_ATTESTATION_FAILED');
+    record.browserIdentity.after=after;
     const processes=(await cdp.send('SystemInfo.getProcessInfo')).processInfo;
     if(usesRetainedProcessAudit())await request({action:'register-processes',processes});
     lease.pids=[...new Set([...lease.pids,...processes.map(row=>row.id)])];
     record.browserIdentity.ownedPids=lease.pids;
-    validateResolution(JSON.parse(readFileSync(process.env.AP06_BROWSER_IDENTITY,'utf8')),await resolveBrowserIdentity());
-  }catch(error){record.browserIdentity.status='STOP';record.browserIdentity.failureStage='post-workload-os-attestation';
-    record.browserIdentity.postWorkloadFailureClass=safeFailure(error,'os-attestation');throw new Error(record.browserIdentity.postWorkloadFailureClass);}
+    validateResolution(JSON.parse(readFileSync(process.env.AP06_BROWSER_IDENTITY,'utf8')),await lease.resolveIdentity());
+  }catch(error){
+    const failure=safeFailure(error,'os-attestation');
+    record.browserIdentity.status='STOP';record.browserIdentity.failureStage='post-workload-os-attestation';
+    record.browserIdentity.postWorkloadFailureClass=failure;
+    record.failureStage??='post-workload-os-attestation';record.failureClass??='AP06_BROWSER_POST_ATTESTATION_FAILED';
+    throw new Error('AP06_BROWSER_POST_ATTESTATION_FAILED');
+  }
 }
 
 async function auditAndReleaseLease(lease,record){
@@ -199,12 +210,19 @@ async function auditAndReleaseLease(lease,record){
       record.processExitAudit=receipt;browser.processExitAudit=receipt;
       browser.closed={closedHashVerified:receipt?.closedHashVerified===true};
       if(receipt?.status!=='PASS')throw new Error(receipt?.closedHashVerified===false?'AP06_BROWSER_EXECUTABLE_CHANGED':'AP06_BROWSER_PROCESS_EXIT_AUDIT_FAILED');
-    }catch(error){failure=safeFailure(error,'os-attestation');}
+    }catch(error){
+      const receipt=error?.response?.receipt;
+      if(receipt){record.processExitAudit=receipt;browser.processExitAudit=receipt;browser.closed={closedHashVerified:receipt.closedHashVerified===true};}
+      failure=safeFailure(error,'os-attestation');
+    }
     try{
       const result=await lease.request({action:'release'});
       record.handleRelease=result;browser.handleRelease=result;
       if(result.status!=='PASS')failure??='AP06_BROWSER_HANDLE_RELEASE_FAILED';
-    }catch(error){if(error.response){record.handleRelease=error.response;browser.handleRelease=error.response;}failure??=safeFailure(error,'os-attestation');}
+    }catch(error){
+      if(error.response){record.handleRelease=error.response;browser.handleRelease=error.response;}
+      failure??=safeFailure(error,'os-attestation');
+    }
   }else{
     try{
       browser.closed=await lease.request({action:'closed'});
@@ -212,6 +230,9 @@ async function auditAndReleaseLease(lease,record){
     }catch(error){failure=safeFailure(error,'os-attestation');}
   }
   if(!await stopLease(lease))failure??='AP06_BROWSER_HANDLE_RELEASE_FAILED';
+  browser.auditHelperExitCode=lease.child.exitCode;
+  if(browser.auditHelperExitCode!==0&&!failure&&!record.failureClass&&!browser.failureClass)
+    failure='AP06_BROWSER_AUDIT_HELPER_FAILED';
   browser.cleanupStatus=failure?'FAIL':'PASS';
   if(failure)browser.cleanupFailureClass??=failure;
   return {status:browser.cleanupStatus,failureClass:browser.cleanupFailureClass,processExitAudit:record.processExitAudit};
@@ -236,16 +257,20 @@ export async function closeBrowserIdentity(browser){
 }
 
 export async function closeBrowserWithIdentity(browser,record){
-  let failure;
-  try{await finishBrowserIdentity(browser);}catch(error){failure=safeFailure(error,'os-attestation');}
-  try{await browser.close();record.browserClosed=true;}catch{record.browserClosed=false;failure??='AP06_BROWSER_CLOSE_FAILED';}
-  try{await closeBrowserIdentity(browser);}catch(error){failure??=safeFailure(error,'os-attestation');}
+  let cleanupFailure;
+  try{await finishBrowserIdentity(browser);}catch(error){
+    record.failureClass??=safeFailure(error,'os-attestation');
+    record.failureStage??='post-workload-os-attestation';
+  }
+  try{await browser.close();record.browserClosed=true;}catch{record.browserClosed=false;cleanupFailure='AP06_BROWSER_CLOSE_FAILED';}
+  try{await closeBrowserIdentity(browser);}catch(error){cleanupFailure??=safeFailure(error,'os-attestation');}
   if(!record.browserIdentity)record.browserIdentity={};
-  record.cleanupStatus=failure?'FAIL':'PASS';
-  if(failure)record.cleanupFailureClass??=failure;
+  record.cleanupStatus=cleanupFailure?'FAIL':'PASS';
+  if(cleanupFailure)record.cleanupFailureClass??=cleanupFailure;
   record.browserIdentity.cleanupStatus=record.cleanupStatus;
   if(record.cleanupFailureClass)record.browserIdentity.cleanupFailureClass??=record.cleanupFailureClass;
-  return {status:record.cleanupStatus,failureClass:record.cleanupFailureClass,processExitAudit:record.processExitAudit};
+  return {status:record.cleanupStatus,failureClass:record.cleanupFailureClass,processExitAudit:record.processExitAudit,
+    handleRelease:record.handleRelease};
 }
 
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){

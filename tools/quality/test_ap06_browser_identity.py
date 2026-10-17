@@ -1,4 +1,7 @@
 import copy
+import contextlib
+import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -6,6 +9,8 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
+import ap06_browser_identity as browser_identity
 from ap06_browser_identity import (validate_process, metadata, verify_identity, ExecutableLease,
     regular_path, process_information, powershell, validate_creation_times)
 
@@ -40,6 +45,93 @@ class IdentityTests(unittest.TestCase):
         return validate_process(self.identity,process or self.process,71,42,
             self.autoplay if required_args is None else required_args,previous,
             self.parent if parent is None else parent,sys.executable,self.started)
+
+    def run_protocol(self, actions, mutate_second=None, fail_verify_at=None, audit_status='PASS'):
+        identity=dict(self.identity,productVersion=None)
+        manifest=self.root/'identity.json';manifest.write_text(json.dumps(identity))
+        calls={'process':0,'verify':0};process=copy.deepcopy(self.process)
+        class Lease:
+            def __init__(self):self.closes=0
+            def close(self):
+                released=self.closes==0;self.closes+=1
+                return {'releasedExecutableHandles':int(released),'closeFailures':0}
+        class Audit:
+            def __init__(self):self.entries=[];self.current={};self.closes=0
+            def register(self,rows):
+                for row in rows:
+                    self.entries.append(row.copy())
+                    self.current[row['id']]={'creationTime':process['creationTime'],'handle':row['id']}
+            def audit(self):
+                status=audit_status if self.entries else 'FAIL'
+                return {'status':status,'registeredProcessCount':len(self.entries),
+                    'closedProcessCount':len(self.entries) if status=='PASS' else 0,
+                    'timedOutProcessCount':0 if status=='PASS' else 1,'waitFailedProcessCount':0,
+                    'reusedPidCount':0,'deadlineMs':10000,'elapsedMs':1,'closedHashVerified':False,'processes':[]}
+            def close(self):
+                released=self.closes==0;self.closes+=1
+                return {'releasedProcessHandles':len(self.entries) if released else 0,'closeFailures':0}
+        lease,audit=Lease(),Audit()
+        def process_information(pid,include_identity=True,check_argv0=True):
+            if pid==42:return copy.deepcopy(self.parent)
+            calls['process']+=1
+            row=copy.deepcopy(process);row['pid']=pid
+            if mutate_second and calls['process']==2:mutate_second(row)
+            return row
+        def verify(_identity):
+            calls['verify']+=1
+            if calls['verify']==fail_verify_at:raise ValueError('AP06_BROWSER_EXECUTABLE_CHANGED')
+            return {'status':'PASS'}
+        lines=''.join(json.dumps(action)+'\n' for action in actions)
+        output=io.StringIO()
+        with patch.dict(os.environ,{'AP06_R5_PROCESS_HANDLE_AUDIT':'1'}), \
+                patch.object(browser_identity,'ExecutableLease',return_value=lease), \
+                patch.object(browser_identity,'OwnedProcessAudit',return_value=audit), \
+                patch.object(browser_identity,'process_information',side_effect=process_information), \
+                patch.object(browser_identity,'verify_identity',side_effect=verify), \
+                patch.object(sys,'argv',['ap06_browser_identity.py','--session',str(manifest)]), \
+                patch.object(sys,'stdin',io.StringIO(lines)),contextlib.redirect_stdout(output):
+            try:browser_identity.main()
+            except SystemExit as error:self.assertEqual(error.code,1)
+        return [json.loads(line) for line in output.getvalue().splitlines()],lease,audit
+
+    def attest(self, **updates):
+        return {'action':'attest','pid':71,'parentPid':42,'requiredArgs':self.autoplay,'nodeExecutable':sys.executable,
+            'launchStartedMs':self.started,'browserVersion':self.identity['chromiumVersion'],**updates}
+
+    def test_session_protocol_accepts_both_attestations_and_releases_all_handles(self):
+        rows,lease,audit=self.run_protocol([
+            self.attest(),{'action':'register-processes','processes':[{'id':71,'type':'renderer'}]},self.attest(),
+            {'action':'register-processes','processes':[{'id':72,'type':'gpu'}]},{'action':'audit-closed'},{'action':'release'}])
+        self.assertEqual([row['status'] for row in rows],['READY','PASS','PASS','PASS','PASS','PASS','PASS'])
+        self.assertTrue(rows[1]['identityBeforeWorkload']);self.assertFalse(rows[3]['identityBeforeWorkload'])
+        self.assertEqual(rows[5]['receipt']['closedHashVerified'],True)
+        self.assertEqual(rows[6]['processHandles']['closeFailures'],0);self.assertEqual(rows[6]['executableHandles']['closeFailures'],0)
+        self.assertEqual(lease.closes,2);self.assertEqual(audit.closes,2)
+
+    def test_protocol_failures_are_sanitized_and_cleanup_remains_available(self):
+        cases=(
+            ('second-pid',[self.attest(),self.attest(pid=72)],None,None,'AP06_BROWSER_PID_REUSED'),
+            ('second-creation',[self.attest(),self.attest()],lambda row:row.update(creationTime=row['creationTime']+1),None,'AP06_BROWSER_PID_REUSED'),
+            ('second-image',[self.attest(),self.attest()],lambda row:row.update(executablePath=str(self.root/'other.exe')),None,'AP06_BROWSER_IDENTITY_MISMATCH'),
+            ('second-flags',[self.attest(),self.attest(requiredArgs=['--disable-web-security'])],None,None,'AP06_BROWSER_FLAGS_MISMATCH'),
+            ('second-hash',[self.attest(),self.attest()],None,2,'AP06_BROWSER_EXECUTABLE_CHANGED'),
+            ('third-attest',[self.attest(),self.attest(),self.attest()],None,None,'AP06_BROWSER_ATTESTATION_ORDER_INVALID'),
+            ('register-before',[{'action':'register-processes','processes':[{'id':71,'type':'renderer'}]}],None,None,'AP06_BROWSER_ATTESTATION_ORDER_INVALID'),
+            ('audit-before',[{'action':'audit-closed'}],None,None,'AP06_BROWSER_ATTESTATION_ORDER_INVALID'),
+            ('winapi-failure',[self.attest(),self.attest()],lambda row:(_ for _ in ()).throw(ValueError('AP06_BROWSER_OS_QUERY_FAILED')),None,'AP06_BROWSER_OS_QUERY_FAILED'),
+        )
+        for name,attestations,mutation,verify_failure,reason in cases:
+            with self.subTest(case=name):
+                actions=[*attestations,{'action':'audit-closed'},{'action':'release'}]
+                rows,lease,audit=self.run_protocol(actions,mutation,verify_failure)
+                self.assertEqual(rows[1+len(attestations)-1]['status'] if name not in ('register-before','audit-before') else rows[1]['status'],'STOP')
+                self.assertIn({'status':'STOP','reason':reason},[{key:row.get(key) for key in ('status','reason')} for row in rows])
+                self.assertEqual(rows[-1]['status'],'PASS');self.assertEqual(lease.closes,2);self.assertEqual(audit.closes,2)
+
+    def test_process_timeout_is_audit_stop_but_release_still_succeeds(self):
+        rows,lease,audit=self.run_protocol([self.attest(),self.attest(),{'action':'audit-closed'},{'action':'release'}],audit_status='FAIL')
+        self.assertEqual(rows[3]['status'],'STOP');self.assertEqual(rows[3]['receipt']['timedOutProcessCount'],1)
+        self.assertEqual(rows[4]['status'],'PASS');self.assertEqual(lease.closes,2);self.assertEqual(audit.closes,2)
 
     def test_shell_binary_is_headless_without_headless_switch(self):
         result=self.check()
