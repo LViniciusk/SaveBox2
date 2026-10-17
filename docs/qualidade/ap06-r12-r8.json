@@ -148,8 +148,10 @@
   "draftPr": {
     "title": "investigation(ap06): R12-R8 offline preflight readiness and factorial recovery",
     "base": "investigation/ap06-r12-r7",
-    "status": "pending",
-    "merge": false
+    "status": "DRAFT",
+    "merge": false,
+    "number": 35,
+    "url": "https://github.com/LViniciusk/SaveBox2/pull/35"
   },
   "productionApplicationChanged": false
 }
