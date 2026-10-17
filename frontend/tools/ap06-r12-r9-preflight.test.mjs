@@ -26,7 +26,7 @@ test('R9 complete preflight uses real Windows handles and Python receipt consume
     const manifest=join(root,'identity.json');writeFileSync(manifest,JSON.stringify(identity));
     Object.assign(process.env,{AP06_BROWSER_IDENTITY:manifest,AP06_IDENTITY_PYTHON:python,AP06_R5_PROCESS_HANDLE_AUDIT:'1',
       TEMP:profiles,TMP:profiles,AP06_BROWSER_TEMP_ROOT:profiles,AP06_R5_CHROMIUM_VERSION:identity.chromiumVersion});
-    const calls=[],roles=['browser','renderer','GPU','network.mojom.NetworkService'];let current,injectedFailure=false;
+    const calls=[],roles=['browser','renderer','GPU','network.mojom.NetworkService'];let current,injectedFailure=false,unroutes=0;
     async function stop(child){if(child.exitCode===null&&child.signalCode===null){const done=once(child,'exit');child.kill();await done;}}
     const cdp={send:async method=>{
       calls.push(method);
@@ -47,7 +47,7 @@ test('R9 complete preflight uses real Windows handles and Python receipt consume
           if(injectedFailure&&arg?.id!==undefined)throw new Error('R12R9_TEST_FUNCTIONAL_FAILURE');
           if(arg?.counterName)return {rejected:true,active:false,pending:0,references:0};
           if(String(fn).includes('counters:window.r5Counters'))return {counters:current.counters,media:0};
-        }}),newCDPSession:async()=>cdp,unrouteAll:async()=>{},close:async()=>{if(injectedFailure)throw new Error('R12R9_TEST_CONTEXT_CLOSE_FAILED');}}),
+        }}),newCDPSession:async()=>cdp,unrouteAll:async()=>{unroutes++;},close:async()=>{if(injectedFailure)throw new Error('R12R9_TEST_CONTEXT_CLOSE_FAILED');}}),
         close:async()=>{await Promise.all(children.map(stop));rmSync(profile,{recursive:true,force:true});}};
     }};
     try{
@@ -71,9 +71,9 @@ test('R9 complete preflight uses real Windows handles and Python receipt consume
       process.env.AP06_R7_UNIT_OUTPUT=failureOutput;await runHttpPreflight(options);
       const failed=JSON.parse(readFileSync(failureOutput,'utf8'));
       assert.equal(failed.failureClass,'R12R9_TEST_FUNCTIONAL_FAILURE');
-      assert.equal(failed.cleanupFailureClass,'AP06_CONTEXT_CLEANUP_FAILED');
+      assert.equal(failed.cleanupFailureClass,'AP06_CONTEXT_CLEANUP_FAILED');assert.equal(failed.cleanupStatus,'FAIL');
       assert.equal(failed.browserClosed,true);assert.equal(failed.processExitAudit.status,'PASS');
-      assert.equal(failed.handleRelease.status,'PASS');process.exitCode=0;
+      assert.equal(failed.handleRelease.status,'PASS');assert.equal(unroutes,6);process.exitCode=0;
     }finally{
       await Promise.all(children.map(stop));
       for(const key of Object.keys(process.env))if(!(key in old))delete process.env[key];

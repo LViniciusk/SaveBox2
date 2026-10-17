@@ -525,7 +525,7 @@ def unit_browser_r8(wave):
                 if target.is_file():
                     observed=read(target)
                     if observed.get('cleanupFailureClass'):
-                        primary.cleanup_failure_class='R12R9_CLEANUP_FAILED'
+                        primary.cleanup_failure_class='R12R9_CLEANUP_FAILED';primary.cleanup_status='FAIL'
                         if observed.get('failureClass') in (None,observed.get('cleanupFailureClass')):primary.failure_class='R12R9_CLEANUP_FAILED'
                     primary.secondary_failure_class=observed.get('failureClass')
                 if primary.cleanup_failure_class:primary.cleanup_failure_class='R12R9_CLEANUP_FAILED'

@@ -63,6 +63,7 @@ try{
       const errors=[],closed={};
       if(page)try{const state=await page.evaluate(()=>({counters:window.r5Counters,media:document.querySelectorAll('video,audio').length}));validateIntegrationCleanup(state.counters,state.media);}catch(error){errors.push(error);}
       try{await remember();}catch(error){errors.push(error);}
+      try{await context.unrouteAll({behavior:'wait'});}catch(error){errors.push(error);}
       errors.push(...await cleanupContext({routes:[],observer,cdp,context},closed));
       result.rangeNetworks[condition]={cdp:raw.rangeNetwork,backend:raw.backendTraffic};
       record.contextClosed=closed.closed===true;
@@ -83,6 +84,7 @@ finally{
   }
   else if(result.browserIdentity?.browserClosed){result.browserClosed=true;result.processExitAudit??=result.browserIdentity.processExitAudit??result.browserIdentity.failureCleanupAudit;}
   if(pids.size&&!usesRetainedProcessAudit())try{result.processExitAudit=JSON.parse(execFileSync(process.env.WAVE1_PYTHON,[process.env.AP06_R8_PID_AUDITOR,'--closed-pids',[...pids].join(',')],{encoding:'utf8',windowsHide:true}));if(result.processExitAudit.status!=='PASS'){result.status='FAIL';process.exitCode=1;}}catch{result.status='FAIL';result.cleanupFailureClass??='AP06_BROWSER_PROCESS_EXIT_AUDIT_FAILED';process.exitCode=1;}
+  if(result.cleanupFailureClass)result.cleanupStatus='FAIL';
   save();
 }
 
