@@ -157,6 +157,20 @@ class ProductTests(unittest.TestCase):
             audit['packageLockSha256']='b'*64;path.write_text(json.dumps(audit))
             with self.assertRaisesRegex(WaveFailure,'R12R8_PREFLIGHT_NOT_READY'):factorial.validate_r8_dependency_audit(wave)
 
+    def test_offline_identity_accepts_missing_pe_versioninfo_only_with_frozen_chromium_version(self):
+        identity={'chromiumVersion':factorial.VERSION}
+        factorial.validate_r8_browser_identity(identity,{'status':'PASS','productVersion':None})
+        factorial.validate_r8_browser_identity(identity,{'status':'PASS','productVersion':factorial.VERSION})
+        for changed_identity,observed in (
+            ({'chromiumVersion':'0.0.0.0'},{'status':'PASS','productVersion':None}),
+            (identity,{'status':'PASS','productVersion':'0.0.0.0'}),
+            (identity,{'status':'PASS'}),
+            (identity,{'status':'STOP','productVersion':None}),
+            (None,{'status':'PASS','productVersion':None}),
+        ):
+            with self.subTest(identity=changed_identity,observed=observed),self.assertRaisesRegex(WaveFailure,'R12R8_PREFLIGHT_NOT_READY'):
+                factorial.validate_r8_browser_identity(changed_identity,observed)
+
     def test_preflight_requires_a_clean_gitleaks_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
             output=Path(temporary)/'.quality/readiness-wave12-r8-factorial';baseline=output/'baseline';baseline.mkdir(parents=True)

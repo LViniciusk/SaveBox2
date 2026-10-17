@@ -253,13 +253,17 @@ def validate_r8_secret_scan(wave):
     except (WaveFailure,OSError,ValueError,KeyError,TypeError,AttributeError):
         raise WaveFailure('R12R8_PREFLIGHT_NOT_READY') from None
 
+def validate_r8_browser_identity(identity,observed):
+    require(isinstance(identity,dict) and isinstance(observed,dict) and observed.get('status')=='PASS' and 'productVersion' in observed and
+        observed['productVersion'] in (None,VERSION) and identity.get('chromiumVersion')==VERSION,
+        'R12R8_PREFLIGHT_NOT_READY')
+
 def verify_preflight_dependencies(wave,env,assets,files):
     try:
         identity=read(wave.output/'baseline/browser-identity.json')
         from ap06_browser_identity import verify_identity
         observed=verify_identity(identity)
-        require(observed['productVersion']==VERSION and identity.get('chromiumVersion')==VERSION,
-            'R12R8_PREFLIGHT_NOT_READY')
+        validate_r8_browser_identity(identity,observed)
         require(set(assets)>= {'/'} and all(path.is_file() and not path.is_symlink() for path,_ in assets.values()),
             'R12R8_PREFLIGHT_NOT_READY')
         receipt=read(wave.output/'tooling/app-products.json')
