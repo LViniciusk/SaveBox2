@@ -58,6 +58,15 @@
       "fixCommit": "6ef0e83df91e8c9b4d67a5dbdb515f79dc522057",
       "fix": "Clear preferred_storage_provider in the DriveStore behavior spec beforeEach; production code unchanged."
     },
+    "fixtureFixVerification": {
+      "head": "26db8946fb9ca1869d1e18dbcd8de7cf02b862a9",
+      "backendRunId": 39048975571,
+      "backendConclusion": "success",
+      "backendJobs": 3,
+      "qualityBaselineRunId": 39048975616,
+      "qualityBaselineConclusion": "success",
+      "qualityBaselineJobs": 2
+    },
     "qualityBaseline": {
       "conclusion": "success",
       "frontendTests": 1530,
@@ -191,7 +200,7 @@
       "passed": 12,
       "total": 12
     },
-    "driveStoreFixtureIsolation": "FIXED_IN_6ef0e83df91e8c9b4d67a5dbdb515f79dc522057; exact-head CI pending",
+    "driveStoreFixtureIsolation": "FIXED_IN_6ef0e83df91e8c9b4d67a5dbdb515f79dc522057; PASS_IN_26db8946fb9ca1869d1e18dbcd8de7cf02b862a9",
     "syntax": "PASS",
     "typescript": "PASS"
   }
