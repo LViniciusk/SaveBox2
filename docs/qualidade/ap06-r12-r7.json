@@ -49,6 +49,15 @@
       "runId": 39046048960
     },
     "implementationHead": "4869a1be40a7e009ec0aff523d72f2e8a3ba7187",
+    "supersededVerification": {
+      "head": "56e8c96414ceb21006cd5ffc2541c44ee465990b",
+      "qualityBaselineRunId": 39048467990,
+      "qualityReport": "failure",
+      "failure": "B88 inherited preferred_storage_provider=google_drive from another spec through localStorage; its accountless Drive upload then failed.",
+      "e2e": "success",
+      "fixCommit": "6ef0e83df91e8c9b4d67a5dbdb515f79dc522057",
+      "fix": "Clear preferred_storage_provider in the DriveStore behavior spec beforeEach; production code unchanged."
+    },
     "qualityBaseline": {
       "conclusion": "success",
       "frontendTests": 1530,
@@ -182,6 +191,7 @@
       "passed": 12,
       "total": 12
     },
+    "driveStoreFixtureIsolation": "FIXED_IN_6ef0e83df91e8c9b4d67a5dbdb515f79dc522057; exact-head CI pending",
     "syntax": "PASS",
     "typescript": "PASS"
   }
