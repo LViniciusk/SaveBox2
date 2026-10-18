@@ -640,7 +640,10 @@ def main():
                     return 1
                 config = json.loads((wave.output / 'baseline/authority-config.local.json').read_text(encoding='utf-8-sig'))
                 authority = checked_path(Path(config['AP06_AUTHORITY_ROOT']))
-                verify_publication(authority, config['identity'], 'decision')
+                from run_ap06_r9 import publication_namespace
+                ns = publication_namespace(wave)
+                pub_name = f"{ns}-decision" if ns else 'decision'
+                verify_publication(authority, config['identity'], pub_name)
             except Exception:
                 return 1
             return 0
