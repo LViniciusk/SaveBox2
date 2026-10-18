@@ -729,9 +729,14 @@ def validate_preflight_receipt(wave,unit,identity):
             campaign_prefix()+'PREFLIGHT_CONTRACT_INVALID')
     return True
 
+def retained_process_audit():
+    return CAMPAIGN in ('AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial',
+        'AP-06-R12-R8-factorial','AP-06-R12-R9-factorial','AP-06-R12-R10-factorial','AP-06-R12-R11-factorial')
+
+
 def validate_browser_receipt(record,identity,native=False,process_samples=None):
     receipt=record.get('browserIdentity',{})
-    r5=CAMPAIGN in ('AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial','AP-06-R12-R9-factorial','AP-06-R12-R10-factorial','AP-06-R12-R11-factorial')
+    r5=retained_process_audit()
     r4=CAMPAIGN in ('AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial','AP-06-R12-R9-factorial','AP-06-R12-R10-factorial','AP-06-R12-R11-factorial');prefix=campaign_prefix()
     launched=(receipt.get('browserLaunchSucceeded') is True and receipt.get('attemptReserved') is True) if r4 else receipt.get('launchSucceeded') is True
     require(receipt.get('status')=='PASS' and receipt.get('readLease') is True and launched,prefix+'BROWSER_IDENTITY_REQUIRED')
@@ -816,12 +821,12 @@ def validate_mixed_network(run,condition,expected,fixtures,mapping):
     validate_bootstrap_network(run['rangeNetwork'],'r10.1')
     return validate_network(run,condition,expected,fixtures,mapping,expected_type=expected_type)
 
-def validate_condition(raw,condition,stage,freeze,fixtures):
+def validate_condition(raw,condition,stage,freeze,fixtures,*,native=False):
     try:
         require(condition in CONDITIONS and stage in ('triage','formal') and len(raw['runs'])==1,'R12R2_RUN_IDENTITY_CHANGED')
         run=raw['runs'][0];attempt=re.fullmatch(r'(triage|formal)-(\d{2})-(r12r2\.[0-3])',run['runId'])
         if CAMPAIGN in ('AP-06-R12-R3-factorial','AP-06-R12-R4-factorial','AP-06-R12-R5-factorial','AP-06-R12-R6-factorial','AP-06-R12-R7-factorial','AP-06-R12-R8-factorial','AP-06-R12-R9-factorial','AP-06-R12-R10-factorial','AP-06-R12-R11-factorial'):
-            validate_browser_receipt(run,freeze['browserIdentity'],process_samples=run.get('samples',()))
+            validate_browser_receipt(run,freeze['browserIdentity'],native=native,process_samples=run.get('samples',()))
             require(run['browserIdentity']['before']['browserPid']==next(p['pid'] for p in run['samples'][0]['processMemory']['processes'] if p['type']=='browser'),
                 campaign_prefix()+'BROWSER_SAMPLE_PID_MISMATCH')
         require(attempt and attempt[1]==stage and attempt[3]==condition and
@@ -838,7 +843,8 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
         require(run['transportProof']==expected_proof('r10.1'),'R12R2_DI_CHANGED')
         received=validate_mixed_network(run,condition,freeze['workload']['rangesPerCycle']*6,fixtures,freeze['backendFileMapping'])
         require(received==freeze['workload']['bytesPerCycle']*6,'R12R2_HTTP_WORKLOAD_CHANGED')
-        validate_http_samples(raw,freeze,fixtures,'r12r2',lambda c,s:validate_scalars(c,'r12.0',s,freeze['workload']['bytesPerCycle']))
+        validate_http_samples(raw,freeze,fixtures,'r12r2',lambda c,s:validate_scalars(c,'r12.0',s,freeze['workload']['bytesPerCycle']),
+            validate_exit=validate_process_audit_receipt if retained_process_audit() else None)
         for sample in run['samples']:
             require(sample['counters']['routing']==transport_counts(condition,sample['cycle']*3),'R12R2_TRANSPORT_COUNTERS_CHANGED')
         return 'R12R2_FACTORIAL_VALID'

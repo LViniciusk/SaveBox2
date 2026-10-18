@@ -78,7 +78,7 @@ def _validate_condition(raw,condition,stage,freeze,fixtures):
     return 'R12_MATERIALIZATION_VALID'
 
 
-def validate_http_samples(raw,freeze,fixtures,counter_name,validate_counter):
+def validate_http_samples(raw,freeze,fixtures,counter_name,validate_counter,*,validate_exit=None):
     run=raw['runs'][0]
     for key,value in {'fixtureManifestSha256':freeze['fixtureHash'],'orchestratorHash':freeze['runnerHash'],
         'experimentalAppProducts':freeze['appProducts'],'pageScriptSha256':freeze['pageScriptSha256'],
@@ -94,8 +94,10 @@ def validate_http_samples(raw,freeze,fixtures,counter_name,validate_counter):
     at=lambda index:datetime.fromisoformat(samples[index]['timestamp'].replace('Z','+00:00'))
     require((at(8)-at(7)).total_seconds()>=30 and (at(9)-at(8)).total_seconds()>=90 and
         (at(9)-at(7)).total_seconds()>=120 and all(at(i)>=at(i-1) for i in range(1,11)),'R12_IDLE_TOO_SHORT')
-    pids=sorted({r['pid'] for s in samples for r in s['processMemory']['processes']})
-    require(run['processExitAudit']=={'status':'PASS','ownedPids':pids,'aliveOwnedPids':[]},'R12_PROCESS_NOT_CLOSED')
+    if validate_exit is None:
+        pids=sorted({r['pid'] for s in samples for r in s['processMemory']['processes']})
+        require(run['processExitAudit']=={'status':'PASS','ownedPids':pids,'aliveOwnedPids':[]},'R12_PROCESS_NOT_CLOSED')
+    else:validate_exit(run['processExitAudit'],samples)
     for sample in samples:
         validate_memory(sample,samples[0]);validate_auxiliary(sample)
         require(sample['browserVersion']==VERSION and sample['functionalStatus']==sample['cleanupStatus']=='PASS' and

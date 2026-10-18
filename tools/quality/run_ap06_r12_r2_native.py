@@ -6,7 +6,7 @@ from run_ap06_integration_probe import read,build_products
 from run_ap06_r9 import publish,verify_freeze,runtime_environment,freeze_implementation,measure
 from run_ap06_r11 import verify_r11_freeze
 from run_ap06_r12 import require
-from run_ap06_r12_r2 import OUTPUT as FACTORIAL,validate_condition
+from run_ap06_r12_r2 import OUTPUT as FACTORIAL,validate_condition as validate_factorial_condition
 from ap06_authorities import checked_path,private_permissions,validate_owned_destination,publish_authorities,sha256
 from ap06_native import trace_events,aggregate_trace
 from ap06_freeze import FreezeFailure
@@ -16,6 +16,10 @@ CAMPAIGN='AP-06-R12-R2-native'
 PUBLISHER=Path(__file__).resolve()
 TRACE_PREFIX='r12-r2-native'
 FACTORIAL_STATUS='R12R2_FACTORIAL_CONFIRMED'
+
+def validate_condition(raw,condition,stage,freeze,fixtures):
+    return validate_factorial_condition(raw,condition,stage,freeze,fixtures,native=True)
+
 
 def configure_campaign(output,publisher):
     global OUTPUT,PUBLISHER,CAMPAIGN,TRACE_PREFIX,FACTORIAL,FACTORIAL_STATUS

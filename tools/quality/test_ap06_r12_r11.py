@@ -20,6 +20,64 @@ import run_ap06_r12_r2_native as native
 from test_ap06_r12_r9 import simulate_preflight
 
 
+def retained_measurement(condition):
+    from test_ap06_r12_r2 import complete_raw
+    from test_ap06_r12_r4 import RecoveryTests
+    raw,frozen,fixtures=complete_raw(condition)
+    identity,record=RecoveryTests().receipt();identity['installationFiles']={}
+    run=raw['runs'][0];processes=run['samples'][0]['processMemory']['processes']
+    audit={'status':'PASS','method':'retained-win32-process-handles','registeredProcessCount':len(processes),
+        'closedProcessCount':len(processes),'timedOutProcessCount':0,'waitFailedProcessCount':0,
+        'reusedPidCount':0,'deadlineMs':10000,'elapsedMs':0,'closedHashVerified':True,
+        'processes':[{'pid':p['pid'],'creationTime':1000+p['pid'],'roles':[p['type']]} for p in processes]}
+    browser=next(p for p in processes if p['type']=='browser')
+    for point in ('before','after'):
+        record['browserIdentity'][point].update(browserPid=browser['pid'],processCreationTime=1000+browser['pid'])
+    release={'status':'PASS','processHandles':{'releasedProcessHandles':len(processes),'closeFailures':0},
+        'executableHandles':{'releasedExecutableHandles':1,'closeFailures':0}}
+    run.update(browserIdentity=record['browserIdentity'],processExitAudit=audit,handleRelease=release)
+    run['browserIdentity'].update(processExitAudit=audit,handleRelease=release)
+    frozen['browserIdentity']=identity
+    return raw,frozen,fixtures
+
+
+class MeasurementConsumerTests(unittest.TestCase):
+    def test_full_triage_formal_and_native_consumers_require_retained_receipts(self):
+        for round_name in range(5,12):
+            with patch.object(factorial,'CAMPAIGN',f'AP-06-R12-R{round_name}-factorial'):
+                for condition in factorial.CONDITIONS:
+                    raw,frozen,fixtures=retained_measurement(condition)
+                    self.assertEqual(factorial.validate_condition(raw,condition,'triage',frozen,fixtures),'R12R2_FACTORIAL_VALID')
+                    raw['stage']='formal';raw['runs'][0]['runId']='formal-05-'+condition
+                    self.assertEqual(factorial.validate_condition(raw,condition,'formal',frozen,fixtures),'R12R2_FACTORIAL_VALID')
+                    for point in ('before','after'):raw['runs'][0]['browserIdentity'][point]['nativeFlagsValidated']=True
+                    self.assertEqual(native.validate_condition(raw,condition,'formal',frozen,fixtures),'R12R2_FACTORIAL_VALID')
+                    with self.assertRaises(RuntimeError):factorial.validate_condition(raw,condition,'formal',frozen,fixtures)
+
+    def test_full_measurement_rejects_legacy_or_incomplete_process_audits(self):
+        with patch.object(factorial,'CAMPAIGN','AP-06-R12-R11-factorial'):
+            raw,frozen,fixtures=retained_measurement('r12r2.0')
+            for mutation in (lambda r:r['runs'][0].update(processExitAudit={'status':'PASS','ownedPids':[1,2,3,4],'aliveOwnedPids':[]}),
+                    lambda r:r['runs'][0]['processExitAudit'].update(closedProcessCount=0),
+                    lambda r:r['runs'][0]['processExitAudit']['processes'].pop(),
+                    lambda r:r['runs'][0]['samples'][6]['counters']['observed'].update(jwtRangesValidated=0)):
+                invalid=copy.deepcopy(raw);mutation(invalid)
+                with self.assertRaises(RuntimeError):factorial.validate_condition(invalid,'r12r2.0','triage',frozen,fixtures)
+
+
+@unittest.skipUnless(os.environ.get('AP06_R11_STOP_REPLAY')=='1','Opt in to read-only replay of the preserved R11 STOP')
+class StoppedMeasurementReplayTests(unittest.TestCase):
+    def test_preserved_raw_passes_current_consumers_without_authorizing_science(self):
+        root=Path(__file__).resolve().parents[2];out=root/'.quality/readiness-wave12-r11-factorial'
+        paths=[out/'triage/01-r12r2.0/crypto-transmux-mse.raw.json',out/'tooling/freeze.json',out/'final/STOP.json']
+        before={str(p):sha256(p) for p in paths}
+        with patch.object(factorial,'CAMPAIGN','AP-06-R12-R11-factorial'):
+            self.assertEqual(factorial.validate_condition(factorial.read(paths[0]),'r12r2.0','triage',
+                factorial.read(paths[1]),factorial.read(out/'fixtures/manifest.json')),'R12R2_FACTORIAL_VALID')
+        self.assertEqual({str(p):sha256(p) for p in paths},before)
+        self.assertEqual(factorial.read(paths[2])['failureClass'],'R12_PROCESS_NOT_CLOSED')
+
+
 @unittest.skipUnless(os.name=='nt' and os.environ.get('AP06_R11_LIVE_INTEGRATION')=='1',
     'Opt in to the owned R11 laboratory; no Chromium is launched')
 class LiveFreezePipelineTests(unittest.TestCase):
@@ -90,6 +148,9 @@ class LiveFreezePipelineTests(unittest.TestCase):
                 attempt=lab.output/'triage/01-r12r2.0';attempt.mkdir()
                 prepared,_=factorial.environment(lab,attempt,'r12r2.0','triage',frozen)
                 self.assertEqual(Path(prepared['AP06_BROWSER_IDENTITY']),lab.output/'baseline/browser-identity.json')
+                for condition in factorial.CONDITIONS:
+                    raw,fixture_freeze,fixtures=retained_measurement(condition)
+                    self.assertEqual(factorial.validate_condition(raw,condition,'triage',fixture_freeze,fixtures),'R12R2_FACTORIAL_VALID')
                 values=dict(zip(factorial.CONDITIONS,(500,500,100,350)))
                 candidate=factorial.classify(lab,values)
                 self.assertEqual(candidate['pair'],['r12r2.0','r12r2.2'])
