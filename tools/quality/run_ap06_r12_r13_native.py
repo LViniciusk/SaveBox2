@@ -328,7 +328,7 @@ R13_FREEZE_FILES = (
 
 
 def freeze_r13(wave):
-    from ap06_authorities import readback
+    from ap06_key_custody import readback
     from run_ap06_integration_probe import VERSION
     require(json.loads((wave.output / 'baseline/ci.json').read_text()).get('headSha') == wave.git('rev-parse', 'HEAD').strip(),
         'R12R13_CI_HEAD_CHANGED')

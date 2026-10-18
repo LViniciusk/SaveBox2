@@ -7,6 +7,7 @@ from unittest.mock import patch
 from ap06_authorities import initialize, publish_snapshot, sha256, verify_publication
 from ap06_freeze import validate_test_receipt
 from prepare_ap06_r12_r13 import CAMPAIGN, NATIVE_BUDGET, verify_all_publications_once
+import run_ap06_r12_r13_native as r13
 from run_ap06_r12_r13_native import validate_budget
 from run_ap06_r9 import validate_freeze_preflight
 import run_ap06_r12_r2_native as native
@@ -56,6 +57,15 @@ class R12R13PreparationTests(unittest.TestCase):
         tests['native'] = {'status': 'FAIL'}
         with self.assertRaisesRegex(ValueError, 'AP06_FREEZE_TEST_AUTHORITY_INVALID'):
             validate_test_receipt(output, tests)
+
+    def test_freeze_resolves_private_custody_readback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary); (output / 'baseline').mkdir()
+            (output / 'baseline/ci.json').write_text(json.dumps({'headSha': 'a' * 40}), encoding='utf-8')
+            wave = type('Wave', (), {'output': output, 'git': lambda _self, *_args: 'a' * 40})()
+            with patch.object(r13, 'validate_freeze_readiness', side_effect=RuntimeError('PREFLIGHT_REACHED')):
+                with self.assertRaisesRegex(RuntimeError, 'PREFLIGHT_REACHED'):
+                    r13.freeze_r13(wave)
 
     def test_trace_receipt_uses_the_new_authority_campaign(self):
         with tempfile.TemporaryDirectory() as temporary:
