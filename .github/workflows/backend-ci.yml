@@ -85,6 +85,7 @@ jobs:
     env:
       # Also available during the CMake toolchain's manifest install.
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-binary-cache
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -106,6 +107,16 @@ jobs:
             throw "vcpkg toolchain is missing: $toolchain"
           }
           New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+          vsversion: '2022'
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.16.0"
+          disable_annotations: "true"
       - name: Setup native PostgreSQL
         shell: pwsh
         run: |
@@ -167,20 +178,44 @@ jobs:
       - name: Configure MSVC
         shell: pwsh
         run: |
+          if (-not $env:ACTIONS_RESULTS_URL -or -not $env:ACTIONS_RUNTIME_TOKEN) {
+            throw "GitHub Actions cache authentication is unavailable"
+          }
           cmake -S backend -B backend/build-msvc `
-            -G "Visual Studio 17 2022" `
-            -A x64 `
+            -G "Ninja Multi-Config" `
+            -DCMAKE_CXX_COMPILER=cl `
             -DBUILD_TESTS=ON `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
+            -DCMAKE_POLICY_DEFAULT_CMP0141=NEW `
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+          if ($LASTEXITCODE -ne 0) { throw "MSVC CMake configuration failed" }
           $compilerFile = Get-ChildItem backend/build-msvc -Filter CMakeCXXCompiler.cmake -Recurse | Select-Object -First 1
           if (-not $compilerFile) { throw "CMake compiler metadata was not generated" }
           if (-not (Select-String -Path $compilerFile.FullName -Pattern 'CMAKE_CXX_COMPILER_ID.*MSVC')) {
             throw "CMake did not select the MSVC compiler"
           }
+          $commands = ninja -C backend/build-msvc -f build-Debug.ninja -t commands savebox_server savebox_tests nanika_e2e_fixture
+          if ($LASTEXITCODE -ne 0 -or -not ($commands -match 'sccache.*cl\.exe')) {
+            throw "Ninja does not launch MSVC through sccache"
+          }
+          $debugRules = Get-Content backend/build-msvc/CMakeFiles/impl-Debug.ninja -Raw
+          if ($debugRules -notmatch '(?m)^  FLAGS = .* [-/]Z7(?:\s|$)' -or $debugRules -cmatch '(?:^|\s)[-/]Z[iI](?:\s|$)') {
+            throw "MSVC Debug objects must use embedded /Z7 symbols"
+          }
       - name: Build native MSVC targets
+        id: msvc-build
         shell: pwsh
-        run: cmake --build backend/build-msvc --config Debug --target savebox_server savebox_tests nanika_e2e_fixture --parallel 2
+        run: |
+          sccache --zero-stats
+          if ($LASTEXITCODE -ne 0) { throw "Could not reset sccache statistics" }
+          $timer = [Diagnostics.Stopwatch]::StartNew()
+          cmake --build backend/build-msvc --config Debug --target savebox_server savebox_tests nanika_e2e_fixture --parallel 2
+          $buildExitCode = $LASTEXITCODE
+          $timer.Stop()
+          Write-Output ("MSVC build wall seconds: {0:N3}" -f $timer.Elapsed.TotalSeconds)
+          if ($buildExitCode -ne 0) { throw "MSVC native build failed" }
       - name: Run backend tests
         shell: pwsh
         working-directory: backend/build-msvc
@@ -190,6 +225,20 @@ jobs:
           New-Item -ItemType Directory -Force savebox_storage | Out-Null
           .\Debug\savebox_tests.exe --order rand --rng-seed 60102
           if ($LASTEXITCODE -ne 0) { throw "MSVC backend tests failed with exit code $LASTEXITCODE" }
+      - name: Show sccache stats
+        if: always()
+        shell: pwsh
+        run: |
+          if (Get-Command sccache -ErrorAction SilentlyContinue) {
+            $statsJson = sccache --show-stats --stats-format=json
+            if ($LASTEXITCODE -ne 0) { throw "Could not read sccache statistics" }
+            $stats = ($statsJson | ConvertFrom-Json).stats
+            # Only counters/durations: the outer JSON can contain cache service metadata.
+            $stats | ConvertTo-Json -Depth 5
+            if ('${{ steps.msvc-build.outcome }}' -eq 'success' -and $stats.compile_requests -le 0) {
+              throw "MSVC build did not use sccache"
+            }
+          }
       - name: Stop native PostgreSQL
         if: always()
         shell: pwsh
