@@ -123,7 +123,7 @@ test('R12 requires an identity manifest before any browser launch',async()=>{
     delete process.env.AP06_BROWSER_IDENTITY;
     for(const number of [3,10,11,12]){
       process.env.AP06_EXPERIMENT_ROOT=`.quality/readiness-wave12-r${number}-factorial`;
-      await assert.rejects(launchAttestedBrowser({launch:async()=>{calls++;}}, {args:[]},{}),/AP06_BROWSER_IDENTITY_MISMATCH/);
+      await assert.rejects(launchAttestedBrowser({launch:async()=>{calls++;}}, {args:[]},{}),{message:'AP06_BROWSER_IDENTITY_UNPROVEN'});
     }
     assert.equal(calls,0);
   }finally{
