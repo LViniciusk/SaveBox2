@@ -8,13 +8,21 @@ from types import SimpleNamespace
 
 def events(sizes=(100,500,200,180),stacks=True):
     rows=[{'ph':'M','pid':42,'name':'process_name','args':{'name':'Renderer'}}]
+    requests=[]
     for i,size in enumerate(sizes):
+        dump_guid=hex(i+1);start=i*100;end=start+2
         maps={'strings':[{'id':0,'string':'SafeNativeFunction'}],'nodes':[{'id':1,'name_sid':0}],'types':[]}
-        rows.append({'ph':'v','pid':42,'ts':i*100+1,'id':hex(i+1),'name':'explicitly_triggered',
+        rows.append({'ph':'v','pid':42,'ts':start+1,'id':dump_guid,'name':'explicitly_triggered',
             'cat':['disabled-by-default-memory-infra'],'args':{'dumps':{
             'level_of_detail':'detailed','allocators':{'malloc':{'attrs':{'size':{'type':'scalar','units':'bytes','value':hex(size+20)[2:]}}}},
             'heaps_v2':{'version':1,'maps':maps if stacks else {},'allocators':{'malloc':{'sizes':[size],'counts':[2],'types':[0],'nodes':[1] if stacks else [-1]}}}}}})
-    return rows
+        requests.extend([
+            {'ph':'b','pid':99,'ts':start,'id2':{'local':dump_guid},'name':'GlobalMemoryDump',
+                'cat':['disabled-by-default-memory-infra'],'args':{'dump_guid':dump_guid,
+                'dump_type':'explicitly_triggered','level_of_detail':'detailed','success':True}},
+            {'ph':'e','pid':99,'ts':end,'id2':{'local':dump_guid},'name':'GlobalMemoryDump',
+                'cat':['disabled-by-default-memory-infra']}])
+    return rows+requests
 
 def receipt():
     return {'tracingStarted':True,'memoryInfraCategoryAvailable':True,'complete':True,'streamEof':True,
@@ -23,15 +31,22 @@ def receipt():
         'checkpoints':[{'phase':p,'dumpGuid':hex(i+1),'success':True,'timestamp':i+1} for i,p in enumerate(('baseline','cycle-6-close','idle-120s','forced-GC-final'))]}
 
 def r12_schema_events():
-    rows=[]
+    rows=[];requests=[]
     for i in range(1,4):
+        dump_guid=hex(i);start=i*100-1
         for pid in (42,77):
-            rows.append({'ph':'v','pid':pid,'ts':i*100,'id':hex(i),'name':'periodic_interval',
-                'cat':['disabled-by-default-memory-infra'],'args':{'dumps':{'allocators':{}}}})
+            rows.append({'ph':'v','pid':pid,'ts':i*100,'id':dump_guid,'name':'periodic_interval',
+                'cat':['disabled-by-default-memory-infra'],'args':{'dumps':{'level_of_detail':'detailed','allocators':{}}}})
+        requests.extend([
+            {'ph':'b','pid':99,'ts':start,'id2':{'local':dump_guid},'name':'GlobalMemoryDump',
+                'cat':['disabled-by-default-memory-infra'],'args':{'dump_guid':dump_guid,
+                'dump_type':'explicitly_triggered','level_of_detail':'detailed','success':True}},
+            {'ph':'e','pid':99,'ts':i*100+1,'id2':{'local':dump_guid},'name':'GlobalMemoryDump',
+                'cat':['disabled-by-default-memory-infra']}])
     for i in range(90,101):
         rows.append({'ph':'v','pid':99,'ts':i*100,'id':hex(i),'name':'periodic_interval',
             'cat':['disabled-by-default-memory-infra'],'args':{'dumps':{'allocators':{}}}})
-    return rows
+    return rows+requests
 
 class NativeTests(unittest.TestCase):
     def test_private_trace_seal_real_authority_and_budget(self):
@@ -77,6 +92,7 @@ class NativeTests(unittest.TestCase):
         self.assertFalse(inventory['dumpEvents']['checkpointReceiptGuidsUnique'] is False)
         self.assertEqual(inventory['heapsV2']['eventsPresent'],0)
         self.assertEqual(inventory['heapsV2']['dumpEventsWithoutHeapsV2'],17)
+        self.assertEqual(inventory['dumpTriggerTypes'],{'explicitly_triggered':3})
         self.assertEqual(aggregate_trace(iter(r12_schema_events()),receipt(),detailed=True),
             {'status':'NATIVE_INCONCLUSIVE','reason':'NATIVE_RENDERER_METADATA_MISSING'})
 
@@ -84,7 +100,9 @@ class NativeTests(unittest.TestCase):
         rows=events();rows[0:1]=[]
         self.assertEqual(aggregate_trace(iter(rows),receipt(),detailed=True)['reason'],'NATIVE_RENDERER_METADATA_MISSING')
         rows=events()
-        for row in rows[1:]:row['args']['dumps'].pop('heaps_v2')
+        for row in rows[1:]:
+            if isinstance(row.get('args'),dict) and isinstance(row['args'].get('dumps'),dict):
+                row['args']['dumps'].pop('heaps_v2')
         self.assertEqual(aggregate_trace(iter(rows),receipt(),detailed=True),
             {'status':'NATIVE_INCONCLUSIVE','reason':'NATIVE_HEAPS_V2_NOT_EMITTED'})
         rows=events();rows.pop(2)
@@ -109,7 +127,8 @@ class NativeTests(unittest.TestCase):
         rows=events();rows[0]['pid']=43
         for row in rows[1:]:row['pid']=43
         self.assertEqual(aggregate_trace(iter(rows),receipt(),detailed=True)['reason'],'NATIVE_RENDERER_PID_MISMATCH')
-        rows=events();rows[-1]['ts']=1
+        rows=events();rows[4]['ts']=151
+        rows[-2]['ts']=149;rows[-1]['ts']=152
         self.assertEqual(aggregate_trace(iter(rows),receipt(),detailed=True)['reason'],'NATIVE_DUMP_TIMESTAMP_ORDER_INVALID')
         rows=events();rows[1]['args']['dumps']['heaps_v2']['allocators']['malloc']['counts']=[]
         self.assertEqual(aggregate_trace(iter(rows),receipt(),detailed=True)['reason'],'NATIVE_HEAP_ARRAYS_INVALID')
@@ -122,7 +141,9 @@ class NativeTests(unittest.TestCase):
 
     def test_aggregates_only_are_not_native_allocation_profiling(self):
         rows=events()
-        for row in rows[1:]:row['args']['dumps'].pop('heaps_v2')
+        for row in rows[1:]:
+            if isinstance(row.get('args'),dict) and isinstance(row['args'].get('dumps'),dict):
+                row['args']['dumps'].pop('heaps_v2')
         self.assertEqual(aggregate_trace(iter(rows),receipt())['status'],'R12R2_NATIVE_PROFILER_UNAVAILABLE')
         rows=events();rows[0]['args']['name']='Browser'
         self.assertEqual(aggregate_trace(iter(rows),receipt())['status'],'R12R2_NATIVE_INCONCLUSIVE')
@@ -311,10 +332,42 @@ class NativeTests(unittest.TestCase):
         res6 = aggregate_trace(iter(rows_names), receipt(), detailed=True)
         self.assertEqual(res6['status'], 'NATIVE_CAPABILITY_PASS')
 
+        # A periodic dump with a matching number but no explicit request is not a checkpoint.
+        rows_without_request = events()
+        rows_without_request = [row for row in rows_without_request if not (
+            row.get('name') == 'GlobalMemoryDump' and row.get('id2', {}).get('local') == '0x1')]
+        res_without_request = aggregate_trace(iter(rows_without_request), receipt(), detailed=True)
+        self.assertEqual(res_without_request['status'], 'NATIVE_INCONCLUSIVE')
+        self.assertEqual(res_without_request['reason'], 'NATIVE_CHECKPOINT_DUMPS_INCOMPLETE')
+
+        rows_outside_request = events()
+        rows_outside_request[1]['ts'] = 50
+        self.assertEqual(aggregate_trace(iter(rows_outside_request), receipt(), detailed=True)['reason'],
+            'NATIVE_CHECKPOINT_DUMPS_INCOMPLETE')
+
+        rows_bad_request = events()
+        next(row for row in rows_bad_request if row.get('name') == 'GlobalMemoryDump' and row.get('ph') == 'b')['args']['dump_type'] = 'periodic_interval'
+        res_bad_request = aggregate_trace(iter(rows_bad_request), receipt(), detailed=True)
+        self.assertEqual(res_bad_request['status'], 'NATIVE_STOP')
+        self.assertEqual(res_bad_request['reason'], 'NATIVE_DUMP_TRIGGER_INVALID')
+
+        rows_bad_guid_request = events()
+        next(row for row in rows_bad_guid_request if row.get('name') == 'GlobalMemoryDump' and row.get('ph') == 'b')['args']['dump_guid'] = '0x99'
+        self.assertEqual(aggregate_trace(iter(rows_bad_guid_request), receipt(), detailed=True)['reason'], 'NATIVE_DUMP_GUID_CONFLICT')
+
+        rows_bad_dump_name = events()
+        rows_bad_dump_name[1]['name'] = 'unrecognized_dump_trigger'
+        self.assertEqual(aggregate_trace(iter(rows_bad_dump_name), receipt(), detailed=True)['reason'], 'NATIVE_DUMP_TRIGGER_INVALID')
+
+        rows_missing_guid = events()
+        rows_missing_guid[1].pop('id')
+        self.assertEqual(aggregate_trace(iter(rows_missing_guid), receipt(), detailed=True)['reason'], 'NATIVE_DUMP_GUID_MISSING')
+
         # 7. Event without heaps_v2 produces NATIVE_HEAPS_V2_NOT_EMITTED
         rows_no_heaps = events()
         for r in rows_no_heaps[1:]:
-            r['args']['dumps'].pop('heaps_v2')
+            if isinstance(r.get('args'),dict) and isinstance(r['args'].get('dumps'),dict):
+                r['args']['dumps'].pop('heaps_v2')
         res7 = aggregate_trace(iter(rows_no_heaps), receipt(), detailed=True)
         self.assertEqual(res7['status'], 'NATIVE_INCONCLUSIVE')
         self.assertEqual(res7['reason'], 'NATIVE_HEAPS_V2_NOT_EMITTED')

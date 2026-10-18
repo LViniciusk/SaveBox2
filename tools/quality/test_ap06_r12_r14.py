@@ -711,6 +711,15 @@ class R12R14PreparationTests(unittest.TestCase):
                         'cat': ['disabled-by-default-memory-infra'], 'name': 'explicitly_triggered',
                         'args': {'dumps': {'level_of_detail': 'detailed', 'allocators': {'malloc': {'attrs': {'size': {'type': 'scalar', 'units': 'bytes', 'value': '100'}}}}}}
                     })
+                    dump_guid = hex(i + 1)
+                    events.extend([
+                        {'ph': 'b', 'pid': 99, 'ts': (i + 1) * 100 - 1, 'id2': {'local': dump_guid},
+                            'name': 'GlobalMemoryDump', 'cat': ['disabled-by-default-memory-infra'],
+                            'args': {'dump_guid': dump_guid, 'dump_type': 'explicitly_triggered',
+                                'level_of_detail': 'detailed', 'success': True}},
+                        {'ph': 'e', 'pid': 99, 'ts': (i + 1) * 100 + 1, 'id2': {'local': dump_guid},
+                            'name': 'GlobalMemoryDump', 'cat': ['disabled-by-default-memory-infra']},
+                    ])
                 trace_content = json.dumps({'traceEvents': events})
                 # Private trace path inside authority
                 traces_dir = authority / 'r12-r14-native' / 'traces'

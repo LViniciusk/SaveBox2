@@ -82,7 +82,7 @@ def inspect_trace(events,renderer_pid,checkpoints):
     dump_renderer=dump_other=0;guid_forms={'id':0,'id2.global':0,'both':0,'missing':0}
     guid_types={'string':0,'number':0,'other':0};matched=set();duplicate_matches=0;unmatched=0
     renderer_matched=set();other_matched=set();matched_events=0
-    dump_without_schema=0;dump_bad_guid=0;dump_timestamps=0;last_dump_ts=None;dump_order_valid=True
+    dump_without_schema=0;dump_bad_guid=0;dump_timestamps=0;last_dump_ts=None;dump_order_valid=True;dump_triggers={}
     heaps_present=heaps_renderer=heaps_matched=heaps_matched_missing=0
     heaps_versions={};heaps_valid=0;heap_allocators=0;heap_arrays_valid=0;allocator_stats=0;discarded=0
     def bucket(table,key):table[key]=table.get(key,0)+1
@@ -116,6 +116,8 @@ def inspect_trace(events,renderer_pid,checkpoints):
             else:category='other'
             bucket(categories,category)
         args=event.get('args');args=args if isinstance(args,dict) else {}
+        if event.get('name')=='GlobalMemoryDump' and isinstance(args.get('dump_type'),str):
+            bucket(dump_triggers,args['dump_type'])
         if phase=='M' and event.get('name')=='process_name':
             metadata+=1
             if is_renderer:
@@ -181,7 +183,8 @@ def inspect_trace(events,renderer_pid,checkpoints):
         'eventsByProcess':{'renderer':renderer_events,'other':other_events,'missingPid':missing_pid,
             'otherPidEventCounts':sorted((count for pid,count in pid_counts.items() if pid!=renderer_pid),reverse=True)},
         'eventsByPhase':dict(sorted(phases.items())),'eventsByName':dict(sorted(names.items())),
-        'eventsByCategory':dict(sorted(categories.items())),'processNameMetadata':{'all':metadata,'renderer':renderer_metadata,'roles':dict(sorted(roles.items()))},
+        'eventsByCategory':dict(sorted(categories.items())),'dumpTriggerTypes':dict(sorted(dump_triggers.items())),
+        'processNameMetadata':{'all':metadata,'renderer':renderer_metadata,'roles':dict(sorted(roles.items()))},
         'dumpEvents':{'renderer':dump_renderer,'otherProcess':dump_other,'guidForms':guid_forms,'guidValueTypes':guid_types,
             'checkpointGuidsExpected':expected_count,'checkpointGuidsMatched':len(matched),
             'rendererCheckpointGuidsMatched':len(renderer_matched),'otherProcessCheckpointGuidsMatched':len(other_matched),
@@ -355,11 +358,50 @@ def _aggregate_trace(events,receipt):
         if index and number(checkpoints[index-1]['timestamp'])>=timestamp:
             raise NativeTraceError('NATIVE_CHECKPOINT_ORDER_INVALID')
         targets[parsed]=checkpoint
-    metadata_renderer_pids=set();dump_events={};strings={};nodes={};symbols=set();stack_bins=missing_bins=0
+    metadata_renderer_pids=set();dump_events={};dump_requests={};strings={};nodes={};symbols=set();stack_bins=missing_bins=0
     heaps_seen=set()
     for event in events:
         if not isinstance(event,dict):raise NativeTraceError('NATIVE_EVENT_INVALID')
         event_pid=event.get('pid')
+        if event.get('name')=='GlobalMemoryDump' and event.get('ph') in ('b','e'):
+            args=event.get('args') if isinstance(event.get('args'),dict) else {}
+            id2=event.get('id2')
+            local=None
+            try:
+                if isinstance(id2,dict) and 'local' in id2:local=guid(id2['local'])
+            except (TypeError,ValueError,OverflowError):pass
+            if event.get('ph')=='b':
+                requested=None
+                try:
+                    if 'dump_guid' in args:requested=guid(args['dump_guid'])
+                except (TypeError,ValueError,OverflowError):pass
+                request_guid=requested if requested in targets else local
+                if request_guid in targets:
+                    if requested!=request_guid or local!=request_guid:
+                        raise NativeTraceError('NATIVE_DUMP_GUID_CONFLICT')
+                    category=event.get('cat')
+                    if 'disabled-by-default-memory-infra' not in (category if isinstance(category,list) else [category]):
+                        raise NativeTraceError('NATIVE_TRACE_CATEGORY_MISSING')
+                    if args.get('dump_type')!='explicitly_triggered' or args.get('success') is not True or \
+                        args.get('level_of_detail')!='detailed':
+                        raise NativeTraceError('NATIVE_DUMP_TRIGGER_INVALID')
+                    if type(event_pid) is not int or event_pid<=0:
+                        raise NativeTraceError('NATIVE_DUMP_TRIGGER_INVALID')
+                    if request_guid in dump_requests:
+                        raise NativeTraceError('NATIVE_DUMP_TRIGGER_DUPLICATE')
+                    try:start=number(event.get('ts'))
+                    except ValueError:raise NativeTraceError('NATIVE_DUMP_TRIGGER_INVALID') from None
+                    dump_requests[request_guid]={'pid':event_pid,'start':start,'end':None}
+            elif local in targets:
+                request=dump_requests.get(local)
+                category=event.get('cat')
+                if not request or request['end'] is not None or type(event_pid) is not int or event_pid!=request['pid'] or \
+                    'disabled-by-default-memory-infra' not in (category if isinstance(category,list) else [category]):
+                    raise NativeTraceError('NATIVE_DUMP_TRIGGER_INVALID')
+                try:end=number(event.get('ts'))
+                except ValueError:raise NativeTraceError('NATIVE_DUMP_TRIGGER_INVALID') from None
+                if end<=request['start']:raise NativeTraceError('NATIVE_DUMP_TRIGGER_INVALID')
+                request['end']=end
         if event.get('ph')=='M' and event.get('name')=='process_name':
             args=event.get('args')
             if isinstance(args,dict) and args.get('name') in ('Renderer','Renderer process') and type(event_pid) is int:
@@ -369,7 +411,9 @@ def _aggregate_trace(events,receipt):
         data=args.get('dumps')
         if event.get('ph')!='v' or not isinstance(data,dict):continue
         event_guid=_event_guid(event)
-        if event_guid is None:continue
+        if event_guid is None:
+            if event_pid==pid:raise NativeTraceError('NATIVE_DUMP_GUID_MISSING')
+            continue
         if event_guid not in targets:continue
         if type(event_pid) is not int or event_pid<=0:raise NativeTraceError('NATIVE_DUMP_PID_INVALID')
         if event_pid!=pid:
@@ -379,6 +423,8 @@ def _aggregate_trace(events,receipt):
         category=event.get('cat')
         if 'disabled-by-default-memory-infra' not in (category if isinstance(category,list) else [category]):
             raise NativeTraceError('NATIVE_TRACE_CATEGORY_MISSING')
+        if event.get('name') not in ('periodic_interval','explicitly_triggered') or data.get('level_of_detail')!='detailed':
+            raise NativeTraceError('NATIVE_DUMP_TRIGGER_INVALID')
         timestamp=event.get('ts')
         try:number(timestamp)
         except ValueError:raise NativeTraceError('NATIVE_DUMP_TIMESTAMP_INVALID') from None
@@ -470,7 +516,12 @@ def _aggregate_trace(events,receipt):
         raise NativeTraceError('NATIVE_RENDERER_PID_MISMATCH')
     if pid not in metadata_renderer_pids and not _proof_matches(receipt,pid):
         raise NativeTraceError('NATIVE_RENDERER_METADATA_MISSING')
-    if set(dump_events)!=set(targets):raise NativeTraceError('NATIVE_CHECKPOINT_DUMPS_INCOMPLETE')
+    if set(dump_events)!=set(targets) or any(not dump_requests.get(key) or
+        dump_requests[key]['end'] is None or
+        not dump_requests[key]['start']<=dump_events[key]['traceTimestampUs']<=dump_requests[key]['end']
+        for key in targets if key in dump_events) or any(key not in dump_requests or
+        dump_requests[key]['end'] is None for key in targets):
+        raise NativeTraceError('NATIVE_CHECKPOINT_DUMPS_INCOMPLETE')
     rows=[{k:v for k,v in dump_events[guid(checkpoint['dumpGuid'])].items() if k in ('phase','traceTimestampUs','allocators','allocatorStats')} for checkpoint in checkpoints]
     if any(rows[i]['traceTimestampUs']>=rows[i+1]['traceTimestampUs'] for i in range(3)):
         raise NativeTraceError('NATIVE_DUMP_TIMESTAMP_ORDER_INVALID')

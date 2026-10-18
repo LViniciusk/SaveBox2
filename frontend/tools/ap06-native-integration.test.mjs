@@ -12,11 +12,20 @@ const parser=fileURLToPath(new URL('../../tools/quality/run_ap06_r12_r13_native.
 const phases=['baseline','cycle-6-close','idle-120s','forced-GC-final'];
 const flags=['--memlog=all','--memlog-stack-mode=native','--memlog-sampling-rate=16384','--memlog-keep-small-allocations'];
 function fixture(withHeaps=true){
-  const events=[{ph:'M',pid:42,name:'process_name',args:{name:'Renderer'}}];
-  for(let index=0;index<4;index++)events.push({ph:'v',pid:42,ts:(index+1)*100,id:`0x${index+1}`,
-    cat:['disabled-by-default-memory-infra'],name:'explicitly_triggered',args:{dumps:{
-      ...(withHeaps?{heaps_v2:{version:1,maps:{strings:[],nodes:[]},allocators:{malloc:{sizes:[80+index],counts:[1],nodes:[-1],types:[-1]}}}}:{})}}});
-  return events;
+  const events=[{ph:'M',pid:42,name:'process_name',args:{name:'Renderer'}}],requests=[];
+  for(let index=0;index<4;index++){
+    const dumpGuid=`0x${index+1}`,start=index*100;
+    events.push({ph:'v',pid:42,ts:start+1,id:dumpGuid,
+      cat:['disabled-by-default-memory-infra'],name:'periodic_interval',args:{dumps:{
+        level_of_detail:'detailed',
+        ...(withHeaps?{heaps_v2:{version:1,maps:{strings:[],nodes:[]},allocators:{malloc:{sizes:[80+index],counts:[1],nodes:[-1],types:[-1]}}}}:{})}}});
+    requests.push(
+      {ph:'b',pid:99,ts:start,id2:{local:dumpGuid},name:'GlobalMemoryDump',
+        cat:['disabled-by-default-memory-infra'],args:{dump_guid:dumpGuid,dump_type:'explicitly_triggered',
+          level_of_detail:'detailed',success:true}},
+      {ph:'e',pid:99,ts:start+2,id2:{local:dumpGuid},name:'GlobalMemoryDump',cat:['disabled-by-default-memory-infra']});
+  }
+  return [...events,...requests];
 }
 async function evaluateTrace(dir,events,label){
   const path=join(dir,`${label}.trace.json`),receiptPath=join(dir,`${label}.receipt.json`),json=JSON.stringify({traceEvents:events});

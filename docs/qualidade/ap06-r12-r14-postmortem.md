@@ -48,7 +48,8 @@ Em `tools/quality/ap06_native.py`:
 3. Fragmentos idênticos não duplicam bytes, bins ou stacks.
 4. Valores conflitantes em allocators continuam sendo STOP formal (`NATIVE_ALLOCATOR_STATS_DUPLICATE`).
 5. A presença de `allocators` não é inferida como presença de `heaps_v2`.
-6. `inspect_trace()` permanece estritamente diagnóstico e não promove replay a aceitação.
+6. Cada checkpoint agora precisa corresponder a um envelope `GlobalMemoryDump` bem formado: `dump_guid` igual ao `id2.local`, `dump_type=explicitly_triggered`, sucesso e detalhe `detailed`, com início/fim e os eventos `ph: "v"` dentro dessa janela. Um `periodic_interval` sozinho ou um GUID coincidente não prova o checkpoint; ausência de request/dump resulta em inconclusividade, e GUID/trigger contraditórios resultam em STOP.
+7. `inspect_trace()` conta os tipos de trigger e permanece estritamente diagnóstico, sem promover replay a aceitação.
 
 ---
 
@@ -74,17 +75,34 @@ O replay foi executado exclusivamente sobre o trace privado preservado na autori
 | Dumps do renderer PID 27900 | 8 |
 | Dumps de outros processos | 36 |
 | GUIDs de checkpoint no receipt | 4 (`0x1` a `0x4`), únicos |
+| Envelopes `GlobalMemoryDump` | 4, todos `explicitly_triggered`, `success: true`, `detailed`; GUID local, argumento e receipt concordam |
+| Eventos `periodic_interval` do renderer PID 27900 | 8 (dois por GUID `0x0`–`0x3`); os pares têm mesmo PID/timestamp, um `process_totals` e outro `allocators`/`allocators_graph` |
+| Eventos `name: "explicitly_triggered"` | 0; a evidência explícita está em `GlobalMemoryDump.args.dump_type` |
 | GUIDs efetivamente correlacionados | 3 (`0x1`, `0x2`, `0x3`); `0x4` não aparece como dump renderer |
 | Eventos associados a GUIDs de checkpoint | 33 |
 | Referências repetidas ao mesmo GUID | 30, sem conflito de PID ou timestamp |
 | Registros de allocator stats | 11.008 |
 | Eventos com estrutura `heaps_v2` | **0** |
 | Classificação estrita do parser corrigido | `NATIVE_INCONCLUSIVE` / `NATIVE_RENDERER_METADATA_MISSING` |
-| Classificação diagnóstica adicional | `NATIVE_HEAPS_V2_NOT_EMITTED` (após binding) |
+| Identidade nova disponível no receipt histórico | Não; sem `rendererIdentityProof`/`creationTimeExact`, o replay para em `NATIVE_RENDERER_METADATA_MISSING` |
 
-O receipt histórico da R14 **não contém** `rendererIdentityProof` nem `creationTimeExact`. Portanto o novo contrato de identidade não passaria com as evidências realmente disponíveis; essa é uma limitação de evidência histórica, não uma nova decisão científica. O caminho legado existe apenas para replay explícito e não é aceito como prova nova.
+O parser valida os envelopes explícitos antes de aceitar qualquer correlação. Os registros repetidos do renderer são fragmentos complementares do mesmo dump e não acumulam os mesmos bytes/bins duas vezes. O GUID `0x4` tem request explícito bem sucedido, mas não tem evento `ph: "v"` do renderer; continua incompleto. O GUID `0x0` é uma amostra periódica fora dos quatro GUIDs do receipt e não completa checkpoint, mesmo com timestamp próximo de uma janela explícita.
 
-**Conclusão técnica:** a ausência de `heaps_v2` é confirmada após a correção do tratamento de duplicatas. A R14 permanece inconclusiva e **não é reclassificada** por este replay.
+Detalhe do vínculo observado (todos os eventos de dump abaixo têm `ph: "v"`, `name: "periodic_interval"` e categoria `disabled-by-default-memory-infra`):
+
+| GUID | Envelope explícito (início–fim, µs) | Eventos / PIDs | Timestamp do renderer (µs) | Campos observados no renderer | `heaps_v2` |
+|---|---:|---|---:|---|---|
+| `0x0` (fora do receipt) | nenhum | 11; `16052×3`, `27640×2`, `27900×2`, `28200×2`, `30512×2` | `5751144924` | `process_totals` e `allocators`/`allocators_graph` em registros separados | ausente |
+| `0x1` | `5751115980–5751146815` | 11; mesmos PIDs/contagens | `5751144924` | `process_totals`; `allocators` (2.264 entradas) + `allocators_graph` | ausente |
+| `0x2` | `5751519066–5751551165` | 11; mesmos PIDs/contagens | `5751548981` | `process_totals`; `allocators` (2.271 entradas) + `allocators_graph` | ausente |
+| `0x3` | `5871932243–5871958257` | 11; mesmos PIDs/contagens | `5871956281` | `process_totals`; `allocators` (2.086 entradas) + `allocators_graph` | ausente |
+| `0x4` | `5872370519–5872396452` | 0 eventos `ph: "v"` | — | — | ausente |
+
+O PID 16052 tem três registros por GUID e os outros quatro PIDs têm dois; todas as repetições preservam o mesmo timestamp por GUID. Os quatro eventos de início `GlobalMemoryDump` contêm `dump_type: "explicitly_triggered"`, `success: true` e `level_of_detail: "detailed"`; os respectivos eventos de fim compartilham `id2.local`. Assim, os dois fragmentos do renderer nos GUIDs `0x1`–`0x3` são estruturalmente compatíveis com o mesmo request explícito. O inventário encontrou **zero** campos `heaps_v2`, inclusive nos três GUIDs correlacionados.
+
+O receipt histórico da R14 **não contém** `rendererIdentityProof` nem `creationTimeExact`. Portanto o novo contrato de identidade não passaria com as evidências realmente disponíveis; essa é uma limitação de evidência histórica, não uma nova decisão científica. O replay não fabricou nem injetou uma prova para avançar além desse gate: a ausência de `heaps_v2` vem do inventário direto dos eventos preservados. O caminho legado existe apenas para replay explícito e não é aceito como prova nova.
+
+**Conclusão técnica:** a ausência de `heaps_v2` é confirmada pelo inventário do trace depois de distinguir requests explícitos, periodic intervals e fragmentos repetidos. A classificação efetiva do parser fica em `NATIVE_RENDERER_METADATA_MISSING`; não foi inferida uma classificação posterior. A R14 permanece inconclusiva e **não é reclassificada** por este replay.
 
 ---
 
@@ -159,11 +177,13 @@ Em `run_profiled_pair()`, o agregado é classificado imediatamente após `valida
 
 O gate final do runner também compara o SHA-256 de `final/decision.json` com a entrada publicada antes de retornar exit 0, e exige `cleanupStatus == PASS`.
 
+**Limite histórico de cleanup:** o receipt preservado da R14 registra `cleanupStatus: PASS` para o fechamento do navegador, mas não há `backend-runtime-cleanup.json` nem manifesto separado de cleanup do backend. Este hardening não rerodou a campanha terminal nem iniciou backend para produzir retroativamente essa evidência; portanto não declara um PASS histórico de cleanup do backend. Os testes descartáveis verificam que, se houver evidência de runtime próprio iniciado, ausência/corrupção do receipt ou falha no readback resulta em `UNVERIFIED`/`FAIL`; quando não há evidência de inicialização, o runner registra `BACKEND_NOT_STARTED` sem sondar uma porta.
+
 ---
 
 ## 7. Matriz de Testes (RED → GREEN)
 
-Os testes negativos foram adicionados antes das correções e falharam no estado RED (21 falhas e 5 erros em `test_ap06_r12_r14`, erro de importação em `test_ap06_native` e asserção no teste Node). Após as correções:
+Os testes negativos foram adicionados antes das correções e falharam no estado RED (21 falhas e 5 erros em `test_ap06_r12_r14`, erro de importação em `test_ap06_native` e asserção no teste Node). A auditoria do vínculo de trigger acrescentou casos RED em que um dump periódico com GUID coincidente passava sem request explícito e em que o GUID do evento estava ausente; ambos agora falham fechados. Após as correções:
 
 | Suíte | Resultado |
 |---|---|
@@ -173,13 +193,14 @@ Os testes negativos foram adicionados antes das correções e falharam no estado
 | `test_ap06_r12_r13.py` | 9 testes OK |
 | `test_ap06_freeze.py` | 11 testes OK |
 | Node `ap06-browser-identity.test.mjs` | 17 testes, 0 falhas |
+| Node AP-06 identity/trace/integration (três arquivos requeridos) | 21 testes, 0 falhas |
 | Node global (`node --test tools/*.test.mjs`) | 315 testes, 313 pass, 2 skipped, 0 fail |
 | Python global pertinente (25 módulos AP-06, isolados) | 24 PASS; `test_ap06_r12_r9` bloqueado por privilégio ACL do host (código não alterado) |
 | Quality Baseline Python | 45 testes OK |
 | TypeScript (`npx tsc --noEmit -p tsconfig.json`) | 0 erros |
 | Angular build (`npm run build`) | sucesso (somente warnings de budget) |
 
-Cobertura inclui: FILETIME acima de `2^53 - 1`, `uint64` máximo, zero, negativo, decimal, exponencial, não canônico e valor arredondado por `Number`; prova sem vínculo com auditoria; PID correto com FILETIME divergente; cleanup não iniciado, config ausente/corrompida, origem estrangeira, ownership inválido, listener ativo, receipt incompleto, serviços pessoais tocados, runtime remanescente e readback divergente; `NATIVE_STOP` após o primeiro agregado; inconclusivo sem segunda medição; consumo derivado de receipts; STOP imutável e reexecução bloqueada. Nenhum threshold, hash, ACL ou limite de segurança foi reduzido.
+Cobertura inclui: FILETIME acima de `2^53 - 1`, `uint64` máximo, zero, negativo, decimal, exponencial, não canônico e valor arredondado por `Number`; prova sem vínculo com auditoria; PID correto com FILETIME divergente; fragmentos de dump idênticos/complementares/conflitantes; GUID/trigger ausente, duplicado ou divergente; associação explícita limitada à janela temporal; ausência/parcialidade de `heaps_v2`; cleanup não iniciado, config ausente/corrompida, origem estrangeira, ownership inválido, listener ativo, receipt incompleto, serviços pessoais tocados, runtime remanescente e readback divergente; `NATIVE_STOP` após o primeiro agregado; inconclusivo sem segunda medição; consumo derivado de receipts; STOP imutável e reexecução bloqueada. Nenhum threshold, hash, ACL ou limite de segurança foi reduzido.
 
 ---
 
