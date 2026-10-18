@@ -223,18 +223,35 @@ def _event_guid(event):
         raise NativeTraceError('NATIVE_DUMP_GUID_CONFLICT')
     return first if first is not None else second
 
+def validate_canonical_filetime(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[1-9][0-9]*', value):
+        return None
+    val = int(value)
+    if val <= 0 or val > (1 << 64) - 1:
+        return None
+    return val
+
 def _proof_matches(receipt,pid):
     proof=receipt.get('rendererIdentityProof')
     if not isinstance(proof,dict):return False
     if not (proof.get('status')=='PASS' and proof.get('preRegistered') is True and \
         proof.get('campaign') in ('AP-06-R12-R14-native','AP-06-R12-R13-native') and \
         proof.get('rendererPid')==pid and \
-        type(proof.get('creationTime')) is int and proof['creationTime']>0 and \
         isinstance(proof.get('roles'),list) and proof['roles']==['renderer'] and \
         proof.get('attestationMethod')=='retained-win32-process-handles' and \
         proof.get('linkedToProfiledProcess') is True and proof.get('processIdentityCount')==1 and \
         proof.get('checkpointPhases')==list(PHASES)):
         return False
+
+    proof_exact = proof.get('creationTimeExact')
+    if proof_exact is not None:
+        proof_time = validate_canonical_filetime(proof_exact)
+        if proof_time is None:
+            return False
+    else:
+        if type(proof.get('creationTime')) is not int or proof['creationTime'] <= 0:
+            return False
+        proof_time = proof['creationTime']
 
     audit=receipt.get('processExitAudit')
     if not isinstance(audit,dict) or audit.get('status')!='PASS' or audit.get('method')!='retained-win32-process-handles':
@@ -248,8 +265,17 @@ def _proof_matches(receipt,pid):
     if len(renderer_processes)!=1:
         return False
     audited=renderer_processes[0]
-    if audited.get('pid')!=pid or audited.get('creationTime')!=proof['creationTime']:
+    if audited.get('pid')!=pid:
         return False
+
+    audited_exact = audited.get('creationTimeExact')
+    if audited_exact is not None:
+        audited_time = validate_canonical_filetime(audited_exact)
+        if audited_time is None or audited_time != proof_time:
+            return False
+    else:
+        if audited.get('creationTime') != proof_time:
+            return False
 
     samples=receipt.get('processSamples')
     if not isinstance(samples,list) or len(samples)<4:
@@ -306,7 +332,7 @@ def _aggregate_trace(events,receipt):
         if index and number(checkpoints[index-1]['timestamp'])>=timestamp:
             raise NativeTraceError('NATIVE_CHECKPOINT_ORDER_INVALID')
         targets[parsed]=checkpoint
-    metadata_renderer_pids=set();dump_events={};renderer_dump_guids=set();strings={};nodes={};symbols=set();stack_bins=missing_bins=0
+    metadata_renderer_pids=set();dump_events={};strings={};nodes={};symbols=set();stack_bins=missing_bins=0
     heaps_seen=set()
     for event in events:
         if not isinstance(event,dict):raise NativeTraceError('NATIVE_EVENT_INVALID')
@@ -327,16 +353,19 @@ def _aggregate_trace(events,receipt):
             # Global dump records from other process IDs are expected; only reject a renderer explicitly bound elsewhere.
             if event_pid in metadata_renderer_pids:raise NativeTraceError('NATIVE_RENDERER_PID_MISMATCH')
             continue
-        if event_guid in renderer_dump_guids:raise NativeTraceError('NATIVE_DUMP_GUID_DUPLICATE')
-        renderer_dump_guids.add(event_guid)
         category=event.get('cat')
         if 'disabled-by-default-memory-infra' not in (category if isinstance(category,list) else [category]):
             raise NativeTraceError('NATIVE_TRACE_CATEGORY_MISSING')
         timestamp=event.get('ts')
         try:number(timestamp)
         except ValueError:raise NativeTraceError('NATIVE_DUMP_TIMESTAMP_INVALID') from None
-        record=dump_events.setdefault(event_guid,{'phase':targets[event_guid]['phase'],'traceTimestampUs':timestamp,
-            'allocators':{},'allocatorStats':{}})
+        if event_guid in dump_events:
+            record=dump_events[event_guid]
+            if record['pid']!=event_pid:raise NativeTraceError('NATIVE_DUMP_PID_CONFLICT')
+            if record['traceTimestampUs']!=timestamp:raise NativeTraceError('NATIVE_DUMP_TIMESTAMP_CONFLICT')
+        else:
+            record=dump_events.setdefault(event_guid,{'pid':event_pid,'phase':targets[event_guid]['phase'],
+                'traceTimestampUs':timestamp,'allocators':{},'allocatorStats':{},'rawAllocators':{}})
         stats=data.get('allocators',{})
         if not isinstance(stats,dict):raise NativeTraceError('NATIVE_ALLOCATOR_STATS_INVALID')
         for name,allocator in stats.items():
@@ -353,9 +382,11 @@ def _aggregate_trace(events,receipt):
                 attrs[attr]=number(int(value['value'],16))
             if attrs:
                 key=label(name)
-                if key in record['allocatorStats'] and record['allocatorStats'][key]!=attrs:
-                    raise NativeTraceError('NATIVE_ALLOCATOR_STATS_DUPLICATE')
-                record['allocatorStats'][key]=attrs
+                if key in record['allocatorStats']:
+                    if record['allocatorStats'][key]!=attrs:
+                        raise NativeTraceError('NATIVE_ALLOCATOR_STATS_DUPLICATE')
+                else:
+                    record['allocatorStats'][key]=attrs
         if 'heaps_v2' not in data:continue
         heaps=data['heaps_v2']
         if not isinstance(heaps,dict) or type(heaps.get('version')) is not int or heaps.get('version')!=1:
@@ -390,7 +421,12 @@ def _aggregate_trace(events,receipt):
             if not isinstance(paths,list) or not isinstance(types,list) or len({len(sizes),len(counts),len(paths),len(types)})!=1:
                 raise NativeTraceError('NATIVE_HEAP_ARRAYS_INVALID')
             safe_name=label(name)
-            if safe_name in record['allocators']:raise NativeTraceError('NATIVE_HEAP_ALLOCATOR_DUPLICATE')
+            signature=(tuple(sizes),tuple(counts),tuple(paths),tuple(types))
+            if safe_name in record['allocators']:
+                if record.get('rawAllocators',{}).get(safe_name)!=signature:
+                    raise NativeTraceError('NATIVE_HEAP_ALLOCATOR_DUPLICATE')
+                continue
+            record.setdefault('rawAllocators',{})[safe_name]=signature
             for index,path in enumerate(paths):
                 if type(path) is not int or path < -1 or type(types[index]) is not int or types[index] < -1:
                     raise NativeTraceError('NATIVE_HEAP_ARRAYS_INVALID')
@@ -412,7 +448,7 @@ def _aggregate_trace(events,receipt):
     if pid not in metadata_renderer_pids and not _proof_matches(receipt,pid):
         raise NativeTraceError('NATIVE_RENDERER_METADATA_MISSING')
     if set(dump_events)!=set(targets):raise NativeTraceError('NATIVE_CHECKPOINT_DUMPS_INCOMPLETE')
-    rows=[dump_events[guid(checkpoint['dumpGuid'])] for checkpoint in checkpoints]
+    rows=[{k:v for k,v in dump_events[guid(checkpoint['dumpGuid'])].items() if k in ('phase','traceTimestampUs','allocators','allocatorStats')} for checkpoint in checkpoints]
     if any(rows[i]['traceTimestampUs']>=rows[i+1]['traceTimestampUs'] for i in range(3)):
         raise NativeTraceError('NATIVE_DUMP_TIMESTAMP_ORDER_INVALID')
     if heaps_seen!=set(targets):

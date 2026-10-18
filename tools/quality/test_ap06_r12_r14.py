@@ -165,6 +165,199 @@ class R12R14PreparationTests(unittest.TestCase):
             self.assertEqual(payload['publicationStatus'], 'PASS')
             self.assertTrue((out / 'final/STOP.json').is_file())
 
+            # Verify byte-for-byte hash equality between local STOP.json and published authority evidence
+            local_stop = out / 'final/STOP.json'
+            local_hash = sha256(local_stop)
+            manifest = verify_publication(authority, identity, 'stop')
+            self.assertEqual(manifest['campaign'], CAMPAIGN)
+            stop_entry = next(f for f in manifest['files'] if f['path'] == 'evidence/STOP.json')
+            self.assertEqual(stop_entry['sha256'], local_hash)
+
+            # Local STOP.json does NOT contain publicationStatus (immutable after publication)
+            stop_data = json.loads(local_stop.read_text(encoding='utf-8-sig'))
+            self.assertNotIn('publicationStatus', stop_data)
+
+            # Publication readback is stored in separate receipt
+            readback_file = out / 'final/stop-publication-readback.json'
+            self.assertTrue(readback_file.is_file())
+            readback_data = json.loads(readback_file.read_text(encoding='utf-8-sig'))
+            self.assertEqual(readback_data['status'], 'PASS')
+            self.assertEqual(readback_data['stopSha256'], local_hash)
+            self.assertTrue(readback_data['independentReadback'])
+
+            # Re-execution when STOP already exists preserves the file without mutation
+            payload2 = r14.record_durable_stop(wave, 'SOME_OTHER_ERROR', stage='later')
+            self.assertEqual(payload2['failureClass'], 'CAPABILITY_EXECUTION_FAILED')
+            self.assertEqual(sha256(local_stop), local_hash)
+
+    def test_record_durable_stop_publication_failure_preserves_local_file(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary); authority = base / 'authority'; identity = 'a' * 64
+            # Authority is NOT initialized -> publish will fail
+            out = base / 'output'; (out / 'pipeline').mkdir(parents=True); (out / 'baseline').mkdir(parents=True)
+            (out / 'final').mkdir(parents=True)
+            (out / 'baseline/authority-config.local.json').write_text(json.dumps(
+                {'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
+            wave = type('Wave', (), {'output': out, 'save': lambda _self, name, value:
+                (out / name).write_text(json.dumps(value), encoding='utf-8')})()
+
+            payload = r14.record_durable_stop(wave, 'PREFLIGHT_ABORTED', stage='preflight')
+            self.assertEqual(payload['status'], 'STOP')
+            self.assertEqual(payload['reason'], 'PREFLIGHT_ABORTED')
+            self.assertEqual(payload['publicationStatus'], 'FAIL')
+
+            local_stop = out / 'final/STOP.json'
+            self.assertTrue(local_stop.is_file())
+            stop_data = json.loads(local_stop.read_text(encoding='utf-8-sig'))
+            self.assertEqual(stop_data['reason'], 'PREFLIGHT_ABORTED')
+            self.assertNotIn('publicationStatus', stop_data)
+
+            readback_file = out / 'final/stop-publication-readback.json'
+            self.assertTrue(readback_file.is_file())
+            readback_data = json.loads(readback_file.read_text(encoding='utf-8-sig'))
+            self.assertEqual(readback_data['status'], 'FAIL')
+            self.assertFalse(readback_data['independentReadback'])
+
+    def test_record_durable_stop_cleanup_error_does_not_mask_original_reason(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary); authority = base / 'authority'; identity = 'a' * 64
+            initialize(authority, identity, campaign=CAMPAIGN)
+            out = base / 'output'; (out / 'pipeline').mkdir(parents=True); (out / 'baseline').mkdir(parents=True)
+            (out / 'final').mkdir(parents=True)
+            (out / 'baseline/authority-config.local.json').write_text(json.dumps(
+                {'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
+            wave = type('Wave', (), {'output': out, 'save': lambda _self, name, value:
+                (out / name).write_text(json.dumps(value), encoding='utf-8')})()
+
+            (out / 'pipeline/capability-reservation.json').write_text('{}')
+            # Missing cleanup receipt -> cleanup status UNVERIFIED
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                payload = r14.record_durable_stop(wave, 'ORIGINAL_FAILURE_REASON', stage='execution')
+
+            self.assertEqual(payload['status'], 'STOP')
+            self.assertEqual(payload['reason'], 'ORIGINAL_FAILURE_REASON')
+            self.assertEqual(payload['failureClass'], 'ORIGINAL_FAILURE_REASON')
+            self.assertEqual(payload['cleanupStatus'], 'UNVERIFIED')
+
+    def _setup_capability_wave(self, temporary):
+        base = Path(temporary); authority = base / 'authority'; identity = 'a' * 64
+        initialize(authority, identity, campaign=CAMPAIGN)
+        out = base / 'output'; (out / 'pipeline').mkdir(parents=True); (out / 'baseline').mkdir(parents=True)
+        (out / 'final').mkdir(parents=True)
+        (out / 'baseline/authority-config.local.json').write_text(json.dumps(
+            {'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
+        (out / 'pipeline/native-receipt.json').write_text(json.dumps({
+            'launchAttempts': 1, 'browserLaunches': 1, 'retries': 0, 'browserClosed': True,
+            'processExitAudit': {'status': 'PASS'}
+        }))
+        (out / 'pipeline/native-trace.json').write_text(json.dumps({'authorityRelativePath': 'traces/cap.json'}))
+        (out / 'baseline/browser-identity.json').write_text('{}')
+        wave = type('Wave', (), {'root': base, 'node': 'node', 'output': out, 'save': lambda _self, name, value:
+            (out / name).write_text(json.dumps(value), encoding='utf-8'),
+            'command': lambda *a, **k: None})()
+        return wave, base, out
+
+    def test_runner_classification_capability_pass_authorizes_ab(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, base, _out = self._setup_capability_wave(temporary)
+            with patch('run_ap06_r12_r13_native.validate_trace', return_value={'status': 'NATIVE_CAPABILITY_PASS'}), \
+                 patch('run_ap06_r12_r13_native.verify_frozen_campaign', return_value={'implementationHead': 'h'*40}), \
+                 patch('run_ap06_r12_r13_native.configure_native', return_value=type('N', (), {'environment': lambda *a, **k: ({}, []), 'seal_trace': lambda *a, **k: None})()), \
+                 patch('run_ap06_r12_r13_native.load_native_budget', return_value=None), \
+                 patch('run_ap06_r12_r2.validate_browser_receipt', return_value=None), \
+                 patch('run_ap06_r12_r13_native.run_profiled_pair', return_value={'status': 'R12R14_NATIVE_TRACKED_AGGREGATES_OBSERVED'}) as mock_ab:
+                res = r14.run_capability(wave, base / 'hist')
+                self.assertEqual(res['status'], 'R12R14_NATIVE_TRACKED_AGGREGATES_OBSERVED')
+                mock_ab.assert_called_once()
+
+    def test_runner_classification_capability_inconclusive_publishes_decision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, base, _out = self._setup_capability_wave(temporary)
+            with patch('run_ap06_r12_r13_native.validate_trace', return_value={'status': 'NATIVE_INCONCLUSIVE', 'reason': 'NATIVE_HEAPS_V2_NOT_EMITTED'}), \
+                 patch('run_ap06_r12_r13_native.verify_frozen_campaign', return_value={'implementationHead': 'h'*40}), \
+                 patch('run_ap06_r12_r13_native.configure_native', return_value=type('N', (), {'environment': lambda *a, **k: ({}, []), 'seal_trace': lambda *a, **k: None})()), \
+                 patch('run_ap06_r12_r13_native.load_native_budget', return_value=None), \
+                 patch('run_ap06_r12_r2.validate_browser_receipt', return_value=None), \
+                 patch('run_ap06_r12_r13_native.stop_and_verify_backend_cleanup', return_value={'status': 'PASS'}):
+                res = r14.run_capability(wave, base / 'hist')
+                self.assertEqual(res['status'], 'R12R14_NATIVE_CAPABILITY_INCONCLUSIVE')
+                self.assertEqual(res['reason'], 'NATIVE_HEAPS_V2_NOT_EMITTED')
+                self.assertFalse(res['abAuthorized'])
+
+    def test_runner_classification_capability_stop_raises_contract_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, base, _out = self._setup_capability_wave(temporary)
+            with patch('run_ap06_r12_r13_native.validate_trace', return_value={'status': 'NATIVE_STOP', 'reason': 'NATIVE_ALLOCATOR_STATS_DUPLICATE'}), \
+                 patch('run_ap06_r12_r13_native.verify_frozen_campaign', return_value={'implementationHead': 'h'*40}), \
+                 patch('run_ap06_r12_r13_native.configure_native', return_value=type('N', (), {'environment': lambda *a, **k: ({}, []), 'seal_trace': lambda *a, **k: None})()), \
+                 patch('run_ap06_r12_r13_native.load_native_budget', return_value=None), \
+                 patch('run_ap06_r12_r2.validate_browser_receipt', return_value=None):
+                with self.assertRaises(r14.NativeContractFailure) as ctx:
+                    r14.run_capability(wave, base / 'hist')
+                self.assertEqual(ctx.exception.reason, 'NATIVE_ALLOCATOR_STATS_DUPLICATE')
+
+    def test_runner_classification_unknown_status_raises_value_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, base, _out = self._setup_capability_wave(temporary)
+            with patch('run_ap06_r12_r13_native.validate_trace', return_value={'status': 'UNEXPECTED_STATUS'}), \
+                 patch('run_ap06_r12_r13_native.verify_frozen_campaign', return_value={'implementationHead': 'h'*40}), \
+                 patch('run_ap06_r12_r13_native.configure_native', return_value=type('N', (), {'environment': lambda *a, **k: ({}, []), 'seal_trace': lambda *a, **k: None})()), \
+                 patch('run_ap06_r12_r13_native.load_native_budget', return_value=None), \
+                 patch('run_ap06_r12_r2.validate_browser_receipt', return_value=None):
+                with self.assertRaisesRegex(ValueError, 'NATIVE_CAPABILITY_STATUS_INVALID'):
+                    r14.run_capability(wave, base / 'hist')
+
+    def test_backend_cleanup_failure_blocks_green_inconclusive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary); authority = base / 'authority'; identity = 'a' * 64
+            initialize(authority, identity, campaign=CAMPAIGN)
+            out = base / 'output'; (out / 'pipeline').mkdir(parents=True); (out / 'baseline').mkdir(parents=True)
+            (out / 'final').mkdir(parents=True)
+            (out / 'baseline/authority-config.local.json').write_text(json.dumps(
+                {'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
+            wave = type('Wave', (), {'output': out, 'save': lambda _self, name, value:
+                (out / name).write_text(json.dumps(value), encoding='utf-8')})()
+
+            # When backend cleanup returns UNVERIFIED during inconclusive decision publication, it must raise NativeContractFailure
+            cap = {'status': 'NATIVE_INCONCLUSIVE', 'reason': 'NATIVE_HEAPS_V2_NOT_EMITTED'}
+            with patch('run_ap06_r12_r13_native.stop_and_verify_backend_cleanup', return_value={'status': 'UNVERIFIED', 'reason': 'RECEIPT_MISSING'}):
+                with self.assertRaises(r14.NativeContractFailure) as ctx:
+                    r14.publish_inconclusive_decision(wave, cap)
+                self.assertEqual(ctx.exception.reason, 'BACKEND_CLEANUP_UNVERIFIED')
+
+            # When backend cleanup returns FAIL, it must raise NativeContractFailure
+            with patch('run_ap06_r12_r13_native.stop_and_verify_backend_cleanup', return_value={'status': 'FAIL', 'reason': 'RUNTIME_STILL_EXISTS'}):
+                with self.assertRaises(r14.NativeContractFailure) as ctx:
+                    r14.publish_inconclusive_decision(wave, cap)
+                self.assertEqual(ctx.exception.reason, 'BACKEND_CLEANUP_FAIL')
+
+    def test_dynamic_backend_port_discovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary); authority = base / 'authority'; identity = 'a' * 64
+            initialize(authority, identity, campaign=CAMPAIGN)
+            out = base / 'output'; (out / 'pipeline').mkdir(parents=True); (out / 'baseline').mkdir(parents=True)
+            (out / 'baseline/authority-config.local.json').write_text(json.dumps(
+                {'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
+            # Dynamic port configured
+            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps({
+                'backendOrigin': 'http://127.0.0.1:49999'
+            }), encoding='utf-8')
+            (out / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps({'status': 'PASS'}))
+
+            wave = type('Wave', (), {'output': out, 'save': lambda _self, name, value:
+                (out / name).write_text(json.dumps(value), encoding='utf-8')})()
+
+            probed_ports = []
+            def fake_create_connection(addr, timeout=1):
+                probed_ports.append(addr[1])
+                raise ConnectionRefusedError('Connection refused')
+
+            with patch('socket.create_connection', side_effect=fake_create_connection):
+                res = r14.stop_and_verify_backend_cleanup(wave)
+                self.assertEqual(res['status'], 'PASS')
+                self.assertIn(49999, probed_ports)
+                self.assertNotIn(42187, probed_ports)
+
     def test_completed_statuses_classification(self):
         from run_ap06_r12_r13_native import COMPLETED_STATUSES
         self.assertIn('PASS', COMPLETED_STATUSES)
@@ -257,6 +450,9 @@ class R12R14PreparationTests(unittest.TestCase):
                 (output / 'pipeline/native-trace.json').write_text(json.dumps({
                     'authorityRelativePath': 'r12-r14-native/traces/r12-r14-native-trace-capability.json'
                 }), encoding='utf-8')
+                (output / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps({
+                    'status': 'PASS'
+                }), encoding='utf-8')
 
             wave.command = fake_capability_command
 
@@ -271,6 +467,7 @@ class R12R14PreparationTests(unittest.TestCase):
             self.assertEqual(decision['capabilityChromium'], 1)
             self.assertEqual(decision['measurementChromium'], 0)
             self.assertFalse(decision['abAuthorized'])
+            self.assertEqual(decision['cleanupStatus'], 'PASS')
             self.assertTrue((final / 'decision.json').is_file())
             manifest = verify_publication(authority, identity, 'r12-r14-native-decision')
             self.assertEqual(manifest['campaign'], CAMPAIGN)

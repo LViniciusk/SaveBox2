@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {execFileSync,spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {chromium} from '@playwright/test';
-import {frozenLaunchOptions,validateResolution,resolveBrowserIdentity,AUTOPLAY_ARGS,NATIVE_ARGS,launchWithIdentityLease,finishBrowserIdentity,getAttestedBrowserProof,launchAttestedBrowser,closeBrowserIdentity,closeBrowserWithIdentity} from './ap06-browser-identity.mjs';
+import {frozenLaunchOptions,validateResolution,resolveBrowserIdentity,AUTOPLAY_ARGS,NATIVE_ARGS,launchWithIdentityLease,finishBrowserIdentity,getAttestedBrowserProof,launchAttestedBrowser,closeBrowserIdentity,closeBrowserWithIdentity,parseExactFiletime,createRendererIdentityProof} from './ap06-browser-identity.mjs';
 import {NativeTrace} from './ap06-native-trace.mjs';
 
 const identity={mode:'headless-shell',executablePath:'C:/owned/chrome-headless-shell.exe',executableSha256:'a'.repeat(64),
@@ -294,3 +294,40 @@ test('native profiler rejects missing proof before creating CDP session',async()
   await assert.rejects(trace.start({newBrowserCDPSession:async()=>{cdpRequested=true;throw new Error('unexpected');}}),/AP06_BROWSER_NOT_ATTESTED/);
   assert.equal(cdpRequested,false);
 });
+test('parseExactFiletime parses exact 64-bit uint64 FILETIME strings and rejects non-canonical values',()=>{
+  assert.equal(parseExactFiletime('134368223588270130'), 134368223588270130n);
+  assert.equal(parseExactFiletime('18446744073709551615'), 18446744073709551615n);
+  assert.equal(parseExactFiletime('1'), 1n);
+
+  for(const bad of ['0', '-1', '0134368223588270130', '134368223588270130.0', '1e17', 'NaN', '18446744073709551616', null, undefined, 123, 134368223588270130n, '']){
+    assert.throws(()=>parseExactFiletime(bad), /NATIVE_FILETIME_INVALID/);
+  }
+});
+test('createRendererIdentityProof accepts exact 64-bit FILETIME strings above Number.MAX_SAFE_INTEGER',()=>{
+  const phases = ['baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final'];
+  const baseRecord = {
+    processExitAudit: {
+      status: 'PASS',
+      method: 'retained-win32-process-handles',
+      processes: [{pid: 27900, creationTimeExact: '134368223588270130', roles: ['renderer']}]
+    },
+    processSamples: phases.map(phase => ({phase, processes: [{pid: 27900, type: 'renderer'}]})),
+    handleRelease: {status: 'PASS'}
+  };
+  const proof = createRendererIdentityProof(baseRecord);
+  assert.ok(proof);
+  assert.equal(proof.status, 'PASS');
+  assert.equal(proof.rendererPid, 27900);
+  assert.equal(proof.creationTimeExact, '134368223588270130');
+
+  // Rejects invalid string
+  const badRecord = {
+    ...baseRecord,
+    processExitAudit: {
+      ...baseRecord.processExitAudit,
+      processes: [{pid: 27900, creationTimeExact: '134368223588270130.5', roles: ['renderer']}]
+    }
+  };
+  assert.equal(createRendererIdentityProof(badRecord), null);
+});
+

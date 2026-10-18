@@ -21,6 +21,13 @@ TASK_PATH = 'quality/ap06-r12-r13.md'
 RUNNER_PATH = Path(__file__).resolve()
 
 
+class NativeContractFailure(ValueError):
+    """Explicit contract failure for native execution."""
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
+
+
 def campaign_tag():
     parts = CAMPAIGN.split('-')
     return parts[3].upper() if len(parts) > 3 else 'R13'
@@ -69,11 +76,11 @@ def validate_trace(path, receipt_path, *, synthetic=False):
         private_permissions(path.parent)
     require(path.is_file() and path.stat().st_size <= 512 * 1024 * 1024, 'R12R13_TRACE_SIZE_INVALID')
     receipt = json.loads(receipt_path.read_text(encoding='utf-8-sig'))
-    trace = receipt.get('trace', receipt)
+    trace = dict(receipt.get('trace', receipt))
     if receipt is not trace:
-        for k in ('rendererIdentityProof', 'processExitAudit', 'handleRelease', 'processSamples', 'browserIdentity'):
-            if k in receipt and k not in trace:
-                trace[k] = receipt[k]
+        for k, v in receipt.items():
+            if k not in trace and k != 'trace':
+                trace[k] = v
     digest = sha256(path)
     require(trace.get('bytes') == path.stat().st_size and trace.get('sha256') == digest,
         'R12R13_TRACE_CHECKSUM_INVALID')
@@ -172,14 +179,35 @@ def run_capability(wave, source):
     wave.save('baseline/native-capability.json', capability)
     publish(wave, 'capability-complete', {'evidence/capability-receipt.json': receipt_path,
         'evidence/capability.json': output / 'baseline/native-capability.json'})
-    if capability.get('status') != 'NATIVE_CAPABILITY_PASS':
-        decision = {'status': f'R12{tag}_NATIVE_CAPABILITY_INCONCLUSIVE', 'reason': capability.get('reason', 'NATIVE_TRACE_CONTRACT_INVALID'),
-            'capabilityChromium': 1, 'measurementChromium': 0, 'retries': 0,
-            'abAuthorized': False, 'interpretation': 'No A/B measurement without four correlated renderer heaps_v2 dumps.'}
-        wave.save('final/decision.json', decision)
-        publish(wave, 'decision', {'evidence/decision.json': output / 'final/decision.json'})
-        return decision
-    return run_profiled_pair(wave, source, frozen, native)
+    status = capability.get('status')
+    if status == 'NATIVE_CAPABILITY_PASS':
+        return run_profiled_pair(wave, source, frozen, native)
+    if status == 'NATIVE_INCONCLUSIVE':
+        return publish_inconclusive_decision(wave, capability)
+    if status == 'NATIVE_STOP':
+        raise NativeContractFailure(capability.get('reason', 'NATIVE_TRACE_CONTRACT_INVALID'))
+    raise ValueError('NATIVE_CAPABILITY_STATUS_INVALID')
+
+
+def publish_inconclusive_decision(wave, capability):
+    output = wave.output
+    tag = campaign_tag()
+    cleanup = stop_and_verify_backend_cleanup(wave)
+    if cleanup.get('status') != 'PASS':
+        raise NativeContractFailure(f"BACKEND_CLEANUP_{cleanup.get('status', 'FAILED')}")
+    decision = {
+        'status': f'R12{tag}_NATIVE_CAPABILITY_INCONCLUSIVE',
+        'reason': capability.get('reason', 'NATIVE_TRACE_CONTRACT_INVALID'),
+        'capabilityChromium': 1,
+        'measurementChromium': 0,
+        'retries': 0,
+        'abAuthorized': False,
+        'cleanupStatus': cleanup.get('status'),
+        'interpretation': 'No A/B measurement without four correlated renderer heaps_v2 dumps.',
+    }
+    wave.save('final/decision.json', decision)
+    publish(wave, 'decision', {'evidence/decision.json': output / 'final/decision.json'})
+    return decision
 
 
 def run_profiled_pair(wave, source, frozen, native):
@@ -212,10 +240,14 @@ def run_profiled_pair(wave, source, frozen, native):
             f'evidence/formal/{directory}/aggregate.json': wave.output / 'formal' / directory / 'native-aggregate.json',
             f'evidence/formal/{directory}/receipt.json': receipt})
         results.append({'condition': condition, 'rawSha256': result['rawSha256'], 'native': aggregate})
+    cleanup = stop_and_verify_backend_cleanup(wave)
+    if cleanup.get('status') != 'PASS':
+        raise NativeContractFailure(f"BACKEND_CLEANUP_{cleanup.get('status', 'FAILED')}")
     decision = {'status': f'R12{tag}_NATIVE_TRACKED_AGGREGATES_OBSERVED'
         if all(row['native'].get('status') == 'NATIVE_CAPABILITY_PASS' for row in results)
         else f'R12{tag}_NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT', 'capabilityChromium': 1,
         'measurementChromium': 2, 'retries': 0, 'results': results,
+        'cleanupStatus': cleanup.get('status'),
         'causalAttribution': 'Exploratory and conditional on R12R12; sampled aggregates do not establish total coverage, individual lifetimes, or a leak.'}
     wave.save('final/decision.json', decision)
     publish(wave, 'decision', {'evidence/decision.json': wave.output / 'final/decision.json'})
@@ -474,6 +506,7 @@ def execution_state(output):
 def stop_and_verify_backend_cleanup(wave, supervisor_proc=None):
     output = wave.output
     stop_marker = output / 'pipeline/stop-backend.request'
+    stop_marker.parent.mkdir(parents=True, exist_ok=True)
     stop_marker.touch(exist_ok=True)
 
     if supervisor_proc is not None:
@@ -483,10 +516,25 @@ def stop_and_verify_backend_cleanup(wave, supervisor_proc=None):
             supervisor_proc.kill()
             supervisor_proc.wait(timeout=10)
 
+    port = 42187
+    for cfg_path in (output / 'baseline/backend-runtime.local.json', output / 'pipeline/backend-live.json'):
+        if cfg_path.is_file():
+            try:
+                conf = json.loads(cfg_path.read_text(encoding='utf-8-sig'))
+                origin = conf.get('backendOrigin', '')
+                if origin:
+                    from urllib.parse import urlparse
+                    parsed_port = urlparse(origin).port
+                    if parsed_port:
+                        port = parsed_port
+                        break
+            except Exception:
+                pass
+
     for _ in range(15):
         try:
             import socket, time
-            conn = socket.create_connection(('127.0.0.1', 42187), timeout=1)
+            conn = socket.create_connection(('127.0.0.1', port), timeout=1)
             conn.close()
             time.sleep(0.5)
         except (OSError, ConnectionRefusedError):
@@ -533,6 +581,24 @@ def stop_and_verify_backend_cleanup(wave, supervisor_proc=None):
 
 def record_durable_stop(wave, reason, error=None, stage=None):
     output = wave.output
+    stop_path = output / 'final/STOP.json'
+    readback_path = output / 'final/stop-publication-readback.json'
+
+    # Check if a durable STOP is already recorded; if so, preserve it and reject overwrite/re-execution
+    if stop_path.is_file():
+        try:
+            existing = json.loads(stop_path.read_text(encoding='utf-8-sig'))
+            pub_status = 'PASS'
+            if readback_path.is_file():
+                try:
+                    readback_info = json.loads(readback_path.read_text(encoding='utf-8-sig'))
+                    pub_status = readback_info.get('status', 'PASS')
+                except Exception:
+                    pass
+            return {**existing, 'publicationStatus': pub_status}
+        except Exception:
+            pass
+
     state = execution_state(output)
 
     failure_class = reason
@@ -540,14 +606,25 @@ def record_durable_stop(wave, reason, error=None, stage=None):
     cleanup_status = 'NOT_PERFORMED'
     cleanup_failure_class = None
 
-    cleanup_receipt_path = output / 'pipeline/backend-runtime-cleanup.json'
-    if cleanup_receipt_path.is_file():
+    # Mandatory cleanup on STOP paths (post-reservation, post-launch, publication failure, during A/B)
+    if state['reservationCreated'] or state['browserLaunches'] > 0:
         try:
-            cleanup_data = json.loads(cleanup_receipt_path.read_text(encoding='utf-8-sig'))
-            cleanup_status = cleanup_data.get('status', 'UNVERIFIED')
-            cleanup_failure_class = cleanup_data.get('failureClass')
-        except Exception:
-            cleanup_status = 'UNVERIFIED'
+            cleanup_res = stop_and_verify_backend_cleanup(wave)
+            cleanup_status = cleanup_res.get('status', 'UNVERIFIED')
+            if cleanup_status != 'PASS':
+                cleanup_failure_class = cleanup_res.get('reason')
+        except Exception as exc:
+            cleanup_status = 'FAIL'
+            cleanup_failure_class = type(exc).__name__
+    else:
+        cleanup_receipt_path = output / 'pipeline/backend-runtime-cleanup.json'
+        if cleanup_receipt_path.is_file():
+            try:
+                cleanup_data = json.loads(cleanup_receipt_path.read_text(encoding='utf-8-sig'))
+                cleanup_status = cleanup_data.get('status', 'UNVERIFIED')
+                cleanup_failure_class = cleanup_data.get('failureClass')
+            except Exception:
+                cleanup_status = 'UNVERIFIED'
 
     stop_payload = {
         'status': 'STOP',
@@ -561,29 +638,41 @@ def record_durable_stop(wave, reason, error=None, stage=None):
         'scientificChromium': state['browserLaunches'] if not state['unverifiedConsumption'] else 'UNVERIFIED',
         'cleanupStatus': cleanup_status,
         'cleanupFailureClass': cleanup_failure_class,
-        'publicationStatus': 'PENDING',
     }
 
+    # 1. Save local final/STOP.json
+    wave.save('final/STOP.json', stop_payload)
+    digest = sha256(stop_path)
+
+    # 2. Publish STOP to authority and verify independent readback
+    pub_status = 'PASS'
+    pub_failure = None
     try:
         from run_ap06_r9 import publication_namespace
         ns = publication_namespace(wave)
         pub_name = f"{ns}-stop" if ns else 'stop'
-        wave.save('final/STOP.json', stop_payload)
-        publish(wave, 'stop', {'evidence/STOP.json': output / 'final/STOP.json'})
+        publish(wave, 'stop', {'evidence/STOP.json': stop_path})
         config = json.loads((output / 'baseline/authority-config.local.json').read_text(encoding='utf-8-sig'))
         authority = checked_path(Path(config['AP06_AUTHORITY_ROOT']))
-        verify_publication(authority, config['identity'], pub_name)
-        stop_payload['publicationStatus'] = 'PASS'
-        wave.save('final/STOP.json', stop_payload)
+        manifest = verify_publication(authority, config['identity'], pub_name)
+        stop_entry = next((f for f in manifest.get('files', []) if f.get('path') == 'evidence/STOP.json'), None)
+        if not stop_entry or stop_entry.get('sha256') != digest:
+            raise ValueError('STOP_PUBLICATION_HASH_MISMATCH')
     except Exception as pub_error:
-        stop_payload['publicationStatus'] = 'FAIL'
-        stop_payload['publicationFailure'] = type(pub_error).__name__
-        try:
-            wave.save('final/STOP.json', stop_payload)
-        except Exception:
-            pass
+        pub_status = 'FAIL'
+        pub_failure = type(pub_error).__name__
 
-    return stop_payload
+    # 3. Save publication result in separate readback receipt without modifying final/STOP.json
+    readback_payload = {
+        'status': pub_status,
+        'stopSha256': digest,
+        'independentReadback': pub_status == 'PASS',
+    }
+    if pub_failure:
+        readback_payload['publicationFailure'] = pub_failure
+    wave.save('final/stop-publication-readback.json', readback_payload)
+
+    return {**stop_payload, 'publicationStatus': pub_status}
 
 
 def main():
@@ -637,6 +726,8 @@ def main():
             try:
                 decision_data = json.loads(decision_path.read_text(encoding='utf-8-sig'))
                 if decision_data.get('status') != status:
+                    return 1
+                if 'cleanupStatus' in decision_data and decision_data['cleanupStatus'] != 'PASS':
                     return 1
                 config = json.loads((wave.output / 'baseline/authority-config.local.json').read_text(encoding='utf-8-sig'))
                 authority = checked_path(Path(config['AP06_AUTHORITY_ROOT']))

@@ -284,6 +284,17 @@ export async function closeBrowserIdentity(browser){
   }finally{leases.delete(browser);proofs.delete(browser);}
 }
 
+export function parseExactFiletime(value){
+  if(typeof value!=='string'||! /^[1-9][0-9]*$/.test(value)){
+    throw new Error('NATIVE_FILETIME_INVALID');
+  }
+  const parsed=BigInt(value);
+  if(parsed>((1n<<64n)-1n)){
+    throw new Error('NATIVE_FILETIME_INVALID');
+  }
+  return parsed;
+}
+
 export function createRendererIdentityProof(record,campaign='AP-06-R12-R14-native'){
   if(!record||typeof record!=='object')return null;
   const audit=record.processExitAudit;
@@ -315,7 +326,28 @@ export function createRendererIdentityProof(record,campaign='AP-06-R12-R14-nativ
   if(rendererAudits.length!==1)return null;
   const auditedRenderer=rendererAudits[0];
   if(auditedRenderer.pid!==sampledRendererPid)return null;
-  if(!Number.isSafeInteger(auditedRenderer.creationTime)||auditedRenderer.creationTime<=0)return null;
+  let creationTimeExact;
+  if(typeof auditedRenderer.creationTimeExact==='string'){
+    try{
+      parseExactFiletime(auditedRenderer.creationTimeExact);
+      creationTimeExact=auditedRenderer.creationTimeExact;
+    }catch{
+      return null;
+    }
+  }else if(typeof auditedRenderer.creationTime==='string'){
+    try{
+      parseExactFiletime(auditedRenderer.creationTime);
+      creationTimeExact=auditedRenderer.creationTime;
+    }catch{
+      return null;
+    }
+  }else if(typeof auditedRenderer.creationTime==='number'&&Number.isSafeInteger(auditedRenderer.creationTime)&&auditedRenderer.creationTime>0){
+    creationTimeExact=auditedRenderer.creationTime.toString();
+  }else if(typeof auditedRenderer.creationTime==='bigint'&&auditedRenderer.creationTime>0n&&auditedRenderer.creationTime<=((1n<<64n)-1n)){
+    creationTimeExact=auditedRenderer.creationTime.toString();
+  }else{
+    return null;
+  }
   if(record.handleRelease&&record.handleRelease.status!=='PASS')return null;
   return {
     status:'PASS',
@@ -323,6 +355,7 @@ export function createRendererIdentityProof(record,campaign='AP-06-R12-R14-nativ
     preRegistered:true,
     rendererPid:sampledRendererPid,
     creationTime:auditedRenderer.creationTime,
+    creationTimeExact,
     roles:['renderer'],
     attestationMethod:'retained-win32-process-handles',
     linkedToProfiledProcess:true,

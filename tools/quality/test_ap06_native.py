@@ -94,8 +94,15 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(aggregate_trace(iter(rows),receipt(),detailed=True)['status'],'NATIVE_STOP')
         rows=events();rows[1]['id2']=42
         self.assertEqual(aggregate_trace(iter(rows),receipt(),detailed=True)['status'],'NATIVE_STOP')
+        # Identical duplicate event for same GUID is now cleanly accepted without double-counting
         rows=events();rows.insert(2,copy.deepcopy(rows[1]))
-        self.assertEqual(aggregate_trace(iter(rows),receipt(),detailed=True)['reason'],'NATIVE_DUMP_GUID_DUPLICATE')
+        res_dup = aggregate_trace(iter(rows),receipt(),detailed=True)
+        self.assertEqual(res_dup['status'],'NATIVE_CAPABILITY_PASS')
+        # Conflicting duplicate event produces STOP
+        rows=events();conflict=copy.deepcopy(rows[1])
+        conflict['args']['dumps']['heaps_v2']['allocators']['malloc']['sizes']=[999]
+        rows.insert(2,conflict)
+        self.assertEqual(aggregate_trace(iter(rows),receipt(),detailed=True)['reason'],'NATIVE_HEAP_ALLOCATOR_DUPLICATE')
         side=receipt();side['checkpoints'][1]['dumpGuid']=side['checkpoints'][0]['dumpGuid']
         self.assertEqual(aggregate_trace(iter(events()),side,detailed=True)['reason'],'NATIVE_CHECKPOINT_GUID_DUPLICATE')
         rows=events();rows[0]['pid']=43
@@ -253,4 +260,132 @@ class NativeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'NATIVE_BUDGET_AUTHORITY_INVALID'):
                 load_native_budget(tmp_path, expected, task_sha)
 
+    def test_memory_infra_event_and_guid_contract_scenarios(self):
+        # 1. Single valid event per GUID
+        res1 = aggregate_trace(iter(events()), receipt(), detailed=True)
+        self.assertEqual(res1['status'], 'NATIVE_CAPABILITY_PASS')
+
+        # 2. Two identical events for same GUID
+        rows_dup = events()
+        rows_dup.insert(2, copy.deepcopy(rows_dup[1]))
+        res2 = aggregate_trace(iter(rows_dup), receipt(), detailed=True)
+        self.assertEqual(res2['status'], 'NATIVE_CAPABILITY_PASS')
+        self.assertEqual(res2['checkpoints'][0]['allocators']['malloc']['trackedLiveRequestedBytes'], 100)
+
+        # 3. Complementary fragments (event A has process_totals/allocators, event B has heaps_v2)
+        rows_comp = events()
+        frag_a = copy.deepcopy(rows_comp[1])
+        frag_a['args']['dumps'].pop('heaps_v2')
+        frag_b = copy.deepcopy(rows_comp[1])
+        frag_b['args']['dumps'].pop('allocators')
+        rows_comp[1:2] = [frag_a, frag_b]
+        res3 = aggregate_trace(iter(rows_comp), receipt(), detailed=True)
+        self.assertEqual(res3['status'], 'NATIVE_CAPABILITY_PASS')
+        self.assertEqual(res3['checkpoints'][0]['allocators']['malloc']['trackedLiveRequestedBytes'], 100)
+        self.assertIn('malloc', res3['checkpoints'][0]['allocatorStats'])
+
+        # 4. Contradictory values produce STOP
+        rows_conflict = events()
+        frag_bad = copy.deepcopy(rows_conflict[1])
+        frag_bad['args']['dumps']['allocators']['malloc']['attrs']['size']['value'] = '9999'
+        rows_conflict.insert(2, frag_bad)
+        res4 = aggregate_trace(iter(rows_conflict), receipt(), detailed=True)
+        self.assertEqual(res4['status'], 'NATIVE_STOP')
+        self.assertEqual(res4['reason'], 'NATIVE_ALLOCATOR_STATS_DUPLICATE')
+
+        # 5. Same GUID across distinct processes (GPU / browser emit dump with same GUID)
+        rows_multi_pid = events()
+        gpu_event = {'ph': 'v', 'pid': 77, 'ts': 101, 'id': '0x1', 'cat': ['disabled-by-default-memory-infra'],
+                     'name': 'periodic_interval', 'args': {'dumps': {'allocators': {}}}}
+        rows_multi_pid.insert(2, gpu_event)
+        res5 = aggregate_trace(iter(rows_multi_pid), receipt(), detailed=True)
+        self.assertEqual(res5['status'], 'NATIVE_CAPABILITY_PASS')
+
+        # 6. Periodic interval and explicitly triggered associated with same GUID
+        rows_names = events()
+        rows_names[1]['name'] = 'periodic_interval'
+        res6 = aggregate_trace(iter(rows_names), receipt(), detailed=True)
+        self.assertEqual(res6['status'], 'NATIVE_CAPABILITY_PASS')
+
+        # 7. Event without heaps_v2 produces NATIVE_HEAPS_V2_NOT_EMITTED
+        rows_no_heaps = events()
+        for r in rows_no_heaps[1:]:
+            r['args']['dumps'].pop('heaps_v2')
+        res7 = aggregate_trace(iter(rows_no_heaps), receipt(), detailed=True)
+        self.assertEqual(res7['status'], 'NATIVE_INCONCLUSIVE')
+        self.assertEqual(res7['reason'], 'NATIVE_HEAPS_V2_NOT_EMITTED')
+
+        # 8. Partial heaps_v2 produces NATIVE_HEAPS_V2_INCOMPLETE
+        rows_partial = events()
+        rows_partial[2]['args']['dumps'].pop('heaps_v2')
+        res8 = aggregate_trace(iter(rows_partial), receipt(), detailed=True)
+        self.assertEqual(res8['status'], 'NATIVE_INCONCLUSIVE')
+        self.assertEqual(res8['reason'], 'NATIVE_HEAPS_V2_INCOMPLETE')
+
+        # 9. Conflicting or malformed GUID produces STOP
+        rows_guid_conflict = events()
+        rows_guid_conflict[1]['id2'] = {'global': '0x99'}
+        self.assertEqual(aggregate_trace(iter(rows_guid_conflict), receipt(), detailed=True)['reason'], 'NATIVE_DUMP_GUID_CONFLICT')
+
+        # 10. Limit overflow produces STOP
+        rows_overflow = events()
+        rows_overflow[1]['args']['dumps']['heaps_v2']['maps']['strings'] = [{'id': i, 'string': f's{i}'} for i in range(100001)]
+        self.assertEqual(aggregate_trace(iter(rows_overflow), receipt(), detailed=True)['reason'], 'NATIVE_HEAPS_V2_MAP_LIMIT')
+
+    def test_exact_filetime_uint64_and_negative_matrix(self):
+        side = receipt()
+        side.pop('rendererPid')
+        side['rendererPid'] = 42
+
+        def make_receipt(time_exact='134368223588270130', time_num=134368223588270130, audited_exact=None, audited_time=None):
+            r = receipt()
+            r['rendererIdentityProof'] = {
+                'status': 'PASS', 'campaign': 'AP-06-R12-R14-native', 'preRegistered': True,
+                'rendererPid': 42, 'creationTime': time_num, 'creationTimeExact': time_exact,
+                'roles': ['renderer'], 'attestationMethod': 'retained-win32-process-handles',
+                'linkedToProfiledProcess': True, 'processIdentityCount': 1,
+                'checkpointPhases': ['baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final']
+            }
+            if time_exact is None:
+                r['rendererIdentityProof'].pop('creationTimeExact')
+            r['processExitAudit'] = {
+                'status': 'PASS', 'method': 'retained-win32-process-handles',
+                'reusedPidCount': 0, 'timedOutProcessCount': 0, 'waitFailedProcessCount': 0,
+                'closedProcessCount': 1,
+                'processes': [{'pid': 42, 'creationTime': audited_time if audited_time is not None else time_num,
+                               'creationTimeExact': audited_exact if audited_exact is not None else time_exact,
+                               'roles': ['renderer']}]
+            }
+            if (audited_exact is None and time_exact is None):
+                r['processExitAudit']['processes'][0].pop('creationTimeExact')
+            r['processSamples'] = [{'phase': p, 'processes': [{'pid': 42, 'type': 'renderer'}]} for p in ('baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final')]
+            r['handleRelease'] = {'status': 'PASS', 'processHandles': {'releasedProcessHandles': 1, 'closeFailures': 0}}
+            r['browserIdentity'] = {'before': {'nativeFlagsValidated': True}}
+            return r
+
+        trace_no_metadata = events()[1:]
+
+        # Exact uint64 above 2^53 - 1 PASS
+        res = aggregate_trace(iter(trace_no_metadata), make_receipt('134368223588270130'), detailed=True)
+        self.assertEqual(res['status'], 'NATIVE_CAPABILITY_PASS')
+
+        # Maximum uint64 PASS
+        res_max = aggregate_trace(iter(trace_no_metadata), make_receipt('18446744073709551615'), detailed=True)
+        self.assertEqual(res_max['status'], 'NATIVE_CAPABILITY_PASS')
+
+        # Negative tests: invalid canonical representations
+        for bad_time in ('0', '-1', '134368223588270130.5', '1e17', '0123', '18446744073709551616', 'NaN', 'abc'):
+            r = make_receipt(time_exact=bad_time)
+            self.assertEqual(aggregate_trace(iter(trace_no_metadata), r, detailed=True)['reason'], 'NATIVE_RENDERER_METADATA_MISSING')
+
+        # Mismatch between audited and proof
+        r_mismatch = make_receipt(time_exact='134368223588270130', audited_exact='134368223588270131')
+        self.assertEqual(aggregate_trace(iter(trace_no_metadata), r_mismatch, detailed=True)['reason'], 'NATIVE_RENDERER_METADATA_MISSING')
+
+        # Unreleased handles
+        r_handles = make_receipt()
+        r_handles['handleRelease']['status'] = 'FAIL'
+        self.assertEqual(aggregate_trace(iter(trace_no_metadata), r_handles, detailed=True)['reason'], 'NATIVE_RENDERER_METADATA_MISSING')
+
 if __name__=='__main__':unittest.main()
+

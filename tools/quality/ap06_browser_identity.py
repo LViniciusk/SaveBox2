@@ -113,7 +113,10 @@ def validate_process(identity, observed, pid, parent_pid, required_args, previou
             'AP06_BROWSER_PID_REUSED')
     native_args=allowed[1] if len(allowed)>1 else []
     return dict(status='PASS', browserPid=pid, parentPid=parent_pid, parentCreationTime=parent['creationTime'],
-        processCreationTime=observed['creationTime'], expectedSha256=identity['executableSha256'],
+        parentCreationTimeExact=str(parent['creationTime']),
+        processCreationTime=observed['creationTime'],
+        processCreationTimeExact=str(observed['creationTime']),
+        expectedSha256=identity['executableSha256'],
         observedSha256=observed['executableSha256'], expectedExecutable=identity['executablePath'],
         observedExecutable=observed['executablePath'], chromiumVersion=observed['chromiumVersion'],
         architecture=observed['architecture'], browserMode='headless-shell', launchArgsValidated=True,
@@ -224,7 +227,7 @@ class OwnedProcessAudit:
                     continue
                 require(state == WinProcessApi.WAIT_OBJECT_0, 'AP06_BROWSER_OS_QUERY_FAILED')
             handle, creation, image = self.api.open(pid)
-            entry = {'pid': pid, 'creationTime': creation, 'roles': {role}, 'handle': handle}
+            entry = {'pid': pid, 'creationTime': creation, 'creationTimeExact': str(creation), 'roles': {role}, 'handle': handle}
             if os.path.normcase(os.path.normpath(image)) != self.executable:
                 self.entries.append(entry)
                 require(False, 'AP06_BROWSER_IDENTITY_MISMATCH')
@@ -255,7 +258,7 @@ class OwnedProcessAudit:
             'registeredProcessCount': len(self.entries), 'closedProcessCount': closed, 'timedOutProcessCount': timed_out,
             'waitFailedProcessCount': failed, 'reusedPidCount': self.reused_pid_count, 'deadlineMs': self.DEADLINE_MS,
             'elapsedMs': elapsed, 'closedHashVerified': False,
-            'processes': [{'pid': row['pid'], 'creationTime': row['creationTime'], 'roles': sorted(row['roles'])}
+            'processes': [{'pid': row['pid'], 'creationTime': row['creationTime'], 'creationTimeExact': str(row['creationTime']), 'roles': sorted(row['roles'])}
                 for row in sorted(self.entries, key=lambda item: (item['pid'], item['creationTime']))]}
 
     def close(self):

@@ -25,6 +25,8 @@ scan_staged_changes = runner_engine.scan_staged_changes
 execution_state = runner_engine.execution_state
 stop_and_verify_backend_cleanup = runner_engine.stop_and_verify_backend_cleanup
 record_durable_stop = runner_engine.record_durable_stop
+NativeContractFailure = runner_engine.NativeContractFailure
+publish_inconclusive_decision = runner_engine.publish_inconclusive_decision
 main = runner_engine.main
 
 if __name__ == '__main__':
