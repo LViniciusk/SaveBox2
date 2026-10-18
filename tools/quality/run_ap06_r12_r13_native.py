@@ -9,11 +9,11 @@ import subprocess
 import sys
 import tempfile
 from ap06_authorities import checked_path, private_permissions, sha256, verify_publication
-from ap06_native import aggregate_trace, trace_events
+from ap06_native import PHASES, aggregate_trace, trace_events
 from prepare_ap06_r12_r13 import NATIVE_BUDGET, OUTPUT, CAMPAIGN, prepare, verify_historical_factorial
 from run_readiness_wave1 import Wave, WaveFailure
 from run_ap06_r9 import (freeze_implementation, publish, validate_freeze_readiness,
-    verify_freeze)
+    verify_freeze, CRYPTO)
 from ap06_freeze import (NATIVE_FILES, load_native_budget, native_source_files,
     validate_native_build_authority, verify_freeze_completion)
 
@@ -189,6 +189,57 @@ def run_capability(wave, source):
     raise ValueError('NATIVE_CAPABILITY_STATUS_INVALID')
 
 
+def classify_native_aggregate(aggregate):
+    if not isinstance(aggregate, dict):
+        raise NativeContractFailure('NATIVE_AGGREGATE_INVALID')
+    status = aggregate.get('status')
+    if status == 'NATIVE_CAPABILITY_PASS':
+        return 'PASS'
+    if status == 'NATIVE_INCONCLUSIVE':
+        return 'INCONCLUSIVE'
+    if status == 'NATIVE_STOP':
+        reason = aggregate.get('reason')
+        raise NativeContractFailure(reason if isinstance(reason, str) and
+            re.fullmatch(r'[A-Z][A-Z0-9_:]+', reason) else 'NATIVE_TRACE_CONTRACT_INVALID')
+    raise NativeContractFailure('NATIVE_AGGREGATE_STATUS_INVALID')
+
+
+def expected_decision_launches(decision):
+    if not isinstance(decision, dict):
+        raise NativeContractFailure('NATIVE_DECISION_INVALID')
+    tag = campaign_tag()
+    status = decision.get('status')
+    rows = decision.get('results', [])
+    if status == f'R12{tag}_NATIVE_CAPABILITY_INCONCLUSIVE':
+        if decision.get('abAuthorized') is not False or rows != []:
+            raise NativeContractFailure('NATIVE_DECISION_RESULTS_INVALID')
+        conditions = []
+    elif status == f'R12{tag}_NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT':
+        if decision.get('abAuthorized') is not False or not isinstance(rows, list) or len(rows) not in (1, 2):
+            raise NativeContractFailure('NATIVE_DECISION_RESULTS_INVALID')
+        conditions = ['r12r2.0', 'r12r2.2'][:len(rows)]
+        aggregate_statuses = ['NATIVE_INCONCLUSIVE'] if len(rows) == 1 else [
+            'NATIVE_CAPABILITY_PASS', 'NATIVE_INCONCLUSIVE']
+    elif status == f'R12{tag}_NATIVE_TRACKED_AGGREGATES_OBSERVED':
+        if decision.get('abAuthorized') is not True or not isinstance(rows, list) or len(rows) != 2:
+            raise NativeContractFailure('NATIVE_DECISION_RESULTS_INVALID')
+        conditions = ['r12r2.0', 'r12r2.2']
+        aggregate_statuses = ['NATIVE_CAPABILITY_PASS', 'NATIVE_CAPABILITY_PASS']
+    else:
+        raise NativeContractFailure('NATIVE_DECISION_STATUS_INVALID')
+
+    if conditions:
+        for row, condition, aggregate_status in zip(rows, conditions, aggregate_statuses):
+            if (not isinstance(row, dict) or row.get('condition') != condition or
+                    not isinstance(row.get('native'), dict) or
+                    row['native'].get('status') != aggregate_status):
+                raise NativeContractFailure('NATIVE_DECISION_RESULTS_INVALID')
+    elif isinstance(rows, list) and rows:
+        raise NativeContractFailure('NATIVE_DECISION_RESULTS_INVALID')
+    return {'capabilityChromium': 1, 'measurementChromium': len(conditions),
+        'retries': 0, 'total': 1 + len(conditions), 'measurementConditions': conditions}
+
+
 def _decision_consumption(state):
     capability = state.get('capabilityChromium', 0) if state.get('capabilityVerified', True) else 'UNVERIFIED'
     measurement = state.get('measurementChromium', 0) if state.get('measurementVerified', True) else 'UNVERIFIED'
@@ -213,6 +264,7 @@ def publish_inconclusive_decision(wave, capability):
         'cleanupStatus': cleanup.get('status'),
         'interpretation': 'No A/B measurement without four correlated renderer heaps_v2 dumps.',
     }
+    validate_decision_consumption(output, decision)
     wave.save('final/decision.json', decision)
     publish(wave, 'decision', {'evidence/decision.json': output / 'final/decision.json'})
     return decision
@@ -236,6 +288,7 @@ def publish_coverage_decision(wave, results, reason=None):
         'cleanupStatus': cleanup.get('status'),
         'causalAttribution': 'Exploratory and conditional on R12R12; sampled aggregates do not establish total coverage, individual lifetimes, or a leak.',
     }
+    validate_decision_consumption(output, decision)
     wave.save('final/decision.json', decision)
     publish(wave, 'decision', {'evidence/decision.json': output / 'final/decision.json'})
     return decision
@@ -266,15 +319,14 @@ def run_profiled_pair(wave, source, frozen, native):
         config = json.loads((wave.output / 'baseline/authority-config.local.json').read_text(encoding='utf-8'))
         trace_path = checked_path(Path(config['AP06_AUTHORITY_ROOT']) / registration['authorityRelativePath'])
         aggregate = validate_trace(trace_path, receipt)
-        results.append({'condition': condition, 'rawSha256': result['rawSha256'], 'native': aggregate})
+        classification = classify_native_aggregate(aggregate)
+        results.append({'condition': condition, 'rawSha256': result['rawSha256'],
+            'rawPath': result['rawPath'], 'native': aggregate})
         wave.save(f'formal/{directory}/native-aggregate.json', aggregate)
         publish(wave, 'aggregate-' + directory[:2], {
             f'evidence/formal/{directory}/aggregate.json': wave.output / 'formal' / directory / 'native-aggregate.json',
             f'evidence/formal/{directory}/receipt.json': receipt})
-        status = aggregate.get('status')
-        if status == 'NATIVE_STOP':
-            raise NativeContractFailure(aggregate.get('reason', 'NATIVE_TRACE_CONTRACT_INVALID'))
-        if status != 'NATIVE_CAPABILITY_PASS':
+        if classification == 'INCONCLUSIVE':
             return publish_coverage_decision(wave, results, aggregate.get('reason'))
     cleanup = stop_and_verify_backend_cleanup(wave)
     if cleanup.get('status') != 'PASS':
@@ -285,6 +337,7 @@ def run_profiled_pair(wave, source, frozen, native):
         'retries': retries, 'abAuthorized': True, 'results': results,
         'cleanupStatus': cleanup.get('status'),
         'causalAttribution': 'Exploratory and conditional on R12R12; sampled aggregates do not establish total coverage, individual lifetimes, or a leak.'}
+    validate_decision_consumption(wave.output, decision)
     wave.save('final/decision.json', decision)
     publish(wave, 'decision', {'evidence/decision.json': wave.output / 'final/decision.json'})
     return decision
@@ -755,7 +808,7 @@ def stop_and_verify_backend_cleanup(wave, supervisor_proc=None):
 def execution_state(output):
     reservation = output / 'pipeline/capability-reservation.json'
     cap_receipt = output / 'pipeline/native-receipt.json'
-
+    ledger_path = output / 'pipeline/launch-ledger.json'
     state = {
         'reservationCreated': reservation.is_file(),
         'launchAttempts': 0,
@@ -766,44 +819,204 @@ def execution_state(output):
         'unverifiedConsumption': False,
         'capabilityVerified': True,
         'measurementVerified': True,
+        'ledgerPresent': ledger_path.is_file(),
+        'measurementConditions': [],
+        'measurementDirectories': [],
+        'measurementRawSha256': {},
     }
 
-    if reservation.is_file():
-        cap_data = _decode_json_object(cap_receipt) if cap_receipt.is_file() else None
-        attempts = cap_data.get('launchAttempts') if cap_data else None
-        launches = cap_data.get('browserLaunches') if cap_data else None
-        retries = cap_data.get('retries') if cap_data else None
-        if (cap_data is None or type(attempts) is not int or type(launches) is not int or
-                type(retries) is not int or attempts < 1 or launches < 0 or launches > attempts or retries < 0):
-            state['unverifiedConsumption'] = True
+    def unverified(*, capability=False, measurement=False):
+        state['unverifiedConsumption'] = True
+        if capability:
             state['capabilityVerified'] = False
+        if measurement:
+            state['measurementVerified'] = False
+
+    def valid_trace_receipt(receipt):
+        trace = receipt.get('trace', receipt) if isinstance(receipt, dict) else None
+        checkpoints = trace.get('checkpoints') if isinstance(trace, dict) else None
+        return (isinstance(trace, dict) and trace.get('tracingStarted') is True and
+            trace.get('memoryInfraCategoryAvailable') is True and
+            trace.get('activatedBeforeWorkload') is True and trace.get('complete') is True and
+            trace.get('streamEof') is True and trace.get('dataLossOccurred') is False and
+            trace.get('traceFormat') == 'json' and type(trace.get('rendererPid')) is int and
+            trace['rendererPid'] > 0 and isinstance(trace.get('sha256'), str) and
+            re.fullmatch(r'[0-9a-f]{64}', trace['sha256']) is not None and
+            type(trace.get('bytes')) is int and trace['bytes'] > 0 and
+            isinstance(checkpoints, list) and len(checkpoints) == len(PHASES) and
+            [item.get('phase') if isinstance(item, dict) else None for item in checkpoints] == list(PHASES) and
+            all(isinstance(item, dict) and item.get('success') is True and
+                isinstance(item.get('dumpGuid'), str) for item in checkpoints) and
+            len({item['dumpGuid'].lower() for item in checkpoints}) == len(PHASES))
+
+    reservation_data = _decode_json_object(reservation) if reservation.is_file() else None
+    receipt_data = _decode_json_object(cap_receipt) if cap_receipt.is_file() else None
+    if reservation.is_file():
+        if (reservation_data is None or set(reservation_data) !=
+                {'campaign', 'maximum', 'retries', 'implementationHead'} or
+                reservation_data.get('campaign') != CAMPAIGN or
+                type(reservation_data.get('maximum')) is not int or reservation_data['maximum'] != 1 or
+                type(reservation_data.get('retries')) is not int or reservation_data['retries'] != 0 or
+                not isinstance(reservation_data.get('implementationHead'), str) or
+                not re.fullmatch(r'[0-9a-f]{40}', reservation_data['implementationHead'])):
+            unverified(capability=True)
+    elif receipt_data is not None:
+        unverified(capability=True)
+
+    if reservation.is_file() and receipt_data is None:
+        unverified(capability=True)
+        state['launchAttempts'] += 1
+    elif receipt_data is not None:
+        attempts = receipt_data.get('launchAttempts')
+        launches = receipt_data.get('browserLaunches')
+        retries = receipt_data.get('retries')
+        if any(type(value) is not int or value < 0 for value in (attempts, launches, retries)):
+            unverified(capability=True)
             state['launchAttempts'] += 1
         else:
             state['launchAttempts'] += attempts
             state['browserLaunches'] += launches
             state['retries'] += retries
             state['capabilityChromium'] = launches
+            if launches > attempts:
+                unverified(capability=True)
+        if (receipt_data.get('status') != 'CAPTURED' or receipt_data.get('browserClosed') is not True or
+                not isinstance(receipt_data.get('processExitAudit'), dict) or
+                receipt_data['processExitAudit'].get('status') != 'PASS' or
+                not isinstance(receipt_data.get('handleRelease'), dict) or
+                receipt_data['handleRelease'].get('status') != 'PASS' or
+                not valid_trace_receipt(receipt_data)):
+            unverified(capability=True)
 
-    for directory in ('05-r12r2.0', '06-r12r2.2'):
-        m_receipt = output / 'formal' / directory / 'native-receipt.json'
-        if not m_receipt.is_file():
-            continue
-        m_data = _decode_json_object(m_receipt)
-        launches = m_data.get('browserLaunches') if m_data else None
-        attempts = m_data.get('launchAttempts') if m_data else None
-        retries = m_data.get('retries') if m_data else None
-        if (m_data is None or type(launches) is not int or type(attempts) is not int or
-                type(retries) is not int or launches < 0 or attempts < 1 or launches > attempts or retries < 0):
-            state['unverifiedConsumption'] = True
-            state['measurementVerified'] = False
-            state['launchAttempts'] += 1
-        else:
-            state['launchAttempts'] += attempts
-            state['browserLaunches'] += launches
-            state['retries'] += retries
-            state['measurementChromium'] += launches
+    directories = {'05-r12r2.0': 'r12r2.0', '06-r12r2.2': 'r12r2.2'}
+    reverse_directories = {condition: directory for directory, condition in directories.items()}
+    formal_root = output / 'formal'
+    actual_directories = []
+    if formal_root.is_dir():
+        try:
+            for child in formal_root.iterdir():
+                if not child.is_dir():
+                    unverified(measurement=True)
+                    continue
+                condition = directories.get(child.name)
+                if condition is None:
+                    unverified(measurement=True)
+                else:
+                    actual_directories.append(condition)
+        except OSError:
+            unverified(measurement=True)
+    state['measurementDirectories'] = sorted(actual_directories,
+        key=lambda condition: ('r12r2.0', 'r12r2.2').index(condition))
+
+    ledger = None
+    if ledger_path.is_file():
+        try:
+            ledger = json.loads(ledger_path.read_text(encoding='utf-8-sig'))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            unverified(measurement=True)
+    if ledger is not None and not isinstance(ledger, list):
+        unverified(measurement=True)
+        ledger = None
+    if ledger is None and state['measurementDirectories']:
+        unverified(measurement=True)
+
+    ledger_conditions = []
+    if ledger is not None:
+        for entry in ledger:
+            if not isinstance(entry, dict):
+                unverified(measurement=True)
+                continue
+            condition = entry.get('condition')
+            if condition not in ('r12r2.0', 'r12r2.2'):
+                unverified(measurement=True)
+                continue
+            lane_index = ('r12r2.0', 'r12r2.2').index(condition)
+            ledger_conditions.append(condition)
+            if condition in ledger_conditions[:-1] or lane_index != len(ledger_conditions) - 1:
+                unverified(measurement=True)
+            directory = output / 'formal' / reverse_directories[condition]
+            receipt_path = directory / 'native-receipt.json'
+            raw_path = directory / f'{CRYPTO}.raw.json'
+            reserved = entry.get('reservedAttempts')
+            entry_attempts, entry_launches = entry.get('launchAttempts'), entry.get('browserLaunches')
+            entry_digest = entry.get('rawSha256')
+            if (entry.get('stage') != 'formal' or type(reserved) is not int or reserved != 1 or
+                    type(entry_attempts) is not int or entry_attempts < 0 or
+                    type(entry_launches) is not int or entry_launches < 0 or
+                    not isinstance(entry_digest, str) or not re.fullmatch(r'[0-9a-f]{64}', entry_digest)):
+                unverified(measurement=True)
+
+            raw = _decode_json_object(raw_path) if raw_path.is_file() else None
+            raw_counts = tuple(raw.get(key) for key in ('launchAttempts', 'browserLaunches', 'retries')) if raw else ()
+            raw_valid = (raw is not None and raw.get('condition') == condition and raw.get('stage') == 'formal' and
+                all(type(value) is int and value >= 0 for value in raw_counts) and
+                raw_counts[0] == 1 and raw_counts[1] == 1 and raw_counts[1] <= raw_counts[0] and
+                isinstance(raw.get('runs'), list) and len(raw['runs']) == 1)
+            if raw_valid:
+                state['launchAttempts'] += raw_counts[0]
+                state['browserLaunches'] += raw_counts[1]
+                state['retries'] += raw_counts[2]
+                digest = sha256(raw_path)
+                state['measurementRawSha256'][condition] = digest
+                if (entry_attempts != raw_counts[0] or entry_launches != raw_counts[1] or
+                        entry_digest != digest):
+                    unverified(measurement=True)
+            else:
+                unverified(measurement=True)
+                if type(entry_attempts) is int and entry_attempts >= 0:
+                    state['launchAttempts'] += entry_attempts
+                elif type(reserved) is int and reserved > 0:
+                    state['launchAttempts'] += reserved
+                if type(entry_launches) is int and entry_launches >= 0:
+                    state['browserLaunches'] += entry_launches
+
+            receipt = _decode_json_object(receipt_path) if receipt_path.is_file() else None
+            if not valid_trace_receipt(receipt):
+                unverified(measurement=True)
+
+        if ledger_conditions != state['measurementDirectories']:
+            unverified(measurement=True)
+    elif ledger_path.is_file():
+        unverified(measurement=True)
+    elif formal_root.is_dir():
+        try:
+            if any(formal_root.iterdir()):
+                unverified(measurement=True)
+        except OSError:
+            unverified(measurement=True)
+    state['measurementConditions'] = ledger_conditions
+    state['measurementChromium'] = state['browserLaunches'] - state['capabilityChromium']
 
     return state
+
+
+def validate_decision_consumption(output, decision):
+    expected = expected_decision_launches(decision)
+    state = execution_state(output)
+    if (state['unverifiedConsumption'] or not state['capabilityVerified'] or
+            not state['measurementVerified'] or not state['reservationCreated'] or
+            expected['measurementConditions'] and not state['ledgerPresent']):
+        raise NativeContractFailure('NATIVE_CONSUMPTION_UNVERIFIED')
+    if (state['measurementConditions'] != expected['measurementConditions'] or
+            state['measurementDirectories'] != expected['measurementConditions']):
+        raise NativeContractFailure('NATIVE_CONSUMPTION_MISMATCH')
+
+    for row, condition in zip(decision.get('results', []), expected['measurementConditions']):
+        directory = {'r12r2.0': '05-r12r2.0', 'r12r2.2': '06-r12r2.2'}[condition]
+        if (row.get('rawPath') != f'formal/{directory}/{CRYPTO}.raw.json' or
+                row.get('rawSha256') != state['measurementRawSha256'].get(condition)):
+            raise NativeContractFailure('NATIVE_CONSUMPTION_MISMATCH')
+
+    for field in ('capabilityChromium', 'measurementChromium', 'retries'):
+        actual = state[field]
+        declared = decision.get(field)
+        if (type(actual) is not int or type(declared) is not int or
+                actual != declared or actual != expected[field]):
+            raise NativeContractFailure('NATIVE_CONSUMPTION_MISMATCH')
+    if (state['launchAttempts'] != expected['total'] or
+            state['browserLaunches'] != expected['total'] or state['retries'] != 0):
+        raise NativeContractFailure('NATIVE_LAUNCH_ACCOUNTING_INVALID')
+    return True
 
 
 def record_durable_stop(wave, reason, error=None, stage=None):
@@ -902,6 +1115,22 @@ def record_durable_stop(wave, reason, error=None, stage=None):
     return {**stop_payload, 'publicationStatus': pub_status}
 
 
+def _record_decision_validation_incident(wave, reason):
+    decision_path = wave.output / 'final/decision.json'
+    incident_path = wave.output / 'final/decision-validation-incident.json'
+    if incident_path.exists():
+        return
+    safe_reason = reason if isinstance(reason, str) and re.fullmatch(r'[A-Z][A-Z0-9_:]+', reason) else \
+        'NATIVE_CONSUMPTION_UNVERIFIED'
+    try:
+        wave.save('final/decision-validation-incident.json', {
+            'status': 'STOP', 'reason': safe_reason,
+            'decisionSha256': sha256(decision_path) if decision_path.is_file() else None,
+        })
+    except Exception:
+        pass
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_mutually_exclusive_group(required=True)
@@ -953,6 +1182,11 @@ def main():
             try:
                 decision_data = json.loads(decision_path.read_text(encoding='utf-8-sig'))
                 if decision_data.get('status') != status:
+                    return 1
+                try:
+                    validate_decision_consumption(wave.output, decision_data)
+                except NativeContractFailure as error:
+                    _record_decision_validation_incident(wave, error.reason)
                     return 1
                 if 'cleanupStatus' in decision_data and decision_data['cleanupStatus'] != 'PASS':
                     return 1

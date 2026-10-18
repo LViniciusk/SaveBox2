@@ -9,7 +9,7 @@ from ap06_freeze import validate_test_receipt
 from prepare_ap06_r12_r13 import CAMPAIGN, NATIVE_BUDGET, verify_all_publications_once
 import run_ap06_r12_r13_native as r13
 from run_ap06_r12_r13_native import validate_budget
-from run_ap06_r9 import validate_freeze_preflight
+from run_ap06_r9 import CRYPTO, validate_freeze_preflight
 import run_ap06_r12_r2_native as native
 
 
@@ -87,6 +87,7 @@ class R12R13PreparationTests(unittest.TestCase):
             manifest = verify_publication(authority, identity, 'r12-r13-native-trace-capability')
             self.assertEqual(manifest['campaign'], CAMPAIGN)
 
+    @patch.object(r13, 'CAMPAIGN', CAMPAIGN)
     def test_execution_state_accounting(self):
         with tempfile.TemporaryDirectory() as temporary:
             out = Path(temporary)
@@ -107,8 +108,19 @@ class R12R13PreparationTests(unittest.TestCase):
             self.assertTrue(s1['unverifiedConsumption'])
 
             # Receipt present
+            (pipeline / 'capability-reservation.json').write_text(json.dumps({
+                'campaign': CAMPAIGN, 'maximum': 1, 'retries': 0, 'implementationHead': 'a' * 40
+            }))
             (pipeline / 'native-receipt.json').write_text(json.dumps({
-                'launchAttempts': 1, 'browserLaunches': 1, 'retries': 0
+                'status': 'CAPTURED', 'launchAttempts': 1, 'browserLaunches': 1, 'retries': 0,
+                'browserClosed': True, 'processExitAudit': {'status': 'PASS'},
+                'handleRelease': {'status': 'PASS'},
+                'trace': {'tracingStarted': True, 'memoryInfraCategoryAvailable': True,
+                    'activatedBeforeWorkload': True, 'complete': True, 'streamEof': True,
+                    'dataLossOccurred': False, 'traceFormat': 'json', 'rendererPid': 42,
+                    'sha256': 'b' * 64, 'bytes': 256,
+                    'checkpoints': [{'phase': phase, 'success': True, 'dumpGuid': hex(i + 1)}
+                        for i, phase in enumerate(('baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final'))]}
             }))
             s2 = r13.execution_state(out)
             self.assertEqual(s2['launchAttempts'], 1)
@@ -116,12 +128,26 @@ class R12R13PreparationTests(unittest.TestCase):
             self.assertEqual(s2['capabilityChromium'], 1)
             self.assertFalse(s2['unverifiedConsumption'])
 
-            # Add formal measurements
-            for d in ('05-r12r2.0', '06-r12r2.2'):
-                mdir = formal / d; mdir.mkdir()
-                (mdir / 'native-receipt.json').write_text(json.dumps({
-                    'launchAttempts': 1, 'browserLaunches': 1, 'retries': 0, 'status': 'CAPTURED'
-                }))
+            # Ledger and independent raw/trace receipts prove each formal launch.
+            ledger = []
+            for index, (condition, directory) in enumerate((('r12r2.0', '05-r12r2.0'),
+                    ('r12r2.2', '06-r12r2.2'))):
+                mdir = formal / directory; mdir.mkdir()
+                raw = {'condition': condition, 'stage': 'formal', 'launchAttempts': 1,
+                    'browserLaunches': 1, 'retries': 0, 'runs': [{}]}
+                raw_path = mdir / f'{CRYPTO}.raw.json'
+                raw_path.write_text(json.dumps(raw))
+                (mdir / 'native-receipt.json').write_text(json.dumps({'trace': {
+                    'tracingStarted': True, 'memoryInfraCategoryAvailable': True,
+                    'activatedBeforeWorkload': True, 'complete': True, 'streamEof': True,
+                    'dataLossOccurred': False, 'traceFormat': 'json', 'rendererPid': 42,
+                    'sha256': 'b' * 64, 'bytes': 256,
+                    'checkpoints': [{'phase': phase, 'success': True, 'dumpGuid': hex(i + 1)}
+                        for i, phase in enumerate(('baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final'))]
+                }}))
+                ledger.append({'condition': condition, 'stage': 'formal', 'reservedAttempts': 1,
+                    'launchAttempts': 1, 'browserLaunches': 1, 'rawSha256': sha256(raw_path)})
+            (pipeline / 'launch-ledger.json').write_text(json.dumps(ledger))
             s3 = r13.execution_state(out)
             self.assertEqual(s3['launchAttempts'], 3)
             self.assertEqual(s3['browserLaunches'], 3)

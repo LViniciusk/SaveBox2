@@ -251,3 +251,13 @@ O relatório `docs/qualidade/ap06-r12-r14.md` é preservado byte a byte como reg
 - `../../frontend/tools/ap06-native-integration.test.mjs`
 
 Nenhum byte do relatório histórico, do freeze, dos raws, das decisões ou dos STOPs foi alterado por esta errata.
+
+## 11. Fechamento do Contrato Final do Runner
+
+No HEAD de referência `f68e496227c9afd464d2156031c4e66abcbb875d`, a auditoria encontrou dois contratos pendentes. O runner agora classifica agregados A/B de forma exaustiva antes de salvar ou publicar: apenas `NATIVE_CAPABILITY_PASS` e `NATIVE_INCONCLUSIVE` são aceitos; `NATIVE_STOP`, status desconhecido e estrutura inválida encerram em STOP sem iniciar outra medição.
+
+O gate de decisão aceita somente os três estados terminais da campanha, confere ordem e condição das lanes e cruza a reserva/receipt da capability, ledger, raw counters/hashes e receipts do trace. Ele roda antes de cada publicação terminal e novamente em `main()`. Uma falha no gate final retorna exit 1, grava incidente separado e preserva os bytes locais e publicados da decisão.
+
+Os testes de regressão reproduziram status desconhecido e ausência do gate como RED antes da implementação; ficaram GREEN depois. Validação desta rodada: `test_ap06_r12_r14.py` 40/40, `test_ap06_r12_r13.py` 9/9, native/freeze 24/24, Node AP-06 identity/native/integration 21/21, `tsc --noEmit` sem erros e Angular build concluído com warnings de budget. Gitleaks v8.30.1 encontrou zero achados nos quatro arquivos alterados. O gate também aceitou a decisão R14 preservada em modo somente leitura, com 1 capability, 0 A/B e 0 retries. Os jobs C++ e os três workflows no SHA final estão registrados na descrição do PR #39.
+
+Antes/depois desta rodada, a verificação somente leitura confirmou as publicações R14 (9 manifests, 709 entradas) e R13 (6 manifests, 700 entradas). Permanecem idênticos os hashes da decisão R14 (`d078c297e752f6e39757dc3bb9c59cd7eb0d9d35acbade3fbf3e3b38c069aa81`) e do STOP R13 (`97081f17bc48ba55914f61d4a8ce98b7040a58dad1421caae11f0b524ffd04d5`). Nenhum Chromium foi consumido e nenhum resultado científico foi reclassificado.
