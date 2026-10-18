@@ -57,10 +57,8 @@ def build_experimental():
 def verify_experimental_build(fresh=False):
     build = OUTPUT/'tooling/backend-build'
     commands = json.loads((build/'compile_commands.json').read_text())
-    for target,experimental in [('nanika_ap06_local_server',True),('savebox_server',False),('nanika_ap06_tests',True),('savebox_tests',False)]:
-        rows = [row for row in commands if f'CMakeFiles/{target}.dir/' in row['command'].replace('\\','/')]
-        if not rows or any(('NANIKA_AP06_LOCAL_TEST_SERVER=1' in row['command']) != experimental for row in rows):
-            raise RuntimeError('AP06_COMPILATION_SCOPE_INVALID')
+    from ap06_freeze import validate_compile_scope
+    validate_compile_scope(commands)
     binary = build/'nanika_ap06_local_server.exe'
     version = subprocess.check_output([str(binary),'--version'],text=True).strip()
     if version != 'Nanika AP06 local laboratory R10-R3': raise RuntimeError('AP06_BINARY_VERSION_INVALID')

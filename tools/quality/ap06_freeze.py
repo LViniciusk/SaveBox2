@@ -99,6 +99,15 @@ def native_source_files(wave):
     return {name: sha256(regular_file(wave.root/name, wave.root)) for name in names}
 
 
+def validate_compile_scope(commands):
+    for target,experimental in (('nanika_ap06_local_server',True),('nanika_ap06_tests',True),
+            ('savebox_server',False),('savebox_tests',False),('nanika_e2e_fixture',False)):
+        rows=[row for row in commands if f'CMakeFiles/{target}.dir/' in row['command'].replace('\\','/')]
+        # #ifdef enables the bypass even for an unvalued definition or =0.
+        if not rows or any(('NANIKA_AP06_LOCAL_TEST_SERVER' in row['command'])!=experimental for row in rows):
+            raise ValueError('AP06_NATIVE_COMPILATION_SCOPE_INVALID')
+
+
 def validate_native_build_authority(wave):
     """A missing header requires a separately published build, never a provenance string."""
     with freeze_stage('native-authority'):
@@ -115,12 +124,7 @@ def validate_native_build_authority(wave):
         sources = native_source_files(wave)
         if receipt.get('sourceFiles') != sources:
             raise ValueError('AP06_NATIVE_BUILD_SOURCE_MISMATCH')
-        commands = read(build/'compile_commands.json')
-        for target, experimental in (('nanika_ap06_local_server', True), ('nanika_ap06_tests', True),
-                ('savebox_server', False), ('savebox_tests', False), ('nanika_e2e_fixture', False)):
-            rows = [row for row in commands if f'CMakeFiles/{target}.dir/' in row['command'].replace('\\', '/')]
-            if not rows or any(('NANIKA_AP06_LOCAL_TEST_SERVER=1' in row['command']) != experimental for row in rows):
-                raise ValueError('AP06_NATIVE_COMPILATION_SCOPE_INVALID')
+        validate_compile_scope(read(build/'compile_commands.json'))
         header = wave.root/'backend/include/crow_all.h'
         if header.exists() or header.is_symlink():
             if sha256(regular_file(header, wave.root)) != backend['crowHeaderSha256']:

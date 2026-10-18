@@ -221,6 +221,7 @@ class ProductTests(unittest.TestCase):
                 {'command':'g++ CMakeFiles/savebox_server.dir/main.cpp'},
                 {'command':'g++ CMakeFiles/nanika_ap06_tests.dir/test.cpp -DNANIKA_AP06_LOCAL_TEST_SERVER=1'},
                 {'command':'g++ CMakeFiles/savebox_tests.dir/test.cpp'},
+                {'command':'g++ CMakeFiles/nanika_e2e_fixture.dir/fixture.cpp'},
             ]))
             prior={'status':'PASS','binarySha256':factorial.sha256(build/'nanika_ap06_local_server.exe'),
                 'compileCommandsSha256':factorial.sha256(build/'compile_commands.json'),

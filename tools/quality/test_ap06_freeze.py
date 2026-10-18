@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import ap06_authorities as authority
 from ap06_freeze import (FreezeFailure, NATIVE_FILES, native_source_files,
-    validate_native_build_authority, verify_freeze_completion)
+    validate_native_build_authority, verify_freeze_completion, validate_compile_scope)
 import run_ap06_r9 as freezer
 
 
@@ -184,6 +184,14 @@ class FreezePipelineTests(unittest.TestCase):
         self.reuse['sourceFiles']['backend/src/server.cpp'] = '0'*64
         self.save('baseline/native-binary-reuse.json', self.reuse)
         with self.assertRaises(FreezeFailure): validate_native_build_authority(self.wave)
+
+    def test_zero_and_unvalued_macro_definitions_are_rejected_for_production(self):
+        commands=json.loads((self.output/'tooling/backend-build/compile_commands.json').read_text())
+        validate_compile_scope(commands)
+        for flag in (' -DNANIKA_AP06_LOCAL_TEST_SERVER=0',' -DNANIKA_AP06_LOCAL_TEST_SERVER'):
+            invalid=copy.deepcopy(commands)
+            next(row for row in invalid if 'CMakeFiles/savebox_server.dir/' in row['command'])['command']+=flag
+            with self.assertRaisesRegex(ValueError,'COMPILATION_SCOPE_INVALID'):validate_compile_scope(invalid)
 
     def test_app_worker_corpus_changes_or_incomplete_preflight_block_freeze(self):
         self.materialize_preflight()
