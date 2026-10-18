@@ -1,4 +1,5 @@
 import {createRequire} from 'node:module';
+import {isDeepStrictEqual} from 'node:util';
 import {createHash} from 'node:crypto';
 import {readFileSync,readdirSync,realpathSync} from 'node:fs';
 import {dirname,join,resolve} from 'node:path';
@@ -21,6 +22,7 @@ const allowedFailures=new Set(['AP06_BROWSER_WINDOWS_REQUIRED','AP06_BROWSER_EXE
   'AP06_BROWSER_HANDLE_CREATION_CHANGED','AP06_BROWSER_CREATION_CIM_MISMATCH','AP06_BROWSER_IMAGE_ARGUMENT_MISMATCH',
   'AP06_BROWSER_READ_LEASE_FAILED','AP06_BROWSER_PROFILE_PATH_INVALID','AP06_BROWSER_ANCESTRY_INVALID',
   'AP06_BROWSER_IDENTITY_MISMATCH','AP06_BROWSER_IDENTITY_UNPROVEN','AP06_BROWSER_EXECUTABLE_MISSING',
+  'AP06_BROWSER_IDENTITY_RESOLUTION_FAILED','AP06_BROWSER_IDENTITY_MISSING',
   'AP06_BROWSER_LAUNCH_FAILED','AP06_BROWSER_ATTESTATION_FAILED','AP06_BROWSER_PROCESS_EXIT_AUDIT_FAILED',
   'AP06_BROWSER_HANDLE_RELEASE_FAILED','AP06_BROWSER_CDP_PROCESS_QUERY_FAILED','AP06_BROWSER_PROCESS_REGISTRATION_FAILED',
   'AP06_BROWSER_ATTESTATION_ORDER_INVALID','AP06_BROWSER_POST_ATTESTATION_FAILED','AP06_BROWSER_AUDIT_HELPER_FAILED']);
@@ -72,7 +74,29 @@ export async function resolveBrowserIdentity(){
 }
 
 export function validateResolution(expected,actual){
-  check(expected&&actual);check(JSON.stringify(expected)===JSON.stringify(actual),'AP06_BROWSER_EXECUTABLE_CHANGED');
+  check(expected&&actual&&typeof expected==='object'&&typeof actual==='object'&&!Array.isArray(expected)&&!Array.isArray(actual),
+    'AP06_BROWSER_IDENTITY_MISSING');
+  if(!isDeepStrictEqual(expected,actual)){
+    const fields=[];
+    const topLevel=new Set(['browser','mode','playwrightVersion','executablePath','executableSha256','executableBytes','productVersion',
+      'architecture','chromiumVersion','versionEvidence','registryDirectory','installationDirectory','revision','resolutionMethod',
+      'playwrightPackageSha256']);
+    const launchFields=new Set(['fixedArgs','suffixArgs','profileRoot','profileArgPrefix','profileNamePrefix','allowedExperimentalArgs']);
+    for(const key of new Set([...Object.keys(expected),...Object.keys(actual)])){
+      if(key==='installationFiles'){
+        if(!isDeepStrictEqual(expected[key],actual[key]))fields.push(key);
+      }else if(key==='launchProtocol'){
+        const before=expected[key],after=actual[key];
+        if(!before||!after||typeof before!=='object'||typeof after!=='object')fields.push(key);
+        else for(const field of new Set([...Object.keys(before),...Object.keys(after)]))
+          if(!isDeepStrictEqual(before[field],after[field]))fields.push(launchFields.has(field)?`${key}.${field}`:key);
+      }else if(topLevel.has(key)){
+        if(!isDeepStrictEqual(expected[key],actual[key]))fields.push(key);
+      }else fields.push('identitySchema');
+    }
+    const error=new Error('AP06_BROWSER_IDENTITY_MISMATCH');error.changedFields=[...new Set(fields)].sort();throw error;
+  }
+  return true;
 }
 
 export function frozenLaunchOptions(identity,extraArgs=[]){
@@ -103,7 +127,7 @@ function safeFailure(error,stage){
   if(allowedFailures.has(candidate))return candidate;
   return ({'playwright-launch':'AP06_BROWSER_LAUNCH_FAILED','cdp-process-query':'AP06_BROWSER_CDP_PROCESS_QUERY_FAILED',
     'cdp-version-query':'AP06_BROWSER_CDP_VERSION_QUERY_FAILED','os-attestation':'AP06_BROWSER_ATTESTATION_FAILED',
-    'identity-resolution':'AP06_BROWSER_EXECUTABLE_CHANGED','read-lease':'AP06_BROWSER_ATTESTATION_FAILED'})[stage]??'AP06_BROWSER_ATTESTATION_FAILED';
+    'identity-resolution':'AP06_BROWSER_IDENTITY_RESOLUTION_FAILED','read-lease':'AP06_BROWSER_ATTESTATION_FAILED'})[stage]??'AP06_BROWSER_ATTESTATION_FAILED';
 }
 export function getAttestedBrowserProof(browser){
   const proof=proofs.get(browser);check(proof?.status==='PASS','AP06_BROWSER_NOT_ATTESTED');return proof;
@@ -135,6 +159,8 @@ export async function launchWithIdentityLease(chromium,launch,record,expected,le
     leases.set(browser,{...lease,query:attested.query,record,cdp,pids,proof:attested.proof,resolveIdentity});return browser;
   }catch(error){
     const failure=safeFailure(error,stage);record.browserIdentity.status='STOP';record.browserIdentity.failureStage=stage;record.browserIdentity.failureClass=failure;
+    if(Array.isArray(error?.changedFields))record.browserIdentity.changedFields=error.changedFields.filter(field=>
+      /^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)?$/.test(field));
     record.failureStage??=stage;record.failureClass??=failure;
     pids=record.browserIdentity.ownedPids??[];
     if(browser){
@@ -174,6 +200,8 @@ export async function launchAttestedBrowser(chromium,options,record,onBrowserLau
     stage='read-lease';lease=await openLease(manifest);record.browserIdentity.readLease=true;
   }catch(error){
     const failure=safeFailure(error,stage);record.browserIdentity.status='STOP';record.browserIdentity.failureStage=stage;record.browserIdentity.failureClass=failure;
+    if(Array.isArray(error?.changedFields))record.browserIdentity.changedFields=error.changedFields.filter(field=>
+      /^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)?$/.test(field));
     record.failureStage??=stage;record.failureClass??=failure;
     if(lease){lease.child.stdin.end();lease.child.kill();}throw new Error(failure);
   }

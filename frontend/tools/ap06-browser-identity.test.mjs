@@ -21,6 +21,72 @@ test('installation, version, protocol and executable substitution reject before 
   const expected={...identity,playwrightVersion:'1.62.1',registryDirectory:'C:/cache',installationDirectory:'C:/cache/shell',playwrightPackageSha256:'b'.repeat(64)};
   validateResolution(expected,expected);
   for(const key of Object.keys(expected))assert.throws(()=>validateResolution(expected,{...expected,[key]:'changed'}));
+  const reordered=Object.fromEntries(Object.entries({...expected,installationFiles:{'C:/two': '2','C:/one':'1'},launchProtocol:{
+    suffixArgs:['--pipe'],fixedArgs:['--no-startup-window'],profileRoot:'C:/profile',profileArgPrefix:'--user-data-dir=',
+    profileNamePrefix:'playwright_chromiumdev_profile-',allowedExperimentalArgs:expected.launchProtocol.allowedExperimentalArgs}}).reverse());
+  validateResolution({...expected,installationFiles:{'C:/one':'1','C:/two':'2'},launchProtocol:{
+    fixedArgs:['--no-startup-window'],suffixArgs:['--pipe'],profileRoot:'C:/profile',profileArgPrefix:'--user-data-dir=',
+    profileNamePrefix:'playwright_chromiumdev_profile-',allowedExperimentalArgs:expected.launchProtocol.allowedExperimentalArgs}},reordered);
+  let error;try{validateResolution(expected,{...expected,installationFiles:{'C:/private/user/node_modules/playwright-core/package.json':'changed'}});}catch(value){error=value;}
+  assert.equal(error.message,'AP06_BROWSER_IDENTITY_MISMATCH');assert.deepEqual(error.changedFields,['installationFiles']);
+  assert.doesNotMatch(error.message,/private|node_modules|changed/);
+  for(const [actual,field] of [[{...expected,executableSha256:'c'.repeat(64)},'executableSha256'],
+    [{...expected,executablePath:'C:/private/browser.exe'},'executablePath'],
+    [{...expected,playwrightVersion:'1.62.2'},'playwrightVersion'],[{...expected,chromiumVersion:'152.0.0.0'},'chromiumVersion'],
+    [{...expected,launchProtocol:{...expected.launchProtocol,fixedArgs:['changed']}},'launchProtocol.fixedArgs'],
+    [{...expected,launchProtocol:{...expected.launchProtocol,profileRoot:'C:/other'}},'launchProtocol.profileRoot'],
+    [{...expected,launchProtocol:{...expected.launchProtocol,allowedExperimentalArgs:[[...NATIVE_ARGS,...AUTOPLAY_ARGS]]}},'launchProtocol.allowedExperimentalArgs'],
+    [{...expected,playwrightVersion:undefined},'playwrightVersion'],[{...expected,unexpectedField:'x'},'identitySchema']]){
+    let mismatch;try{validateResolution(expected,actual);}catch(value){mismatch=value;}
+    assert.equal(mismatch.message,'AP06_BROWSER_IDENTITY_MISMATCH');assert.deepEqual(mismatch.changedFields,[field]);
+    assert.doesNotMatch(JSON.stringify({message:mismatch.message,changedFields:mismatch.changedFields}),/private|browser\.exe|other/);
+  }
+});
+test('real Playwright resolver CLI matches a property-reordered manifest without launching Chromium',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'ap06-real-identity-preflight-'));
+  const keys=['TEMP','TMP','AP06_BROWSER_TEMP_ROOT','AP06_IDENTITY_PYTHON','WAVE1_PYTHON','AP06_BROWSER_IDENTITY','AP06_R12R10_HEAD'];
+  const old=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
+  try{
+    process.env.TEMP=root;process.env.TMP=root;process.env.AP06_BROWSER_TEMP_ROOT=root;
+    process.env.AP06_IDENTITY_PYTHON=process.env.WAVE1_PYTHON||execFileSync('py',['-3','-c','import sys;print(sys.executable)'],{encoding:'utf8'}).trim();
+    const actual=await resolveBrowserIdentity(),reverse=value=>Array.isArray(value)?value.map(reverse):
+      value&&typeof value==='object'?Object.fromEntries(Object.entries(value).reverse().map(([key,item])=>[key,reverse(item)])):value;
+    const manifest=join(root,'identity.json');writeFileSync(manifest,JSON.stringify(reverse(actual)));
+    const frontend=fileURLToPath(new URL('../',import.meta.url));
+    process.env.AP06_BROWSER_IDENTITY=manifest;
+    process.env.AP06_R12R10_HEAD=execFileSync('git',['rev-parse','HEAD'],{cwd:frontend,encoding:'utf8'}).trim();
+    const cli=join(frontend,'tools/ap06-r12-identity-preflight.mjs'),invoke=()=>execFileSync(process.execPath,[cli],
+      {cwd:frontend,env:process.env,encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']});
+    const pass=JSON.parse(invoke());assert.equal(pass.status,'PASS');assert.equal(pass.scientificChromium,0);
+    assert.equal(pass.reservationCreated,false);assert.equal(pass.launchAttempts,0);assert.equal(pass.retries,0);
+    assert.equal(pass.playwrightVersion,actual.playwrightVersion);assert.equal(pass.chromiumVersion,actual.chromiumVersion);
+    assert.doesNotMatch(readFileSync(cli,'utf8'),/\.launch\s*\(/);
+    writeFileSync(manifest,JSON.stringify({...actual,executableSha256:'0'.repeat(64)}));
+    let failure;try{invoke();}catch(error){failure=JSON.parse(error.stdout.toString('utf8'));}
+    assert.equal(failure.status,'STOP');assert.equal(failure.failureClass,'AP06_BROWSER_IDENTITY_MISMATCH');
+    assert.deepEqual(failure.changedFields,['executableSha256']);assert.equal(failure.scientificChromium,0);
+    assert.doesNotMatch(JSON.stringify(failure),/C:\\|node_modules|executablePath|0{64}/);
+  }finally{
+    for(const key of keys){if(old[key]===undefined)delete process.env[key];else process.env[key]=old[key];}
+    rmSync(root,{recursive:true,force:true});
+  }
+});
+test('unknown real resolver errors are classified without exposing their message',async()=>{
+  const root=mkdtempSync(join(tmpdir(),'ap06-resolution-failure-')),manifest=join(root,'identity.json');writeFileSync(manifest,JSON.stringify(identity));
+  const keys=['AP06_BROWSER_IDENTITY','AP06_IDENTITY_PYTHON','WAVE1_PYTHON'],old=Object.fromEntries(keys.map(key=>[key,process.env[key]]));
+  Object.assign(process.env,{AP06_BROWSER_IDENTITY:manifest,AP06_IDENTITY_PYTHON:'python.exe'});
+  const record={};let launches=0;
+  try{
+    await assert.rejects(launchAttestedBrowser({launch:async()=>{launches++;}},{args:AUTOPLAY_ARGS},record,()=>{launches++;},async()=>{
+      throw new Error('private path C:\\users\\secret\\browser.exe bearer=not-for-output');
+    }),/AP06_BROWSER_IDENTITY_RESOLUTION_FAILED/);
+    assert.equal(launches,0);assert.equal(record.browserIdentity.failureStage,'identity-resolution');
+    assert.equal(record.browserIdentity.failureClass,'AP06_BROWSER_IDENTITY_RESOLUTION_FAILED');
+    assert.doesNotMatch(JSON.stringify(record),/users|secret|bearer|browser\.exe/);
+  }finally{
+    for(const key of keys){if(old[key]===undefined)delete process.env[key];else process.env[key]=old[key];}
+    rmSync(root,{recursive:true,force:true});
+  }
 });
 test('frozen launch arguments match the installed Playwright defaults without starting a browser',async()=>{
   const root=mkdtempSync(join(tmpdir(),'ap06-launch-protocol-'));

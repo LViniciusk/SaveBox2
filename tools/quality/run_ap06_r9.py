@@ -34,7 +34,8 @@ def publish(wave, name, files):
     if wave.output.name in ('readiness-wave11','readiness-wave11-r2','readiness-wave11-r3','readiness-wave12','readiness-wave12-r2-factorial','readiness-wave12-r2-native',
             'readiness-wave12-r3-factorial','readiness-wave12-r3-native','readiness-wave12-r4-factorial','readiness-wave12-r4-native',
             'readiness-wave12-r5-factorial','readiness-wave12-r5-native','readiness-wave12-r6-factorial','readiness-wave12-r6-native',
-            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native','readiness-wave12-r9-factorial','readiness-wave12-r9-native'):
+            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native','readiness-wave12-r9-factorial','readiness-wave12-r9-native',
+            'readiness-wave12-r10-factorial','readiness-wave12-r10-native'):
         prefix=wave.output.name.replace('readiness-wave','r')
         name = name if name.startswith(prefix+'-') else prefix+'-'+name
         files = {prefix+'/'+relative:source for relative,source in files.items()}
@@ -155,7 +156,8 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
     if wave.output.name in ('readiness-wave10-r3','readiness-wave11','readiness-wave11-r2','readiness-wave11-r3','readiness-wave12','readiness-wave12-r2-factorial','readiness-wave12-r2-native',
             'readiness-wave12-r3-factorial','readiness-wave12-r3-native','readiness-wave12-r4-factorial','readiness-wave12-r4-native',
             'readiness-wave12-r5-factorial','readiness-wave12-r5-native','readiness-wave12-r6-factorial','readiness-wave12-r6-native',
-            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native','readiness-wave12-r9-factorial','readiness-wave12-r9-native'):
+            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native','readiness-wave12-r9-factorial','readiness-wave12-r9-native',
+            'readiness-wave12-r10-factorial','readiness-wave12-r10-native'):
         header=wave.root/'backend/include/crow_all.h'
         if wave.output.name.startswith(('readiness-wave12-r8-','readiness-wave12-r9-')):
             backend=read(wave.output/'baseline/experimental-backend.json')
@@ -181,6 +183,7 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
         'readiness-wave12-r6-factorial':'r12-r6-factorial-','readiness-wave12-r6-native':'r12-r6-native-',
         'readiness-wave12-r7-factorial':'r12-r7-factorial-','readiness-wave12-r7-native':'r12-r7-native-',
         'readiness-wave12-r8-factorial':'r12-r8-factorial-','readiness-wave12-r9-factorial':'r12-r9-factorial-','readiness-wave12-r9-native':'r12-r9-native-',
+        'readiness-wave12-r10-factorial':'r12-r10-factorial-','readiness-wave12-r10-native':'r12-r10-native-',
             'readiness-wave12-r8-native':'r12-r8-native-'}.get(wave.output.name,'')
     implementation_name = prefix+'implementation'
     freeze_name = prefix+'freeze'

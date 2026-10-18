@@ -263,7 +263,7 @@ class Wave:
                 'saturationDefinition': 'First level with <=5% marginal throughput gain and >=20% median p95 growth versus previous level; observational heuristic, not an SLO'})
             self.save('pipeline/findings-entry.json', {key: {'name': value, 'status': 'OPEN'} for key, value in FINDINGS.items()})
 
-    def command(self, name, command, cwd=None, environment=None):
+    def command(self, name, command, cwd=None, environment=None, check=True):
         # Existing logged runner; private temporary logs are summarized, never copied wholesale.
         previous = os.environ.copy()
         try:
@@ -294,7 +294,7 @@ class Wave:
                 'Cannot read directory', 'Access is denied', 'cannot start', 'not captured', 'FAILED', 'ERROR',
             ) if signal.lower() in output.lower()]
         self.save(f'pipeline/commands/{name}.json', artifact)
-        if result['exit_code'] != 0: raise WaveFailure(f'COMMAND_FAILED_{name.upper()}')
+        if check and result['exit_code'] != 0: raise WaveFailure(f'COMMAND_FAILED_{name.upper()}')
         return output
 
     def dependencies(self):
