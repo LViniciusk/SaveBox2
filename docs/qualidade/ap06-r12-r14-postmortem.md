@@ -210,3 +210,23 @@ CI final: os três workflows (`Backend CI`, `Frontend CI` e `Quality Baseline`) 
 **Ciência:** a R14 continua `R12R14_NATIVE_CAPABILITY_INCONCLUSIVE`, com `abAuthorized: false`. Esta TASK não criou R15, não abriu nova autoridade, não repetiu capability, não executou A/B e não alterou freeze, raws, decisões ou STOPs históricos.
 
 **Limitação persistente:** o Chromium headless-shell usado na R14 não emitiu buffers `heaps_v2`; sem quatro dumps correlacionados nessa estrutura, nenhuma medição A/B é autorizada. O receipt histórico também não contém `rendererIdentityProof`/`creationTimeExact`, então o novo contrato de identidade não pode ser satisfeito retroativamente. Uma conclusão nativa exigiria nova investigação autorizada, fora do escopo desta TASK.
+
+---
+
+## 10. Errata de Links do Relatório Histórico
+
+O relatório `docs/qualidade/ap06-r12-r14.md` é preservado byte a byte como registro histórico. Seus links absolutos `file:///C:/Users/...` não são portáveis entre máquinas; as referências relativas equivalentes, a partir de `docs/qualidade/`, são:
+
+- `../../tools/quality/ap06_freeze.py`
+- `../../frontend/tools/ap06-browser-identity.mjs`
+- `../../tools/quality/ap06_native.py`
+- `../../tools/quality/run_ap06_r12_r13_native.py`
+- `../../tools/quality/test_ap06_native.py`
+- `../../tools/quality/test_ap06_r12_r13.py`
+- `../../tools/quality/test_ap06_r12_r14.py`
+- `../../tools/quality/test_ap06_freeze.py`
+- `../../frontend/tools/ap06-browser-identity.test.mjs`
+- `../../frontend/tools/ap06-native-trace.test.mjs`
+- `../../frontend/tools/ap06-native-integration.test.mjs`
+
+Nenhum byte do relatório histórico, do freeze, dos raws, das decisões ou dos STOPs foi alterado por esta errata.
