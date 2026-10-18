@@ -326,42 +326,50 @@ export function createRendererIdentityProof(record,campaign='AP-06-R12-R14-nativ
   if(rendererAudits.length!==1)return null;
   const auditedRenderer=rendererAudits[0];
   if(auditedRenderer.pid!==sampledRendererPid)return null;
-  let creationTimeExact;
-  if(typeof auditedRenderer.creationTimeExact==='string'){
-    try{
-      parseExactFiletime(auditedRenderer.creationTimeExact);
-      creationTimeExact=auditedRenderer.creationTimeExact;
-    }catch{
-      return null;
-    }
-  }else if(typeof auditedRenderer.creationTime==='string'){
-    try{
-      parseExactFiletime(auditedRenderer.creationTime);
-      creationTimeExact=auditedRenderer.creationTime;
-    }catch{
-      return null;
-    }
-  }else if(typeof auditedRenderer.creationTime==='number'&&Number.isSafeInteger(auditedRenderer.creationTime)&&auditedRenderer.creationTime>0){
-    creationTimeExact=auditedRenderer.creationTime.toString();
-  }else if(typeof auditedRenderer.creationTime==='bigint'&&auditedRenderer.creationTime>0n&&auditedRenderer.creationTime<=((1n<<64n)-1n)){
-    creationTimeExact=auditedRenderer.creationTime.toString();
-  }else{
+  if(typeof auditedRenderer.creationTimeExact!=='string')return null;
+  let parsedExact;
+  try{
+    parsedExact=parseExactFiletime(auditedRenderer.creationTimeExact);
+  }catch{
     return null;
   }
+  let safeLegacy;
+  if(auditedRenderer.creationTime!==undefined){
+    if(typeof auditedRenderer.creationTime==='number'){
+      if(!Number.isFinite(auditedRenderer.creationTime)||auditedRenderer.creationTime<=0)return null;
+      if(Number.isSafeInteger(auditedRenderer.creationTime)){
+        if(BigInt(auditedRenderer.creationTime)!==parsedExact)return null;
+        safeLegacy=auditedRenderer.creationTime;
+      }
+    }else if(typeof auditedRenderer.creationTime==='bigint'){
+      if(auditedRenderer.creationTime!==parsedExact)return null;
+    }else if(typeof auditedRenderer.creationTime==='string'){
+      let parsedLegacy;
+      try{
+        parsedLegacy=parseExactFiletime(auditedRenderer.creationTime);
+      }catch{
+        return null;
+      }
+      if(parsedLegacy!==parsedExact)return null;
+    }else{
+      return null;
+    }
+  }
   if(record.handleRelease&&record.handleRelease.status!=='PASS')return null;
-  return {
+  const proof={
     status:'PASS',
     campaign,
     preRegistered:true,
     rendererPid:sampledRendererPid,
-    creationTime:auditedRenderer.creationTime,
-    creationTimeExact,
+    creationTimeExact:auditedRenderer.creationTimeExact,
     roles:['renderer'],
     attestationMethod:'retained-win32-process-handles',
     linkedToProfiledProcess:true,
     processIdentityCount:1,
     checkpointPhases:[...phases]
   };
+  if(safeLegacy!==undefined)proof.creationTime=safeLegacy;
+  return proof;
 }
 
 export async function closeBrowserWithIdentity(browser,record){

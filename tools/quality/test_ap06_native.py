@@ -1,6 +1,7 @@
 import copy,io,json,tempfile,unittest
 from pathlib import Path
-from ap06_native import trace_events,aggregate_trace,inspect_trace,interpret
+from ap06_native import (trace_events,aggregate_trace,inspect_trace,interpret,_proof_matches,
+    _legacy_proof_matches)
 import run_ap06_r12_r2_native as native
 from ap06_authorities import initialize,verify_publication,sha256
 from types import SimpleNamespace
@@ -147,9 +148,11 @@ class NativeTests(unittest.TestCase):
     def test_renderer_identity_proof_and_negative_matrix(self):
         def valid_proof_receipt(pid=42, creation_time=123456, campaign='AP-06-R12-R14-native'):
             side = receipt()
+            exact = str(creation_time)
             side['rendererIdentityProof'] = {
                 'status': 'PASS', 'campaign': campaign, 'preRegistered': True,
-                'rendererPid': pid, 'creationTime': creation_time, 'roles': ['renderer'],
+                'rendererPid': pid, 'creationTime': creation_time, 'creationTimeExact': exact,
+                'roles': ['renderer'],
                 'attestationMethod': 'retained-win32-process-handles',
                 'linkedToProfiledProcess': True, 'processIdentityCount': 1,
                 'checkpointPhases': ['baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final']
@@ -158,7 +161,8 @@ class NativeTests(unittest.TestCase):
                 'status': 'PASS', 'method': 'retained-win32-process-handles',
                 'reusedPidCount': 0, 'timedOutProcessCount': 0, 'waitFailedProcessCount': 0,
                 'closedProcessCount': 1,
-                'processes': [{'pid': pid, 'creationTime': creation_time, 'roles': ['renderer']}]
+                'processes': [{'pid': pid, 'creationTime': creation_time,
+                    'creationTimeExact': exact, 'roles': ['renderer']}]
             }
             side['processSamples'] = [
                 {'phase': p, 'processes': [{'pid': pid, 'type': 'renderer'}]}
@@ -386,6 +390,76 @@ class NativeTests(unittest.TestCase):
         r_handles = make_receipt()
         r_handles['handleRelease']['status'] = 'FAIL'
         self.assertEqual(aggregate_trace(iter(trace_no_metadata), r_handles, detailed=True)['reason'], 'NATIVE_RENDERER_METADATA_MISSING')
+
+    def test_new_identity_proof_requires_exact_filetime_and_isolates_legacy(self):
+        def make(proof_exact='134368223588270130', audit_exact='134368223588270130',
+                proof_legacy=None, audit_legacy=None):
+            side = receipt()
+            proof = {
+                'status': 'PASS', 'campaign': 'AP-06-R12-R14-native', 'preRegistered': True,
+                'rendererPid': 42, 'roles': ['renderer'],
+                'attestationMethod': 'retained-win32-process-handles',
+                'linkedToProfiledProcess': True, 'processIdentityCount': 1,
+                'checkpointPhases': ['baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final']
+            }
+            if proof_exact is not None: proof['creationTimeExact'] = proof_exact
+            if proof_legacy is not None: proof['creationTime'] = proof_legacy
+            side['rendererIdentityProof'] = proof
+            audited = {'pid': 42, 'roles': ['renderer']}
+            if audit_exact is not None: audited['creationTimeExact'] = audit_exact
+            if audit_legacy is not None: audited['creationTime'] = audit_legacy
+            side['processExitAudit'] = {
+                'status': 'PASS', 'method': 'retained-win32-process-handles',
+                'reusedPidCount': 0, 'timedOutProcessCount': 0, 'waitFailedProcessCount': 0,
+                'closedProcessCount': 1, 'processes': [audited]
+            }
+            side['processSamples'] = [
+                {'phase': p, 'processes': [{'pid': 42, 'type': 'renderer'}]}
+                for p in ('baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final')
+            ]
+            side['handleRelease'] = {
+                'status': 'PASS',
+                'processHandles': {'releasedProcessHandles': 1, 'closeFailures': 0}
+            }
+            side['browserIdentity'] = {'before': {'nativeFlagsValidated': True}}
+            return side
+
+        trace = events()[1:]
+        exact = '134368223588270130'
+
+        # New proofs require the canonical exact representation on both sides.
+        self.assertTrue(_proof_matches(make(), 42))
+        self.assertFalse(_proof_matches(make(proof_exact=None, audit_exact=None,
+            proof_legacy=123456, audit_legacy=123456), 42))
+        self.assertEqual(aggregate_trace(iter(trace), make(proof_exact=None, audit_exact=None,
+            proof_legacy=123456, audit_legacy=123456), detailed=True)['reason'],
+            'NATIVE_RENDERER_METADATA_MISSING')
+        self.assertFalse(_proof_matches(make(audit_exact=None, audit_legacy=123456), 42))
+        self.assertFalse(_proof_matches(make(audit_exact='134368223588270131'), 42))
+        self.assertFalse(_proof_matches(make(proof_exact=int(exact)), 42))
+        for bad in ('0', '01', '+1', ' 1', '1.0', '1e17', '18446744073709551616'):
+            self.assertFalse(_proof_matches(make(proof_exact=bad, audit_exact=bad), 42))
+
+        # A conflicting safe legacy integer is a contradiction; an unsafe one is
+        # ignored because JSON numbers above 2**53-1 are not exact.
+        self.assertFalse(_proof_matches(make(proof_legacy=1), 42))
+        self.assertFalse(_proof_matches(make(audit_legacy=1), 42))
+        self.assertTrue(_proof_matches(make(proof_legacy=134368223588270128,
+            audit_legacy=134368223588270128), 42))
+        self.assertTrue(_proof_matches(make(proof_legacy=int(exact),
+            audit_legacy=int(exact)), 42))
+
+        # Bounds and JSON round-trip preserve the canonical string byte for byte.
+        self.assertTrue(_proof_matches(make(proof_exact='1', audit_exact='1'), 42))
+        self.assertTrue(_proof_matches(make(proof_exact='18446744073709551615',
+            audit_exact='18446744073709551615'), 42))
+        self.assertTrue(_proof_matches(json.loads(json.dumps(make())), 42))
+
+        # Historical replay remains available only through the explicit legacy path.
+        legacy = make(proof_exact=None, audit_exact=None,
+            proof_legacy=123456, audit_legacy=123456)
+        self.assertFalse(_proof_matches(legacy, 42))
+        self.assertTrue(_legacy_proof_matches(legacy, 42))
 
 if __name__=='__main__':unittest.main()
 

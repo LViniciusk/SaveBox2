@@ -189,21 +189,52 @@ def run_capability(wave, source):
     raise ValueError('NATIVE_CAPABILITY_STATUS_INVALID')
 
 
+def _decision_consumption(state):
+    capability = state.get('capabilityChromium', 0) if state.get('capabilityVerified', True) else 'UNVERIFIED'
+    measurement = state.get('measurementChromium', 0) if state.get('measurementVerified', True) else 'UNVERIFIED'
+    retries = state.get('retries', 0) if not state.get('unverifiedConsumption') else 'UNVERIFIED'
+    return capability, measurement, retries
+
+
 def publish_inconclusive_decision(wave, capability):
     output = wave.output
     tag = campaign_tag()
     cleanup = stop_and_verify_backend_cleanup(wave)
     if cleanup.get('status') != 'PASS':
         raise NativeContractFailure(f"BACKEND_CLEANUP_{cleanup.get('status', 'FAILED')}")
+    capability_chromium, measurement_chromium, retries = _decision_consumption(execution_state(output))
     decision = {
         'status': f'R12{tag}_NATIVE_CAPABILITY_INCONCLUSIVE',
         'reason': capability.get('reason', 'NATIVE_TRACE_CONTRACT_INVALID'),
-        'capabilityChromium': 1,
-        'measurementChromium': 0,
-        'retries': 0,
+        'capabilityChromium': capability_chromium,
+        'measurementChromium': measurement_chromium,
+        'retries': retries,
         'abAuthorized': False,
         'cleanupStatus': cleanup.get('status'),
         'interpretation': 'No A/B measurement without four correlated renderer heaps_v2 dumps.',
+    }
+    wave.save('final/decision.json', decision)
+    publish(wave, 'decision', {'evidence/decision.json': output / 'final/decision.json'})
+    return decision
+
+
+def publish_coverage_decision(wave, results, reason=None):
+    output = wave.output
+    tag = campaign_tag()
+    cleanup = stop_and_verify_backend_cleanup(wave)
+    if cleanup.get('status') != 'PASS':
+        raise NativeContractFailure(f"BACKEND_CLEANUP_{cleanup.get('status', 'FAILED')}")
+    capability_chromium, measurement_chromium, retries = _decision_consumption(execution_state(output))
+    decision = {
+        'status': f'R12{tag}_NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT',
+        'reason': reason or 'NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT',
+        'capabilityChromium': capability_chromium,
+        'measurementChromium': measurement_chromium,
+        'retries': retries,
+        'abAuthorized': False,
+        'results': results,
+        'cleanupStatus': cleanup.get('status'),
+        'causalAttribution': 'Exploratory and conditional on R12R12; sampled aggregates do not establish total coverage, individual lifetimes, or a leak.',
     }
     wave.save('final/decision.json', decision)
     publish(wave, 'decision', {'evidence/decision.json': output / 'final/decision.json'})
@@ -235,18 +266,23 @@ def run_profiled_pair(wave, source, frozen, native):
         config = json.loads((wave.output / 'baseline/authority-config.local.json').read_text(encoding='utf-8'))
         trace_path = checked_path(Path(config['AP06_AUTHORITY_ROOT']) / registration['authorityRelativePath'])
         aggregate = validate_trace(trace_path, receipt)
+        results.append({'condition': condition, 'rawSha256': result['rawSha256'], 'native': aggregate})
         wave.save(f'formal/{directory}/native-aggregate.json', aggregate)
         publish(wave, 'aggregate-' + directory[:2], {
             f'evidence/formal/{directory}/aggregate.json': wave.output / 'formal' / directory / 'native-aggregate.json',
             f'evidence/formal/{directory}/receipt.json': receipt})
-        results.append({'condition': condition, 'rawSha256': result['rawSha256'], 'native': aggregate})
+        status = aggregate.get('status')
+        if status == 'NATIVE_STOP':
+            raise NativeContractFailure(aggregate.get('reason', 'NATIVE_TRACE_CONTRACT_INVALID'))
+        if status != 'NATIVE_CAPABILITY_PASS':
+            return publish_coverage_decision(wave, results, aggregate.get('reason'))
     cleanup = stop_and_verify_backend_cleanup(wave)
     if cleanup.get('status') != 'PASS':
         raise NativeContractFailure(f"BACKEND_CLEANUP_{cleanup.get('status', 'FAILED')}")
-    decision = {'status': f'R12{tag}_NATIVE_TRACKED_AGGREGATES_OBSERVED'
-        if all(row['native'].get('status') == 'NATIVE_CAPABILITY_PASS' for row in results)
-        else f'R12{tag}_NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT', 'capabilityChromium': 1,
-        'measurementChromium': 2, 'retries': 0, 'results': results,
+    capability_chromium, measurement_chromium, retries = _decision_consumption(execution_state(wave.output))
+    decision = {'status': f'R12{tag}_NATIVE_TRACKED_AGGREGATES_OBSERVED',
+        'capabilityChromium': capability_chromium, 'measurementChromium': measurement_chromium,
+        'retries': retries, 'abAuthorized': True, 'results': results,
         'cleanupStatus': cleanup.get('status'),
         'causalAttribution': 'Exploratory and conditional on R12R12; sampled aggregates do not establish total coverage, individual lifetimes, or a leak.'}
     wave.save('final/decision.json', decision)
@@ -454,6 +490,268 @@ COMPLETED_STATUSES = frozenset({
 })
 
 
+CLEANUP_RECEIPT_KEYS = frozenset({
+    'status', 'ownedServerStopped', 'ownedPostgresStopped',
+    'ownedClusterStorageAndDotenvRemoved', 'runtimePreservedForResume',
+    'personalServicesTouched', 'failureClass', 'errors',
+})
+
+BACKEND_START_EVIDENCE = (
+    'pipeline/backend-live.json',
+    'pipeline/backend-runtime-cleanup.json',
+    'pipeline/capability-reservation.json',
+    'pipeline/native-receipt.json',
+    'baseline/backend-isolation.json',
+    'baseline/listener-isolation.json',
+    'baseline/backend-runtime.local.json',
+)
+
+
+def _decode_json_object(path):
+    try:
+        value = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _backend_start_evidence(output):
+    return tuple(relative for relative in BACKEND_START_EVIDENCE if (output / relative).is_file())
+
+
+def _validate_runtime_config(output):
+    path = output / 'baseline/backend-runtime.local.json'
+    if not path.is_file():
+        return None, 'BACKEND_RUNTIME_CONFIG_MISSING'
+    config = _decode_json_object(path)
+    if config is None:
+        return None, 'BACKEND_RUNTIME_CONFIG_CORRUPT'
+    if not {'cwd', 'storagePath', 'storageId', 'backendOrigin'}.issubset(config):
+        return None, 'BACKEND_RUNTIME_OWNERSHIP_INVALID'
+    cwd, storage = config.get('cwd'), config.get('storagePath')
+    storage_id, origin = config.get('storageId'), config.get('backendOrigin')
+    if not (isinstance(cwd, str) and isinstance(storage, str) and
+            isinstance(storage_id, str) and isinstance(origin, str)):
+        return None, 'BACKEND_RUNTIME_OWNERSHIP_INVALID'
+    try:
+        from urllib.parse import urlsplit
+        parsed = urlsplit(origin)
+        port = parsed.port
+    except ValueError:
+        return None, 'BACKEND_RUNTIME_ORIGIN_INVALID'
+    if (parsed.scheme != 'http' or parsed.hostname != '127.0.0.1' or port is None or
+            not 1 <= port <= 65535 or parsed.path not in ('', '/') or parsed.query or
+            parsed.fragment or parsed.username or parsed.password):
+        return None, 'BACKEND_RUNTIME_ORIGIN_INVALID'
+    try:
+        cwd_path = checked_path(Path(cwd).absolute())
+        storage_path = checked_path(Path(storage).absolute())
+        pipeline = output.resolve() / 'pipeline'
+        cwd_resolved = cwd_path.resolve()
+        storage_resolved = storage_path.resolve()
+    except (OSError, ValueError):
+        return None, 'BACKEND_RUNTIME_OWNERSHIP_INVALID'
+    if (cwd_resolved.parent != pipeline or
+            not re.fullmatch(r'runtime-[0-9a-f]{16}', cwd_resolved.name) or
+            storage_resolved != cwd_resolved / 'storage' or
+            not re.fullmatch(r'[0-9a-f]{64}', storage_id)):
+        return None, 'BACKEND_RUNTIME_OWNERSHIP_INVALID'
+    return {'cwd': cwd_resolved, 'storagePath': storage_resolved,
+        'storageId': storage_id, 'port': port, 'origin': origin}, None
+
+
+def _validate_runtime_evidence(output, config):
+    live_path = output / 'pipeline/backend-live.json'
+    if live_path.is_file():
+        live = _decode_json_object(live_path)
+        if live is None:
+            return 'BACKEND_RUNTIME_EVIDENCE_INVALID'
+        if (live.get('status') != 'READY' or live.get('isolated') is not True or
+                live.get('backendOrigin') != config['origin'] or
+                ('backendPid' in live and (type(live['backendPid']) is not int or live['backendPid'] <= 0))):
+            return 'BACKEND_RUNTIME_OWNERSHIP_INVALID'
+    isolation_path = output / 'baseline/backend-isolation.json'
+    if isolation_path.is_file():
+        isolation = _decode_json_object(isolation_path)
+        if isolation is None:
+            return 'BACKEND_RUNTIME_EVIDENCE_INVALID'
+        if (isolation.get('origin') != config['origin'] or isolation.get('port') != config['port'] or
+                isolation.get('bind') != '127.0.0.1' or isolation.get('storageId') != config['storageId'] or
+                isolation.get('existingServicesTouched') is not False or
+                isolation.get('isolatedCluster') is not True):
+            return 'BACKEND_RUNTIME_OWNERSHIP_INVALID'
+    return None
+
+
+def _probe_owned_listener(port):
+    import socket, time
+    for attempt in range(5):
+        try:
+            connection = socket.create_connection(('127.0.0.1', port), timeout=1)
+        except ConnectionRefusedError:
+            return True, None
+        except (TimeoutError, socket.timeout, OSError):
+            return False, 'BACKEND_LISTENER_PROBE_FAILED'
+        connection.close()
+        if attempt == 4:
+            return False, 'BACKEND_LISTENER_STILL_ACTIVE'
+        time.sleep(0.2)
+    return False, 'BACKEND_LISTENER_STILL_ACTIVE'
+
+
+def _validate_cleanup_receipt(receipt):
+    if not isinstance(receipt, dict) or set(receipt) != CLEANUP_RECEIPT_KEYS:
+        return 'BACKEND_CLEANUP_RECEIPT_INVALID'
+    if receipt.get('status') != 'PASS':
+        return 'BACKEND_CLEANUP_FAILED'
+    for key in ('ownedServerStopped', 'ownedPostgresStopped',
+            'ownedClusterStorageAndDotenvRemoved', 'runtimePreservedForResume',
+            'personalServicesTouched'):
+        if type(receipt.get(key)) is not bool:
+            return 'BACKEND_CLEANUP_RECEIPT_INVALID'
+    if receipt['personalServicesTouched'] is not False:
+        return 'BACKEND_PERSONAL_SERVICES_TOUCHED'
+    if receipt['runtimePreservedForResume'] is not False:
+        return 'BACKEND_RUNTIME_PRESERVED_FOR_RESUME'
+    if not (receipt['ownedServerStopped'] and receipt['ownedPostgresStopped'] and
+            receipt['ownedClusterStorageAndDotenvRemoved']):
+        return 'BACKEND_CLEANUP_INCOMPLETE'
+    if receipt.get('failureClass') is not None:
+        return 'BACKEND_CLEANUP_FAILED'
+    errors = receipt.get('errors')
+    if not isinstance(errors, list):
+        return 'BACKEND_CLEANUP_RECEIPT_INVALID'
+    if errors:
+        return 'BACKEND_CLEANUP_ERRORS_REPORTED'
+    return None
+
+
+def _wait_supervisor(supervisor_proc):
+    try:
+        code = supervisor_proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        try:
+            supervisor_proc.terminate()
+        except OSError:
+            pass
+        try:
+            supervisor_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                supervisor_proc.kill()
+            except OSError:
+                pass
+            try:
+                supervisor_proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+        return 'FAIL', 'BACKEND_SUPERVISOR_TIMEOUT'
+    if code not in (0, None):
+        return 'FAIL', 'BACKEND_SUPERVISOR_FAILED'
+    return 'PASS', None
+
+
+def _publish_cleanup_receipt(wave, cleanup_path):
+    from run_ap06_r9 import publication_namespace
+    namespace = publication_namespace(wave)
+    publication = f'{namespace}-backend-cleanup' if namespace else 'backend-cleanup'
+    try:
+        publish(wave, 'backend-cleanup', {'evidence/backend-runtime-cleanup.json': cleanup_path})
+    except Exception:
+        return 'UNVERIFIED', 'BACKEND_CLEANUP_PUBLICATION_FAILED'
+    config_path = wave.output / 'baseline/authority-config.local.json'
+    config = _decode_json_object(config_path)
+    if config is None or not config.get('AP06_AUTHORITY_ROOT') or not config.get('identity'):
+        return 'UNVERIFIED', 'BACKEND_CLEANUP_AUTHORITY_MISSING'
+    try:
+        authority = checked_path(Path(config['AP06_AUTHORITY_ROOT']))
+        manifest = verify_publication(authority, config['identity'], publication)
+    except Exception:
+        return 'UNVERIFIED', 'BACKEND_CLEANUP_READBACK_FAILED'
+    relative = 'evidence/backend-runtime-cleanup.json'
+    published = f'{namespace}/{relative}' if namespace else relative
+    entry = next((row for row in manifest.get('files', ())
+        if isinstance(row, dict) and row.get('path') == published), None)
+    if (not entry or entry.get('sha256') != sha256(cleanup_path) or
+            entry.get('size') != cleanup_path.stat().st_size):
+        return 'FAIL', 'BACKEND_CLEANUP_READBACK_MISMATCH'
+    return 'PASS', None
+
+
+def _stop_and_verify_backend_cleanup(wave, supervisor_proc):
+    output = wave.output
+    evidence = _backend_start_evidence(output)
+    started = bool(evidence) or supervisor_proc is not None
+    if not started:
+        return {'status': 'PASS', 'backendStarted': False,
+            'reason': 'BACKEND_NOT_STARTED', 'startEvidence': []}
+
+    stop_marker = output / 'pipeline/stop-backend.request'
+    try:
+        stop_marker.parent.mkdir(parents=True, exist_ok=True)
+        stop_marker.touch(exist_ok=True)
+    except OSError:
+        return {'status': 'FAIL', 'backendStarted': True,
+            'reason': 'BACKEND_STOP_MARKER_FAILED', 'startEvidence': list(evidence)}
+
+    if supervisor_proc is not None:
+        status, reason = _wait_supervisor(supervisor_proc)
+        if status != 'PASS':
+            return {'status': status, 'backendStarted': True,
+                'reason': reason, 'startEvidence': list(evidence)}
+
+    config, reason = _validate_runtime_config(output)
+    if config is None:
+        status = 'UNVERIFIED' if reason in ('BACKEND_RUNTIME_CONFIG_MISSING',
+            'BACKEND_RUNTIME_CONFIG_CORRUPT') else 'FAIL'
+        return {'status': status, 'backendStarted': True,
+            'reason': reason, 'startEvidence': list(evidence)}
+
+    reason = _validate_runtime_evidence(output, config)
+    if reason:
+        return {'status': 'FAIL', 'backendStarted': True,
+            'reason': reason, 'startEvidence': list(evidence)}
+
+    closed, reason = _probe_owned_listener(config['port'])
+    if not closed:
+        status = 'FAIL' if reason == 'BACKEND_LISTENER_STILL_ACTIVE' else 'UNVERIFIED'
+        return {'status': status, 'backendStarted': True,
+            'reason': reason, 'startEvidence': list(evidence)}
+
+    cleanup_path = output / 'pipeline/backend-runtime-cleanup.json'
+    if not cleanup_path.is_file():
+        return {'status': 'UNVERIFIED', 'backendStarted': True,
+            'reason': 'BACKEND_CLEANUP_RECEIPT_MISSING', 'startEvidence': list(evidence)}
+    receipt = _decode_json_object(cleanup_path)
+    if receipt is None:
+        return {'status': 'UNVERIFIED', 'backendStarted': True,
+            'reason': 'BACKEND_CLEANUP_RECEIPT_CORRUPT', 'startEvidence': list(evidence)}
+    reason = _validate_cleanup_receipt(receipt)
+    if reason:
+        return {'status': 'FAIL', 'backendStarted': True,
+            'reason': reason, 'startEvidence': list(evidence)}
+
+    if os.path.lexists(config['cwd']) or os.path.lexists(config['storagePath']):
+        return {'status': 'FAIL', 'backendStarted': True,
+            'reason': 'BACKEND_RUNTIME_STILL_EXISTS', 'startEvidence': list(evidence)}
+
+    status, reason = _publish_cleanup_receipt(wave, cleanup_path)
+    if status != 'PASS':
+        return {'status': status, 'backendStarted': True,
+            'reason': reason, 'startEvidence': list(evidence)}
+    return {'status': 'PASS', 'backendStarted': True, 'reason': 'BACKEND_CLEANUP_VERIFIED',
+        'receipt': receipt, 'receiptSha256': sha256(cleanup_path),
+        'publicationStatus': 'PASS', 'startEvidence': list(evidence)}
+
+
+def stop_and_verify_backend_cleanup(wave, supervisor_proc=None):
+    try:
+        return _stop_and_verify_backend_cleanup(wave, supervisor_proc)
+    except Exception as exc:
+        return {'status': 'UNVERIFIED',
+            'reason': f'BACKEND_CLEANUP_INTERNAL_{type(exc).__name__}'}
+
+
 def execution_state(output):
     reservation = output / 'pipeline/capability-reservation.json'
     cap_receipt = output / 'pipeline/native-receipt.json'
@@ -466,117 +764,46 @@ def execution_state(output):
         'capabilityChromium': 0,
         'measurementChromium': 0,
         'unverifiedConsumption': False,
+        'capabilityVerified': True,
+        'measurementVerified': True,
     }
 
     if reservation.is_file():
-        if cap_receipt.is_file():
-            try:
-                cap_data = json.loads(cap_receipt.read_text(encoding='utf-8-sig'))
-                attempts = cap_data.get('launchAttempts', 0)
-                launches = cap_data.get('browserLaunches', 0)
-                retries = cap_data.get('retries', 0)
-                state['launchAttempts'] += attempts
-                state['browserLaunches'] += launches
-                state['retries'] += retries
-                state['capabilityChromium'] = launches
-            except Exception:
-                state['unverifiedConsumption'] = True
-                state['launchAttempts'] += 1
-        else:
+        cap_data = _decode_json_object(cap_receipt) if cap_receipt.is_file() else None
+        attempts = cap_data.get('launchAttempts') if cap_data else None
+        launches = cap_data.get('browserLaunches') if cap_data else None
+        retries = cap_data.get('retries') if cap_data else None
+        if (cap_data is None or type(attempts) is not int or type(launches) is not int or
+                type(retries) is not int or attempts < 1 or launches < 0 or launches > attempts or retries < 0):
             state['unverifiedConsumption'] = True
+            state['capabilityVerified'] = False
             state['launchAttempts'] += 1
+        else:
+            state['launchAttempts'] += attempts
+            state['browserLaunches'] += launches
+            state['retries'] += retries
+            state['capabilityChromium'] = launches
 
     for directory in ('05-r12r2.0', '06-r12r2.2'):
         m_receipt = output / 'formal' / directory / 'native-receipt.json'
-        if m_receipt.is_file():
-            try:
-                m_data = json.loads(m_receipt.read_text(encoding='utf-8-sig'))
-                launches = m_data.get('browserLaunches', 1 if m_data.get('status') == 'CAPTURED' or 'checkpoints' in m_data else 0)
-                state['launchAttempts'] += m_data.get('launchAttempts', 1)
-                state['browserLaunches'] += launches
-                state['retries'] += m_data.get('retries', 0)
-                state['measurementChromium'] += launches
-            except Exception:
-                state['unverifiedConsumption'] = True
-                state['launchAttempts'] += 1
+        if not m_receipt.is_file():
+            continue
+        m_data = _decode_json_object(m_receipt)
+        launches = m_data.get('browserLaunches') if m_data else None
+        attempts = m_data.get('launchAttempts') if m_data else None
+        retries = m_data.get('retries') if m_data else None
+        if (m_data is None or type(launches) is not int or type(attempts) is not int or
+                type(retries) is not int or launches < 0 or attempts < 1 or launches > attempts or retries < 0):
+            state['unverifiedConsumption'] = True
+            state['measurementVerified'] = False
+            state['launchAttempts'] += 1
+        else:
+            state['launchAttempts'] += attempts
+            state['browserLaunches'] += launches
+            state['retries'] += retries
+            state['measurementChromium'] += launches
 
     return state
-
-
-def stop_and_verify_backend_cleanup(wave, supervisor_proc=None):
-    output = wave.output
-    stop_marker = output / 'pipeline/stop-backend.request'
-    stop_marker.parent.mkdir(parents=True, exist_ok=True)
-    stop_marker.touch(exist_ok=True)
-
-    if supervisor_proc is not None:
-        try:
-            supervisor_proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            supervisor_proc.kill()
-            supervisor_proc.wait(timeout=10)
-
-    port = 42187
-    for cfg_path in (output / 'baseline/backend-runtime.local.json', output / 'pipeline/backend-live.json'):
-        if cfg_path.is_file():
-            try:
-                conf = json.loads(cfg_path.read_text(encoding='utf-8-sig'))
-                origin = conf.get('backendOrigin', '')
-                if origin:
-                    from urllib.parse import urlparse
-                    parsed_port = urlparse(origin).port
-                    if parsed_port:
-                        port = parsed_port
-                        break
-            except Exception:
-                pass
-
-    for _ in range(15):
-        try:
-            import socket, time
-            conn = socket.create_connection(('127.0.0.1', port), timeout=1)
-            conn.close()
-            time.sleep(0.5)
-        except (OSError, ConnectionRefusedError):
-            break
-    else:
-        raise RuntimeError('AP06_BACKEND_LISTENER_STILL_ACTIVE')
-
-    cleanup_path = output / 'pipeline/backend-runtime-cleanup.json'
-    if not cleanup_path.is_file():
-        return {'status': 'UNVERIFIED', 'reason': 'BACKEND_CLEANUP_RECEIPT_MISSING'}
-
-    try:
-        cleanup_receipt = json.loads(cleanup_path.read_text(encoding='utf-8-sig'))
-    except Exception:
-        return {'status': 'UNVERIFIED', 'reason': 'BACKEND_CLEANUP_RECEIPT_CORRUPT'}
-
-    if cleanup_receipt.get('status') != 'PASS':
-        return {'status': 'FAIL', 'reason': cleanup_receipt.get('failureClass', 'BACKEND_CLEANUP_FAILED')}
-
-    runtime_config = output / 'baseline/backend-runtime.local.json'
-    if runtime_config.is_file():
-        try:
-            conf = json.loads(runtime_config.read_text(encoding='utf-8-sig'))
-            cwd_str = conf.get('cwd')
-            storage_str = conf.get('storagePath')
-            if (cwd_str and Path(cwd_str).exists()) or (storage_str and Path(storage_str).exists()):
-                return {'status': 'FAIL', 'reason': 'BACKEND_RUNTIME_STILL_EXISTS'}
-        except Exception:
-            pass
-
-    try:
-        from run_ap06_r9 import publication_namespace
-        ns = publication_namespace(wave)
-        pub_name = f"{ns}-backend-cleanup" if ns else 'backend-cleanup'
-        publish(wave, 'backend-cleanup', {'evidence/backend-runtime-cleanup.json': cleanup_path})
-        config = json.loads((output / 'baseline/authority-config.local.json').read_text(encoding='utf-8-sig'))
-        authority = checked_path(Path(config['AP06_AUTHORITY_ROOT']))
-        verify_publication(authority, config['identity'], pub_name)
-    except Exception as exc:
-        return {'status': 'STOP', 'reason': f'BACKEND_CLEANUP_PUBLICATION_FAILED_{type(exc).__name__}'}
-
-    return {'status': 'PASS', 'receipt': cleanup_receipt}
 
 
 def record_durable_stop(wave, reason, error=None, stage=None):
@@ -607,7 +834,7 @@ def record_durable_stop(wave, reason, error=None, stage=None):
     cleanup_failure_class = None
 
     # Mandatory cleanup on STOP paths (post-reservation, post-launch, publication failure, during A/B)
-    if state['reservationCreated'] or state['browserLaunches'] > 0:
+    if state['reservationCreated'] or state['browserLaunches'] > 0 or _backend_start_evidence(output):
         try:
             cleanup_res = stop_and_verify_backend_cleanup(wave)
             cleanup_status = cleanup_res.get('status', 'UNVERIFIED')
@@ -734,7 +961,13 @@ def main():
                 from run_ap06_r9 import publication_namespace
                 ns = publication_namespace(wave)
                 pub_name = f"{ns}-decision" if ns else 'decision'
-                verify_publication(authority, config['identity'], pub_name)
+                manifest = verify_publication(authority, config['identity'], pub_name)
+                relative = 'evidence/decision.json'
+                published = f'{ns}/{relative}' if ns else relative
+                entry = next((row for row in manifest.get('files', ())
+                    if isinstance(row, dict) and row.get('path') == published), None)
+                if not entry or entry.get('sha256') != sha256(decision_path):
+                    return 1
             except Exception:
                 return 1
             return 0

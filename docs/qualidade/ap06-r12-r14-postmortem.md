@@ -1,93 +1,115 @@
 # Dossiê Pós-Mortem e Hardening de Contratos AP-06 (R12-R14)
 
-**Repositório:** `LViniciusk/SaveBox2`  
-**PR:** #39 — `investigation(ap06): R12-R13 native MemoryInfra recovery`  
-**Branch:** `investigation/ap06-r12-r13-native`  
-**HEAD congelado inicial (científico):** `f14a73dea360872f81efe0460e3ac9b6f5109a1b`  
-**Orçamento científico consumido nesta TASK:** **Zero Chromium** (100% replay offline e hardening de contratos).  
+- **Repositório:** `LViniciusk/SaveBox2`
+- **PR:** #39 — `investigation(ap06): R12-R13 native MemoryInfra recovery`
+- **Branch:** `investigation/ap06-r12-r13-native`
+- **Base do PR:** `integration/ap06-r12-stabilization`
+- **HEAD científico congelado da R14:** `0297ac698a7583b2d6f6d031e7438ee24af97948`
+- **HEAD documental anterior:** `f14a73dea360872f81efe0460e3ac9b6f5109a1b`
+- **Primeiro commit de hardening:** `bcf497934c9082ea2a20c0d777865dd6eded8a1d`
+- **HEAD final desta rodada:** o commit que contém este documento; SHA exato e runs de CI estão registrados na descrição do PR #39 (um commit não pode conter o próprio SHA).
+- **Orçamento científico consumido nesta TASK:** **Zero Chromium** (100% replay offline e hardening de contratos).
 
 ---
 
 ## 1. Sumário Executivo
 
-A auditoria independente pós-R14 identificou que a decisão registrada `R12R14_NATIVE_CAPABILITY_INCONCLUSIVE` continha o motivo `NATIVE_DUMP_GUID_DUPLICATE`, levantado pelo agregador de traces de memória. Esse erro resultava de uma limitação no agregador, que rejeitava múltiplos eventos legítimos e complementares do Chromium associados ao mesmo GUID de dump. Além disso, o timestamp FILETIME de 64 bits do processo renderer excedia o limite seguro `Number.MAX_SAFE_INTEGER` do JavaScript, impedindo a geração da prova de identidade canônica, o classificador do runner mascarava erros contratuais como inconclusividade científica, o helper de cleanup de backend não estava integrado ao encerramento formal da campanha, e o STOP durável era modificado localmente após a publicação na autoridade, rompendo a igualdade byte a byte.
+A auditoria independente pós-R14 identificou cinco defeitos de engenharia no caminho nativo:
 
-Esta TASK executou integralmente a correção desses cinco contratos de engenharia, realizou o replay diagnóstico estritamente em leitura do trace R14 preservado, expandiu a suíte de testes unitários e integrados (Node e Python), e validou todas as etapas sem lançar nenhum processo Chromium.
+1. O agregador `MemoryInfra` rejeitava eventos legítimos e complementares do mesmo GUID de dump.
+2. A prova de identidade do renderer usava `Number`/`BigInt` para um FILETIME de 64 bits acima de `Number.MAX_SAFE_INTEGER`.
+3. O runner classificava `NATIVE_STOP` como decisão científica inconclusiva.
+4. O cleanup de backend não era estritamente verificado e não distinguia backend não iniciado de evidência ausente.
+5. O STOP publicado era modificado localmente depois do readback, quebrando a igualdade byte a byte.
+
+Esta rodada corrigiu os contratos, reexecutou o parser **somente em leitura** sobre o trace R14 preservado, ampliou a matriz de testes negativos e manteve a decisão científica histórica intacta. Nenhum processo Chromium foi lançado.
 
 ---
 
 ## 2. Causa da Divergência: `NATIVE_DUMP_GUID_DUPLICATE` vs. Ausência de `heaps_v2`
 
-### O Defeito Original
-Em `tools/quality/ap06_native.py`, a função `_aggregate_trace()` mantinha a verificação simplista:
+### Defeito original
+
+Em `tools/quality/ap06_native.py`, `_aggregate_trace()` rejeitava qualquer segundo evento do renderer com o mesmo GUID:
+
 ```python
 if event_guid in renderer_dump_guids:
     raise NativeTraceError("NATIVE_DUMP_GUID_DUPLICATE")
 ```
-Durante um checkpoint `MemoryInfra`, o Chromium headless-shell emite múltiplos registros de dump sob o mesmo GUID para o processo renderer:
-- **Evento 1:** Contém `process_totals` (nível de detalhe e totais privados/residentes do processo).
-- **Evento 2:** Contém o mapa `allocators` e o grafo `allocators_graph`.
 
-O agregador abortava no segundo evento considerando-o uma duplicação inválida. Em seguida, o runner `run_capability()` em `tools/quality/run_ap06_r12_r13_native.py` tratava qualquer status diferente de `NATIVE_CAPABILITY_PASS` como uma decisão científica inconclusiva, gravando `NATIVE_DUMP_GUID_DUPLICATE` no manifesto terminal.
+O Chromium emite múltiplos registros `ph: "v"` sob o mesmo GUID: um com `process_totals` e outro com `allocators`/`allocators_graph`. O agregador abortava no segundo registro. Em seguida, `run_capability()` convertia esse STOP em uma decisão inconclusiva, registrando `NATIVE_DUMP_GUID_DUPLICATE` no manifesto terminal.
 
-### Correção Implementada
+### Correção implementada
+
 Em `tools/quality/ap06_native.py`:
-1. Implementada a fusão de eventos complementares por GUID (`dump_events[event_guid]`).
-2. Validação rigorosa de identidade do dump: verificação de que PID e timestamp são idênticos entre eventos do mesmo GUID (`NATIVE_DUMP_PID_CONFLICT` e `NATIVE_DUMP_TIMESTAMP_CONFLICT`).
-3. Fragmentos idênticos não duplicam bytes nem stack bins.
-4. Conflitos de valores em allocators geram STOP formal (`NATIVE_ALLOCATOR_STATS_DUPLICATE`).
+
+1. Eventos complementares do mesmo GUID são fundidos em `dump_events[event_guid]`.
+2. PID e timestamp precisam ser idênticos entre eventos do mesmo GUID (`NATIVE_DUMP_PID_CONFLICT`, `NATIVE_DUMP_TIMESTAMP_CONFLICT`).
+3. Fragmentos idênticos não duplicam bytes, bins ou stacks.
+4. Valores conflitantes em allocators continuam sendo STOP formal (`NATIVE_ALLOCATOR_STATS_DUPLICATE`).
 5. A presença de `allocators` não é inferida como presença de `heaps_v2`.
+6. `inspect_trace()` permanece estritamente diagnóstico e não promove replay a aceitação.
 
 ---
 
 ## 3. Diagnóstico Real do Trace Preservado (Replay Offline Read-Only)
 
-O replay foi executado exclusivamente sobre o trace original preservado na autoridade privada, verificando hashes antes e após a análise:
+O replay foi executado exclusivamente sobre o trace privado preservado na autoridade, com verificação de hash antes e depois.
 
 - **Arquivo:** `.quality/readiness-wave12-r14-native/authority/r12-r14-native/traces/capability.json`
 - **Tamanho:** 4.413.912 bytes
-- **SHA-256:** `aefcdf7073eb9137b3c53959af4c93668a03ac19c3903d2901a9bbbde8f66086`
-- **Status do Freeze R14:** Íntegro (SHA-256: `7f58532c8b4ff7021f3b51bbce23cd43db6a2fb95372a4e69e07813808bad658`)
-- **Decisão Histórica:** Preservada inalterada em `.quality/readiness-wave12-r14-native/final/decision.json`
+- **SHA-256 antes/depois:** `aefcdf7073eb9137b3c53959af4c93668a03ac19c3903d2901a9bbbde8f66086` (idêntico)
+- **Freeze R14 (`freeze/freeze.json`):** `7f58532c8b4ff7021f3b51bbce23cd43db6a2fb95372a4e69e07813808bad658`
+- **Decisão local e publicada (`final/decision.json`):** `d078c297e752f6e39757dc3bb9c59cd7eb0d9d35acbade3fbf3e3b38c069aa81` (idênticas)
+- **Manifesto da decisão:** `82b06f2ebf85d261ee9d3d6fbebdbd8adedf29442dee108ec6f3577de35829fe`
+- **STOP histórico R13 local vs. autoridade:** `97081f17bc48ba55914f61d4a8ce98b7040a58dad1421caae11f0b524ffd04d5` (idênticos)
 
-### Fatos Forenses Observados
-| Métrica | Valor Observado |
+### Fatos forenses observados
+
+| Métrica | Valor observado |
 |---|---|
 | Total de eventos no trace | 668 |
-| Eventos de dump de memória (`ph: "v"`) | 44 (distribuídos entre 5 processos) |
-| Total de registros de allocators | 11.008 |
-| Eventos com estrutura `heaps_v2` | **0** (completamente ausente no renderer e demais processos) |
-| Checkpoints correlacionados | GUIDs 1, 2 e 3 presentes (GUID 4 emitido com ID base 0 pelo Chromium) |
-| Motivo do diagnóstico corrigido | `NATIVE_HEAPS_V2_NOT_EMITTED` / `NATIVE_RENDERER_METADATA_MISSING` |
-| Classificação técnica corrigida | **`NATIVE_INCONCLUSIVE`** (Replay Diagnóstico) |
+| Eventos de dump de memória (`ph: "v"`) | 44 |
+| Processos distintos | 5 |
+| Dumps do renderer PID 27900 | 8 |
+| Dumps de outros processos | 36 |
+| GUIDs de checkpoint no receipt | 4 (`0x1` a `0x4`), únicos |
+| GUIDs efetivamente correlacionados | 3 (`0x1`, `0x2`, `0x3`); `0x4` não aparece como dump renderer |
+| Eventos associados a GUIDs de checkpoint | 33 |
+| Referências repetidas ao mesmo GUID | 30, sem conflito de PID ou timestamp |
+| Registros de allocator stats | 11.008 |
+| Eventos com estrutura `heaps_v2` | **0** |
+| Classificação estrita do parser corrigido | `NATIVE_INCONCLUSIVE` / `NATIVE_RENDERER_METADATA_MISSING` |
+| Classificação diagnóstica adicional | `NATIVE_HEAPS_V2_NOT_EMITTED` (após binding) |
 
-**Conclusão Técnica:** O erro de duplicação mascarava a realidade de que a sessão Chromium não emitiu buffers `heaps_v2`. O resultado científico final da R14 permanece estritamente inconclusivo, confirmando que a configuração de flags e ambiente do Chromium headless-shell 151 não expôs a árvore de heaps nativos.
+O receipt histórico da R14 **não contém** `rendererIdentityProof` nem `creationTimeExact`. Portanto o novo contrato de identidade não passaria com as evidências realmente disponíveis; essa é uma limitação de evidência histórica, não uma nova decisão científica. O caminho legado existe apenas para replay explícito e não é aceito como prova nova.
+
+**Conclusão técnica:** a ausência de `heaps_v2` é confirmada após a correção do tratamento de duplicatas. A R14 permanece inconclusiva e **não é reclassificada** por este replay.
 
 ---
 
-## 4. Correção da Precisão de FILETIME e Prova de Identidade
+## 4. Precisão de FILETIME e Prova de Identidade
 
-### O Defeito
-No Win32, os tempos de criação de processo retornados por `GetProcessTimes` são representados em intervalos de 100 nanossegundos desde 1º de janeiro de 1601 (FILETIME de 64 bits). Na R14, o tempo do renderer atingiu `134368223588270130`.  
-Como `Number.MAX_SAFE_INTEGER` em JavaScript é $9.007.199.254.740.991$ ($2^{53}-1$), a verificação `Number.isSafeInteger(auditedRenderer.creationTime)` falhava e rejeitava processos legítimos.
+### Defeito
 
-### Implementação
-1. **Representação Canônica:** O timestamp exato é gerado em Python diretamente do inteiro Win32 como string decimal: `creationTimeExact = str(creation_time)`.
-2. **Validação no Node (`frontend/tools/ap06-browser-identity.mjs`):**
-   - Função exportada `parseExactFiletime(value)` validando expressão `/^[1-9][0-9]*$/` e conferindo que o valor cabe em 64 bits sem sinal (`BigInt(value) <= (1n << 64n) - 1n`).
-   - `createRendererIdentityProof()` passa a aceitar `creationTimeExact` string sem conversão para `Number`.
-3. **Validação no Python (`tools/quality/ap06_native.py` e `tools/quality/ap06_browser_identity.py`):**
-   - Função `validate_canonical_filetime()` aplicando regex estrita e limite de 64 bits uint64.
-   - `_proof_matches()` compara os valores canônicos preservando total precisão numérica.
+`GetProcessTimes` retorna um FILETIME de 64 bits em intervalos de 100 ns desde 1601. A R14 registrou `134368223588270130` para o renderer, acima de `Number.MAX_SAFE_INTEGER` (`2^53 - 1`). Comparações via `Number`/`BigInt` perdiam precisão ou rejeitavam processos legítimos.
+
+### Correção
+
+1. Python emite `creationTimeExact = str(creation_time)` diretamente do inteiro Win32.
+2. `validate_canonical_filetime()` aceita somente decimal canônico (`^[1-9][0-9]*$`), sem zero à esquerda, sinal, decimal, expoente ou espaço, e limita a `uint64` (`<= 2^64 - 1`).
+3. Node expõe `parseExactFiletime()` e `createRendererIdentityProof()` **exige** `creationTimeExact`; não há fallback para `Number` ou `BigInt`.
+4. Novas provas comparam `creationTimeExact` da prova com `creationTimeExact` da auditoria Win32. Um `creationTime` legado só é comparado quando é inteiro seguro (`<= 2^53 - 1`); acima disso ele é ignorado por não representar o valor exato.
+5. `validate_process_audit_receipt()` aceita `creationTimeExact` opcional, mas exige que ele seja canônico e igual ao `creationTime` inteiro.
+6. `_legacy_proof_matches()` isola replay histórico e nunca é usado pelo agregador de novas provas.
 
 ---
 
 ## 5. Separação Estrita de STOP e Inconclusividade Científica
 
-O runner `run_capability()` em `tools/quality/run_ap06_r12_r13_native.py` foi reestruturado com classificação explícita em 4 vias:
+`run_capability()` classifica explicitamente:
 
 ```python
-status = capability.get('status')
 if status == 'NATIVE_CAPABILITY_PASS':
     return run_profiled_pair(wave, source, frozen, native)
 if status == 'NATIVE_INCONCLUSIVE':
@@ -97,68 +119,94 @@ if status == 'NATIVE_STOP':
 raise ValueError('NATIVE_CAPABILITY_STATUS_INVALID')
 ```
 
-- `NATIVE_CAPABILITY_PASS`: Autoriza a medição A/B do par profilado.
-- `NATIVE_INCONCLUSIVE`: Produz decisão científica terminal com `abAuthorized: false`, executa o cleanup verificado e encerra com **Exit 0**.
-- `NATIVE_STOP`: Levanta `NativeContractFailure`, aciona `record_durable_stop()` e encerra com **Exit 1**.
-- Status desconhecido: Bloqueado como STOP e encerra com **Exit 1**.
+- `NATIVE_CAPABILITY_PASS`: autoriza o par A/B.
+- `NATIVE_INCONCLUSIVE`: decisão terminal com `abAuthorized: false`, cleanup verificado e exit 0.
+- `NATIVE_STOP`: STOP formal, cleanup obrigatório, exit 1; nunca vira `NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT`.
+- Status desconhecido: STOP formal.
+
+Em `run_profiled_pair()`, o agregado é classificado imediatamente após `validate_trace()`:
+
+- `NATIVE_STOP` interrompe o par antes da segunda medição e levanta `NativeContractFailure`.
+- Qualquer agregado não-PASS publica `R12R14_NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT` com `abAuthorized: false` e sem segunda medição.
+- O consumo (`capabilityChromium`, `measurementChromium`, `retries`) é derivado dos receipts duráveis em `execution_state()`, nunca de constantes.
 
 ---
 
-## 6. Contrato de Cleanup Obrigatório e Imutabilidade do STOP
+## 6. Contrato de Cleanup e Imutabilidade do STOP
 
-### Cleanup de Backend Integrado
-1. O helper `stop_and_verify_backend_cleanup()` foi integrado em todas as saídas da campanha:
-   - Capability PASS (encerramento pós A/B).
-   - Capability INCONCLUSIVE (encerramento antes de qualquer A/B).
-   - STOP pós-reserva.
-   - STOP pós-lançamento.
-   - Falha de publicação.
-   - Falha durante o par profilado A/B.
-2. A porta do backend é obtida dinamicamente a partir de `backend-runtime.local.json` (`backendOrigin`), evitando assumir portas globais fixas.
-3. A ausência de listener, a confirmação do recibo `backend-runtime-cleanup.json` com status `PASS` e a inexistência de diretórios remanescentes de runtime/storage são exigidos antes de conceder status `PASS`.
-4. Falha ou recibo ausente retorna `FAIL` ou `UNVERIFIED`, bloqueando qualquer resultado GREEN operacional.
-5. Falha no cleanup durante um STOP não mascara o motivo de falha original.
+### Cleanup fail-closed
 
-### STOP Imutável Pós-Publicação
-1. O arquivo `final/STOP.json` é gravado uma única vez com os fatos conhecidos, **sem** a chave mutável `publicationStatus: PENDING`.
-2. O SHA-256 local é calculado.
-3. O STOP é publicado na autoridade (`evidence/STOP.json`).
-4. A publicação é confirmada por readback independente conferindo igualdade estrita do digest SHA-256.
-5. O resultado da publicação é gravado em recibo separado: `final/stop-publication-readback.json`.
-6. O hash do arquivo local `final/STOP.json` é idêntico byte a byte ao hash do arquivo na autoridade (`stopSha256`).
-7. Reexecuções quando `final/STOP.json` já existe preservam o arquivo e recusam sobrescrita.
+`stop_and_verify_backend_cleanup()` retorna somente `PASS`, `FAIL` ou `UNVERIFIED` e valida, nesta ordem:
+
+1. Se o backend nunca iniciou, retorna `PASS` com `backendStarted: false` e `BACKEND_NOT_STARTED`, sem sondar portas.
+2. Cria o marcador de parada e aguarda o supervisor real, quando existente.
+3. Valida `baseline/backend-runtime.local.json`: JSON, `cwd` sob `pipeline/runtime-<16 hex>`, `storagePath = cwd/storage`, `storageId` de 64 hex e origem `http://127.0.0.1:<porta>`.
+4. Valida `pipeline/backend-live.json` e `baseline/backend-isolation.json` contra a mesma origem, porta, storage e isolamento.
+5. Sonda somente a porta do runtime próprio; listener ativo é `FAIL`, erro de sondagem é `UNVERIFIED`.
+6. Exige `pipeline/backend-runtime-cleanup.json` com exatamente `{status, ownedServerStopped, ownedPostgresStopped, ownedClusterStorageAndDotenvRemoved, runtimePreservedForResume, personalServicesTouched, failureClass, errors}` e todos os booleanos corretos.
+7. Exige que `cwd` e `storagePath` não existam mais.
+8. Publica o receipt, faz readback independente e compara SHA-256 e tamanho.
+9. Qualquer exceção inesperada retorna `UNVERIFIED` com classe do erro; nunca `except Exception: pass`.
+
+### STOP imutável
+
+1. `final/STOP.json` é gravado uma única vez com os fatos finais.
+2. O SHA-256 local é calculado antes da publicação.
+3. O STOP é publicado em `evidence/STOP.json`.
+4. O readback confirma igualdade estrita de SHA-256.
+5. O resultado da publicação vai para `final/stop-publication-readback.json`, sem editar o STOP.
+6. Reexecução com STOP existente preserva os bytes e recusa sobrescrita.
+
+O gate final do runner também compara o SHA-256 de `final/decision.json` com a entrada publicada antes de retornar exit 0, e exige `cleanupStatus == PASS`.
 
 ---
 
 ## 7. Matriz de Testes (RED → GREEN)
 
-Todos os testes foram executados localmente e validados em ambiente offline (zero Chromium):
+Os testes negativos foram adicionados antes das correções e falharam no estado RED (21 falhas e 5 erros em `test_ap06_r12_r14`, erro de importação em `test_ap06_native` e asserção no teste Node). Após as correções:
 
-1. **Testes do Agregador e Parser Nativo (`tools/quality/test_ap06_native.py`):**
-   - 12 testes passando (1.59s): fusão estruturada de eventos válidos por GUID, fragmentos complementares, dois eventos idênticos sem duplicação de métricas, detecção de conflitos de allocators, timestamps inconsistentes, conflito de PID, representações canônicas de FILETIME e limites de arrays.
-2. **Testes de Identidade e Prova do Renderer (`frontend/tools/ap06-browser-identity.test.mjs`):**
-   - 20 testes passando (14.1s): validação de FILETIME $> 2^{53}-1$, rejeição de exponenciais, inteiros negativos, números truncados, prova de identidade ligada ao processo perfilado e auditorias Win32.
-3. **Testes do Runner e Imutabilidade (`tools/quality/test_ap06_r12_r14.py`):**
-   - 19 testes passando (9.43s): classificação em 4 vias do runner, paridade byte a byte de hashes do STOP publicado, isolamento de recibo de readback, bloqueio de reexecução com STOP, falha de publicação preservando STOP local, erro de cleanup preservando causa primária, e detecção dinâmica de portas.
-4. **Testes de Regressão Histórica (`tools/quality/test_ap06_r12_r13.py` e `test_ap06_freeze.py`):**
-   - 20 testes passando (32.14s): conformidade de autoridade, ausência de regressões em freeze e estabilidade das campanhas R12-R13 e R12-R14.
-5. **Verificação de Tipos TypeScript:**
-   - `npx tsc --noEmit -p tsconfig.app.json`: 0 erros.
+| Suíte | Resultado |
+|---|---|
+| `test_ap06_native.py` | 13 testes OK |
+| `test_ap06_browser_identity.py` | 10 testes OK |
+| `test_ap06_r12_r14.py` | 32 testes OK |
+| `test_ap06_r12_r13.py` | 9 testes OK |
+| `test_ap06_freeze.py` | 11 testes OK |
+| Node `ap06-browser-identity.test.mjs` | 17 testes, 0 falhas |
+| Node global (`node --test tools/*.test.mjs`) | 315 testes, 313 pass, 2 skipped, 0 fail |
+| Python global pertinente (25 módulos AP-06, isolados) | 24 PASS; `test_ap06_r12_r9` bloqueado por privilégio ACL do host (código não alterado) |
+| Quality Baseline Python | 45 testes OK |
+| TypeScript (`npx tsc --noEmit -p tsconfig.json`) | 0 erros |
+| Angular build (`npm run build`) | sucesso (somente warnings de budget) |
+
+Cobertura inclui: FILETIME acima de `2^53 - 1`, `uint64` máximo, zero, negativo, decimal, exponencial, não canônico e valor arredondado por `Number`; prova sem vínculo com auditoria; PID correto com FILETIME divergente; cleanup não iniciado, config ausente/corrompida, origem estrangeira, ownership inválido, listener ativo, receipt incompleto, serviços pessoais tocados, runtime remanescente e readback divergente; `NATIVE_STOP` após o primeiro agregado; inconclusivo sem segunda medição; consumo derivado de receipts; STOP imutável e reexecução bloqueada. Nenhum threshold, hash, ACL ou limite de segurança foi reduzido.
 
 ---
 
-## 8. Rastreabilidade de Commits e HEADs
+## 8. Rastreabilidade de Commits, Gates e CI
 
-- **HEAD congelado inicial (R14 freeze):** `f14a73dea360872f81efe0460e3ac9b6f5109a1b`
-- **Branch de trabalho:** `investigation/ap06-r12-r13-native`
-- **PR:** #39
-- **Escopo das alterações:**
-  - `tools/quality/ap06_native.py`
-  - `tools/quality/ap06_browser_identity.py`
-  - `tools/quality/run_ap06_r12_r13_native.py`
-  - `tools/quality/run_ap06_r12_r14_native.py`
-  - `tools/quality/test_ap06_native.py`
-  - `tools/quality/test_ap06_r12_r14.py`
-  - `frontend/tools/ap06-browser-identity.mjs`
-  - `frontend/tools/ap06-browser-identity.test.mjs`
-  - `docs/qualidade/ap06-r12-r14-postmortem.md`
+| Marco | Commit |
+|---|---|
+| HEAD científico congelado da R14 | `0297ac698a7583b2d6f6d031e7438ee24af97948` |
+| HEAD documental anterior | `f14a73dea360872f81efe0460e3ac9b6f5109a1b` |
+| Primeiro hardening | `bcf497934c9082ea2a20c0d777865dd6eded8a1d` |
+| HEAD final desta rodada | commit que contém este documento (SHA na descrição do PR #39) |
+
+Gates finais reforçados:
+
+- `NATIVE_STOP` e status desconhecido encerram com exit 1 e STOP durável.
+- `NATIVE_INCONCLUSIVE` e cobertura insuficiente exigem cleanup `PASS` e publicação com readback.
+- Exit 0 exige `final/decision.json` local, status idêntico ao decidido e SHA-256 igual ao manifesto publicado.
+- STOP publicado e STOP local mantêm hashes idênticos; o receipt de publicação é separado.
+
+CI final: os três workflows (`Backend CI`, `Frontend CI` e `Quality Baseline`) foram executados no HEAD final; SHA exato, run IDs e conclusão por job estão na descrição do PR #39. Workflows antigos não são usados como validação deste código.
+
+---
+
+## 9. Separação Engenharia vs. Ciência e Limitações Persistentes
+
+**Engenharia:** os cinco contratos foram corrigidos; a matriz de testes e os gates finais estão verdes. O replay é diagnóstico e não altera a autoridade.
+
+**Ciência:** a R14 continua `R12R14_NATIVE_CAPABILITY_INCONCLUSIVE`, com `abAuthorized: false`. Esta TASK não criou R15, não abriu nova autoridade, não repetiu capability, não executou A/B e não alterou freeze, raws, decisões ou STOPs históricos.
+
+**Limitação persistente:** o Chromium headless-shell usado na R14 não emitiu buffers `heaps_v2`; sem quatro dumps correlacionados nessa estrutura, nenhuma medição A/B é autorizada. O receipt histórico também não contém `rendererIdentityProof`/`creationTimeExact`, então o novo contrato de identidade não pode ser satisfeito retroativamente. Uma conclusão nativa exigiria nova investigação autorizada, fora do escopo desta TASK.

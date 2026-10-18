@@ -330,4 +330,45 @@ test('createRendererIdentityProof accepts exact 64-bit FILETIME strings above Nu
   };
   assert.equal(createRendererIdentityProof(badRecord), null);
 });
+test('createRendererIdentityProof requires creationTimeExact and never falls back to Number or BigInt',()=>{
+  const phases = ['baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final'];
+  const makeRecord = audited => ({
+    processExitAudit: {
+      status: 'PASS',
+      method: 'retained-win32-process-handles',
+      processes: [{pid: 27900, roles: ['renderer'], ...audited}]
+    },
+    processSamples: phases.map(phase => ({phase, processes: [{pid: 27900, type: 'renderer'}]})),
+    handleRelease: {status: 'PASS'}
+  });
+
+  assert.equal(createRendererIdentityProof(makeRecord({creationTime: 134368223588270130})), null);
+  assert.equal(createRendererIdentityProof(makeRecord({creationTime: '134368223588270130'})), null);
+  assert.equal(createRendererIdentityProof(makeRecord({creationTime: 123456})), null);
+
+  const exact = makeRecord({creationTimeExact: '134368223588270130'});
+  assert.equal(createRendererIdentityProof(makeRecord({
+    creationTimeExact: '134368223588270130', creationTime: 123456
+  })), null);
+
+  const safe = createRendererIdentityProof(makeRecord({
+    creationTimeExact: '123456', creationTime: 123456
+  }));
+  assert.ok(safe);
+  assert.equal(safe.creationTimeExact, '123456');
+  assert.equal(safe.creationTime, 123456);
+  assert.equal(JSON.parse(JSON.stringify(safe)).creationTimeExact, '123456');
+
+  // A rounded JavaScript Number is ignored because the canonical string is authoritative.
+  const rounded = createRendererIdentityProof(makeRecord({
+    creationTimeExact: '134368223588270130', creationTime: 134368223588270128
+  }));
+  assert.ok(rounded);
+  assert.equal(rounded.creationTimeExact, '134368223588270130');
+  assert.equal(rounded.creationTime, undefined);
+
+  const roundTrip = createRendererIdentityProof(JSON.parse(JSON.stringify(exact)));
+  assert.ok(roundTrip);
+  assert.equal(roundTrip.creationTimeExact, '134368223588270130');
+});
 

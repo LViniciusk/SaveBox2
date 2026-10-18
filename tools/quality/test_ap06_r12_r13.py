@@ -129,6 +129,20 @@ class R12R13PreparationTests(unittest.TestCase):
             self.assertFalse(s3['unverifiedConsumption'])
 
     def test_backend_cleanup_verification_states(self):
+        def valid_receipt(**overrides):
+            receipt = {
+                'status': 'PASS',
+                'ownedServerStopped': True,
+                'ownedPostgresStopped': True,
+                'ownedClusterStorageAndDotenvRemoved': True,
+                'runtimePreservedForResume': False,
+                'personalServicesTouched': False,
+                'failureClass': None,
+                'errors': [],
+            }
+            receipt.update(overrides)
+            return receipt
+
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary); authority = base / 'authority'; identity = 'a' * 64
             initialize(authority, identity, campaign=CAMPAIGN)
@@ -138,43 +152,93 @@ class R12R13PreparationTests(unittest.TestCase):
             wave = type('Wave', (), {'output': out, 'save': lambda _self, name, value:
                 (out / name).write_text(json.dumps(value), encoding='utf-8')})()
 
+            # Backend never started -> PASS, no listener probe
+            with patch('socket.create_connection', side_effect=AssertionError('probe forbidden')):
+                res = r13.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(res['status'], 'PASS')
+            self.assertFalse(res['backendStarted'])
+            self.assertEqual(res['reason'], 'BACKEND_NOT_STARTED')
+
+            # Start evidence present, runtime config missing -> UNVERIFIED
+            (out / 'pipeline/backend-live.json').write_text(json.dumps(
+                {'status': 'READY', 'isolated': True, 'backendOrigin': 'http://127.0.0.1:49999'}),
+                encoding='utf-8')
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                res = r13.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(res['status'], 'UNVERIFIED')
+            self.assertEqual(res['reason'], 'BACKEND_RUNTIME_CONFIG_MISSING')
+
+            # Corrupt runtime config -> UNVERIFIED
+            (out / 'baseline/backend-runtime.local.json').write_text('bad json', encoding='utf-8')
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                res = r13.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(res['status'], 'UNVERIFIED')
+            self.assertEqual(res['reason'], 'BACKEND_RUNTIME_CONFIG_CORRUPT')
+
+            # Foreign origin -> FAIL before any listener probe
+            runtime = out / 'pipeline' / ('runtime-' + 'b' * 16)
+            config = {
+                'executable': str(out / 'tooling/backend-build/nanika_e2e_fixture.exe'),
+                'cwd': str(runtime),
+                'storagePath': str(runtime / 'storage'),
+                'storageId': 'c' * 64,
+                'backendOrigin': 'http://127.0.0.1:49999',
+            }
+            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps(
+                dict(config, backendOrigin='http://192.168.0.1:49999')), encoding='utf-8')
+            with patch('socket.create_connection', side_effect=AssertionError('probe forbidden')):
+                res = r13.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(res['status'], 'FAIL')
+            self.assertEqual(res['reason'], 'BACKEND_RUNTIME_ORIGIN_INVALID')
+
+            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps(config), encoding='utf-8')
+
             # Missing cleanup receipt -> UNVERIFIED
             with patch('socket.create_connection', side_effect=ConnectionRefusedError):
                 res = r13.stop_and_verify_backend_cleanup(wave)
-                self.assertEqual(res['status'], 'UNVERIFIED')
-                self.assertEqual(res['reason'], 'BACKEND_CLEANUP_RECEIPT_MISSING')
+            self.assertEqual(res['status'], 'UNVERIFIED')
+            self.assertEqual(res['reason'], 'BACKEND_CLEANUP_RECEIPT_MISSING')
 
             # Corrupted cleanup receipt -> UNVERIFIED
             cleanup_file = out / 'pipeline/backend-runtime-cleanup.json'
-            cleanup_file.write_text('bad json')
+            cleanup_file.write_text('bad json', encoding='utf-8')
             with patch('socket.create_connection', side_effect=ConnectionRefusedError):
                 res = r13.stop_and_verify_backend_cleanup(wave)
-                self.assertEqual(res['status'], 'UNVERIFIED')
-                self.assertEqual(res['reason'], 'BACKEND_CLEANUP_RECEIPT_CORRUPT')
+            self.assertEqual(res['status'], 'UNVERIFIED')
+            self.assertEqual(res['reason'], 'BACKEND_CLEANUP_RECEIPT_CORRUPT')
 
-            # Cleanup receipt FAIL -> FAIL
-            cleanup_file.write_text(json.dumps({'status': 'FAIL', 'failureClass': 'POSTGRES_STOP_FAILED'}))
+            # Incomplete receipt -> FAIL
+            cleanup_file.write_text(json.dumps({'status': 'PASS'}), encoding='utf-8')
             with patch('socket.create_connection', side_effect=ConnectionRefusedError):
                 res = r13.stop_and_verify_backend_cleanup(wave)
-                self.assertEqual(res['status'], 'FAIL')
-                self.assertEqual(res['reason'], 'POSTGRES_STOP_FAILED')
+            self.assertEqual(res['status'], 'FAIL')
+            self.assertEqual(res['reason'], 'BACKEND_CLEANUP_RECEIPT_INVALID')
+
+            # Complete receipt reporting FAIL -> FAIL
+            cleanup_file.write_text(json.dumps(valid_receipt(
+                status='FAIL', failureClass='POSTGRES_STOP_FAILED',
+                ownedPostgresStopped=False)), encoding='utf-8')
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                res = r13.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(res['status'], 'FAIL')
+            self.assertEqual(res['reason'], 'BACKEND_CLEANUP_FAILED')
 
             # Runtime still exists -> FAIL
-            cleanup_file.write_text(json.dumps({'status': 'PASS'}))
-            rt_dir = base / 'runtime_cwd'; rt_dir.mkdir()
-            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps({'cwd': str(rt_dir)}))
+            cleanup_file.write_text(json.dumps(valid_receipt()), encoding='utf-8')
+            runtime.mkdir()
             with patch('socket.create_connection', side_effect=ConnectionRefusedError):
                 res = r13.stop_and_verify_backend_cleanup(wave)
-                self.assertEqual(res['status'], 'FAIL')
-                self.assertEqual(res['reason'], 'BACKEND_RUNTIME_STILL_EXISTS')
+            self.assertEqual(res['status'], 'FAIL')
+            self.assertEqual(res['reason'], 'BACKEND_RUNTIME_STILL_EXISTS')
 
             # Cleaned up runtime and valid receipt -> PASS with verified publication
-            rt_dir.rmdir()
+            runtime.rmdir()
             with patch('socket.create_connection', side_effect=ConnectionRefusedError):
                 res = r13.stop_and_verify_backend_cleanup(wave)
-                self.assertEqual(res['status'], 'PASS')
-                manifest = verify_publication(authority, identity, 'backend-cleanup')
-                self.assertEqual(manifest['campaign'], CAMPAIGN)
+            self.assertEqual(res['status'], 'PASS')
+            self.assertEqual(res['reason'], 'BACKEND_CLEANUP_VERIFIED')
+            manifest = verify_publication(authority, identity, 'backend-cleanup')
+            self.assertEqual(manifest['campaign'], CAMPAIGN)
 
     def test_record_durable_stop_persists_publishes_and_reads_back(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -188,9 +252,30 @@ class R12R13PreparationTests(unittest.TestCase):
                 (out / name).write_text(json.dumps(value), encoding='utf-8')})()
 
             (out / 'pipeline/capability-reservation.json').write_text('{}')
-            (out / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps({'status': 'PASS'}))
+            runtime = out / 'pipeline' / ('runtime-' + 'b' * 16)
+            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps({
+                'executable': str(out / 'tooling/backend-build/nanika_e2e_fixture.exe'),
+                'cwd': str(runtime),
+                'storagePath': str(runtime / 'storage'),
+                'storageId': 'c' * 64,
+                'backendOrigin': 'http://127.0.0.1:49999',
+            }), encoding='utf-8')
+            (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                'status': 'READY', 'isolated': True,
+                'backendOrigin': 'http://127.0.0.1:49999'}), encoding='utf-8')
+            (out / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps({
+                'status': 'PASS',
+                'ownedServerStopped': True,
+                'ownedPostgresStopped': True,
+                'ownedClusterStorageAndDotenvRemoved': True,
+                'runtimePreservedForResume': False,
+                'personalServicesTouched': False,
+                'failureClass': None,
+                'errors': [],
+            }), encoding='utf-8')
 
-            payload = r13.record_durable_stop(wave, 'INTEGRITY_CHECK_FAILED', stage='preflight')
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                payload = r13.record_durable_stop(wave, 'INTEGRITY_CHECK_FAILED', stage='preflight')
             self.assertEqual(payload['status'], 'STOP')
             self.assertEqual(payload['reason'], 'INTEGRITY_CHECK_FAILED')
             self.assertEqual(payload['failureStage'], 'preflight')

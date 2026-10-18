@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -7,6 +8,7 @@ from unittest.mock import patch
 from ap06_authorities import initialize, private_permissions, publish_snapshot, sha256, verify_publication
 from ap06_freeze import load_native_budget, validate_test_receipt
 from prepare_ap06_r12_r13 import NATIVE_BUDGET, verify_all_publications_once
+import run_ap06_r12_r13_native as runner
 import run_ap06_r12_r14_native as r14
 from run_ap06_r12_r13_native import validate_budget
 from run_ap06_r9 import publication_namespace, validate_freeze_preflight
@@ -14,6 +16,47 @@ import run_ap06_r12_r2_native as native
 
 CAMPAIGN = 'AP-06-R12-R14-native'
 OUTPUT = '.quality/readiness-wave12-r14-native'
+
+
+def valid_cleanup_receipt(**overrides):
+    receipt = {
+        'status': 'PASS',
+        'ownedServerStopped': True,
+        'ownedPostgresStopped': True,
+        'ownedClusterStorageAndDotenvRemoved': True,
+        'runtimePreservedForResume': False,
+        'personalServicesTouched': False,
+        'failureClass': None,
+        'errors': [],
+    }
+    receipt.update(overrides)
+    return receipt
+
+
+def runtime_config(output, port=49999):
+    runtime = output / 'pipeline' / ('runtime-' + 'b' * 16)
+    return {
+        'executable': str(output / 'tooling/backend-build/nanika_e2e_fixture.exe'),
+        'cwd': str(runtime),
+        'storagePath': str(runtime / 'storage'),
+        'storageId': 'c' * 64,
+        'backendOrigin': f'http://127.0.0.1:{port}',
+    }
+
+
+def cleanup_wave(base):
+    authority = base / 'authority'
+    identity = 'a' * 64
+    initialize(authority, identity, campaign=CAMPAIGN)
+    output = base / 'output'
+    (output / 'pipeline').mkdir(parents=True)
+    (output / 'baseline').mkdir(parents=True)
+    (output / 'baseline/authority-config.local.json').write_text(json.dumps(
+        {'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
+    wave = SimpleNamespace(output=output, save=lambda name, value: (
+        output / name).parent.mkdir(parents=True, exist_ok=True) or (
+        output / name).write_text(json.dumps(value), encoding='utf-8'))
+    return wave, output, authority, identity
 
 
 class R12R14PreparationTests(unittest.TestCase):
@@ -117,30 +160,156 @@ class R12R14PreparationTests(unittest.TestCase):
             self.assertEqual(s2['capabilityChromium'], 1)
             self.assertFalse(s2['unverifiedConsumption'])
 
-    def test_backend_cleanup_verification_states(self):
+    def test_cleanup_not_started_returns_pass_without_listener_probe(self):
         with tempfile.TemporaryDirectory() as temporary:
-            base = Path(temporary); authority = base / 'authority'; identity = 'a' * 64
-            initialize(authority, identity, campaign=CAMPAIGN)
-            out = base / 'output'; (out / 'pipeline').mkdir(parents=True); (out / 'baseline').mkdir(parents=True)
-            (out / 'baseline/authority-config.local.json').write_text(json.dumps(
-                {'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
-            wave = type('Wave', (), {'output': out, 'save': lambda _self, name, value:
-                (out / name).write_text(json.dumps(value), encoding='utf-8')})()
+            wave, out, _authority, _identity = cleanup_wave(Path(temporary))
+            with patch('socket.create_connection', side_effect=AssertionError('listener must not be probed')):
+                result = runner.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(result['status'], 'PASS')
+            self.assertFalse(result['backendStarted'])
+            self.assertEqual(result['reason'], 'BACKEND_NOT_STARTED')
+            self.assertFalse((out / 'pipeline/backend-runtime-cleanup.json').exists())
 
-            # Missing cleanup receipt
+    def test_cleanup_started_without_runtime_config_is_unverified(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, out, _authority, _identity = cleanup_wave(Path(temporary))
+            (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True}))
+            with patch('socket.create_connection', side_effect=AssertionError('listener must not be probed')):
+                result = runner.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(result['status'], 'UNVERIFIED')
+            self.assertEqual(result['reason'], 'BACKEND_RUNTIME_CONFIG_MISSING')
+
+    def test_cleanup_corrupt_runtime_config_is_unverified(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, out, _authority, _identity = cleanup_wave(Path(temporary))
+            (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True}))
+            (out / 'baseline/backend-runtime.local.json').write_text('{not-json', encoding='utf-8')
             with patch('socket.create_connection', side_effect=ConnectionRefusedError):
-                res = r14.stop_and_verify_backend_cleanup(wave)
-                self.assertEqual(res['status'], 'UNVERIFIED')
-                self.assertEqual(res['reason'], 'BACKEND_CLEANUP_RECEIPT_MISSING')
+                result = runner.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(result['status'], 'UNVERIFIED')
+            self.assertEqual(result['reason'], 'BACKEND_RUNTIME_CONFIG_CORRUPT')
 
-            # Cleaned up runtime and valid receipt -> PASS
+    def test_cleanup_rejects_foreign_origin_and_runtime_path(self):
+        cases = (
+            ({'backendOrigin': 'http://0.0.0.0:49999'}, 'BACKEND_RUNTIME_ORIGIN_INVALID'),
+            ({'backendOrigin': 'http://127.0.0.1'}, 'BACKEND_RUNTIME_ORIGIN_INVALID'),
+            ({'cwd': 'C:\\foreign-runtime'}, 'BACKEND_RUNTIME_OWNERSHIP_INVALID'),
+            ({'storagePath': 'C:\\foreign-runtime\\storage'}, 'BACKEND_RUNTIME_OWNERSHIP_INVALID'),
+            ({'storageId': 'not-a-storage-id'}, 'BACKEND_RUNTIME_OWNERSHIP_INVALID'),
+        )
+        for overrides, reason in cases:
+            with self.subTest(reason=reason, overrides=overrides), tempfile.TemporaryDirectory() as temporary:
+                wave, out, _authority, _identity = cleanup_wave(Path(temporary))
+                (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                    'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True}))
+                config = runtime_config(out)
+                config.update(overrides)
+                (out / 'baseline/backend-runtime.local.json').write_text(json.dumps(config))
+                (out / 'pipeline/backend-runtime-cleanup.json').write_text(
+                    json.dumps(valid_cleanup_receipt()))
+                with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                    result = runner.stop_and_verify_backend_cleanup(wave)
+                self.assertEqual(result['status'], 'FAIL')
+                self.assertEqual(result['reason'], reason)
+
+    def test_cleanup_requires_complete_receipt_and_untouched_foreign_services(self):
+        cases = (
+            ({'status': 'PASS'}, 'BACKEND_CLEANUP_RECEIPT_INVALID'),
+            (valid_cleanup_receipt(ownedServerStopped=False), 'BACKEND_CLEANUP_INCOMPLETE'),
+            (valid_cleanup_receipt(ownedPostgresStopped=False), 'BACKEND_CLEANUP_INCOMPLETE'),
+            (valid_cleanup_receipt(ownedClusterStorageAndDotenvRemoved=False), 'BACKEND_CLEANUP_INCOMPLETE'),
+            (valid_cleanup_receipt(runtimePreservedForResume=True), 'BACKEND_RUNTIME_PRESERVED_FOR_RESUME'),
+            (valid_cleanup_receipt(personalServicesTouched=True), 'BACKEND_PERSONAL_SERVICES_TOUCHED'),
+            (valid_cleanup_receipt(failureClass='BOOM'), 'BACKEND_CLEANUP_FAILED'),
+            (valid_cleanup_receipt(errors=[{'stage': 'server_stop', 'error': 'OSError'}]), 'BACKEND_CLEANUP_ERRORS_REPORTED'),
+            (valid_cleanup_receipt(status='FAIL'), 'BACKEND_CLEANUP_FAILED'),
+        )
+        for receipt, reason in cases:
+            with self.subTest(reason=reason, receipt=receipt), tempfile.TemporaryDirectory() as temporary:
+                wave, out, _authority, _identity = cleanup_wave(Path(temporary))
+                (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                    'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True}))
+                (out / 'baseline/backend-runtime.local.json').write_text(json.dumps(runtime_config(out)))
+                (out / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps(receipt))
+                with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                    result = runner.stop_and_verify_backend_cleanup(wave)
+                self.assertEqual(result['status'], 'FAIL')
+                self.assertEqual(result['reason'], reason)
+
+    def test_cleanup_active_listener_is_fail_not_exception(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, out, _authority, _identity = cleanup_wave(Path(temporary))
+            (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True}))
+            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps(runtime_config(out)))
+            (out / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps(valid_cleanup_receipt()))
+            connection = type('Connection', (), {'close': lambda _self: None})()
+            with patch('socket.create_connection', return_value=connection):
+                result = runner.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(result['status'], 'FAIL')
+            self.assertEqual(result['reason'], 'BACKEND_LISTENER_STILL_ACTIVE')
+
+    def test_cleanup_missing_or_corrupt_receipt_is_unverified(self):
+        for receipt, reason in ((None, 'BACKEND_CLEANUP_RECEIPT_MISSING'),
+                               ('{not-json', 'BACKEND_CLEANUP_RECEIPT_CORRUPT')):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as temporary:
+                wave, out, _authority, _identity = cleanup_wave(Path(temporary))
+                (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                    'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True}))
+                (out / 'baseline/backend-runtime.local.json').write_text(json.dumps(runtime_config(out)))
+                if receipt is not None:
+                    (out / 'pipeline/backend-runtime-cleanup.json').write_text(receipt, encoding='utf-8')
+                with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                    result = runner.stop_and_verify_backend_cleanup(wave)
+                self.assertEqual(result['status'], 'UNVERIFIED')
+                self.assertEqual(result['reason'], reason)
+
+    def test_cleanup_runtime_still_exists_and_readback_mismatch_block_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, out, _authority, _identity = cleanup_wave(Path(temporary))
+            (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True}))
+            config = runtime_config(out)
+            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps(config))
+            (out / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps(valid_cleanup_receipt()))
+            Path(config['cwd']).mkdir(parents=True)
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                result = runner.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(result['status'], 'FAIL')
+            self.assertEqual(result['reason'], 'BACKEND_RUNTIME_STILL_EXISTS')
+
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, out, _authority, _identity = cleanup_wave(Path(temporary))
+            (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True}))
+            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps(runtime_config(out)))
+            (out / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps(valid_cleanup_receipt()))
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError), \
+                 patch.object(runner, 'verify_publication', return_value={'files': [
+                     {'path': 'evidence/backend-runtime-cleanup.json', 'sha256': '0' * 64}]}):
+                result = runner.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(result['status'], 'FAIL')
+            self.assertEqual(result['reason'], 'BACKEND_CLEANUP_READBACK_MISMATCH')
+
+    def test_cleanup_valid_receipt_publishes_and_verifies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, out, authority, identity = cleanup_wave(Path(temporary))
+            (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True}))
+            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps(runtime_config(out)))
             cleanup_file = out / 'pipeline/backend-runtime-cleanup.json'
-            cleanup_file.write_text(json.dumps({'status': 'PASS'}))
+            cleanup_file.write_text(json.dumps(valid_cleanup_receipt()))
             with patch('socket.create_connection', side_effect=ConnectionRefusedError):
-                res = r14.stop_and_verify_backend_cleanup(wave)
-                self.assertEqual(res['status'], 'PASS')
-                manifest = verify_publication(authority, identity, 'backend-cleanup')
-                self.assertEqual(manifest['campaign'], CAMPAIGN)
+                result = runner.stop_and_verify_backend_cleanup(wave)
+            self.assertEqual(result['status'], 'PASS')
+            self.assertTrue(result['backendStarted'])
+            self.assertEqual(result['receiptSha256'], sha256(cleanup_file))
+            manifest = verify_publication(authority, identity, 'backend-cleanup')
+            entry = next(row for row in manifest['files']
+                if row['path'] == 'evidence/backend-runtime-cleanup.json')
+            self.assertEqual(entry['sha256'], sha256(cleanup_file))
 
     def test_record_durable_stop(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -307,6 +476,120 @@ class R12R14PreparationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'NATIVE_CAPABILITY_STATUS_INVALID'):
                     r14.run_capability(wave, base / 'hist')
 
+    def _profiled_wave(self, temporary):
+        wave, out, authority, identity = cleanup_wave(Path(temporary))
+        (out / 'pipeline/capability-reservation.json').write_text('{}', encoding='utf-8')
+        (out / 'pipeline/native-receipt.json').write_text(json.dumps({
+            'launchAttempts': 1, 'browserLaunches': 1, 'retries': 0}), encoding='utf-8')
+        (out / 'final').mkdir()
+        wave.root = Path(temporary)
+        return wave, out, authority, identity
+
+    def _measure_fixture(self, calls):
+        def fake_measure(wave, condition, _stage, _frozen, _ledger, requested, directory_name, **_kwargs):
+            self.assertEqual(requested, 1)
+            calls.append(condition)
+            directory = wave.output / 'formal' / directory_name
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / 'native-receipt.json').write_text(json.dumps({
+                'launchAttempts': 1, 'browserLaunches': 1, 'retries': 0}), encoding='utf-8')
+            (directory / 'native-trace.json').write_text(json.dumps({
+                'authorityRelativePath': 'traces/x.json'}), encoding='utf-8')
+            return {'rawSha256': 'a' * 64}
+        return fake_measure
+
+    def test_profiled_pair_native_stop_is_formal_stop_after_first_aggregate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, out, _authority, _identity = self._profiled_wave(temporary)
+            calls = []
+            with patch('run_ap06_r9.measure', side_effect=self._measure_fixture(calls)), \
+                 patch.object(runner, 'validate_trace', side_effect=[
+                     {'status': 'NATIVE_STOP', 'reason': 'NATIVE_ALLOCATOR_STATS_DUPLICATE'}]), \
+                 patch.object(runner, 'publish'), \
+                 patch.object(runner, 'stop_and_verify_backend_cleanup', return_value={'status': 'PASS'}):
+                with self.assertRaises(runner.NativeContractFailure) as context:
+                    runner.run_profiled_pair(wave, Path(temporary) / 'historical',
+                        {'implementationHead': 'h' * 40},
+                        SimpleNamespace(environment=lambda *_a, **_k: ({}, [])))
+            self.assertEqual(context.exception.reason, 'NATIVE_ALLOCATOR_STATS_DUPLICATE')
+            self.assertEqual(calls, ['r12r2.0'])
+            self.assertFalse((out / 'final/decision.json').exists())
+
+    def test_profiled_pair_inconclusive_halts_without_second_measurement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, out, _authority, _identity = self._profiled_wave(temporary)
+            calls = []
+            with patch('run_ap06_r9.measure', side_effect=self._measure_fixture(calls)), \
+                 patch.object(runner, 'validate_trace', side_effect=[
+                     {'status': 'NATIVE_INCONCLUSIVE', 'reason': 'NATIVE_HEAPS_V2_NOT_EMITTED'}]), \
+                 patch.object(runner, 'publish'), \
+                 patch.object(runner, 'stop_and_verify_backend_cleanup', return_value={'status': 'PASS'}):
+                decision = runner.run_profiled_pair(wave, Path(temporary) / 'historical',
+                    {'implementationHead': 'h' * 40},
+                    SimpleNamespace(environment=lambda *_a, **_k: ({}, [])))
+            self.assertEqual(decision['status'], 'R12R14_NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT')
+            self.assertEqual(decision['reason'], 'NATIVE_HEAPS_V2_NOT_EMITTED')
+            self.assertEqual(decision['measurementChromium'], 1)
+            self.assertFalse(decision['abAuthorized'])
+            self.assertEqual(calls, ['r12r2.0'])
+            self.assertTrue((out / 'final/decision.json').is_file())
+
+    def test_profiled_pair_consumption_comes_from_durable_receipts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, _out, _authority, _identity = self._profiled_wave(temporary)
+            calls = []
+            state = {'reservationCreated': True, 'launchAttempts': 9, 'browserLaunches': 9,
+                'retries': 4, 'capabilityChromium': 7, 'measurementChromium': 5,
+                'unverifiedConsumption': False, 'capabilityVerified': True, 'measurementVerified': True}
+            with patch('run_ap06_r9.measure', side_effect=self._measure_fixture(calls)), \
+                 patch.object(runner, 'validate_trace',
+                     side_effect=[{'status': 'NATIVE_CAPABILITY_PASS'}, {'status': 'NATIVE_CAPABILITY_PASS'}]), \
+                 patch.object(runner, 'publish'), \
+                 patch.object(runner, 'execution_state', return_value=state), \
+                 patch.object(runner, 'stop_and_verify_backend_cleanup', return_value={'status': 'PASS'}):
+                decision = runner.run_profiled_pair(wave, Path(temporary) / 'historical',
+                    {'implementationHead': 'h' * 40},
+                    SimpleNamespace(environment=lambda *_a, **_k: ({}, [])))
+            self.assertEqual(decision['status'], 'R12R14_NATIVE_TRACKED_AGGREGATES_OBSERVED')
+            self.assertEqual(decision['capabilityChromium'], 7)
+            self.assertEqual(decision['measurementChromium'], 5)
+            self.assertEqual(decision['retries'], 4)
+            self.assertEqual(calls, ['r12r2.0', 'r12r2.2'])
+
+    def test_profiled_pair_marks_unverified_measurement_consumption(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, _out, _authority, _identity = self._profiled_wave(temporary)
+            calls = []
+            state = {'reservationCreated': True, 'launchAttempts': 3, 'browserLaunches': 3,
+                'retries': 0, 'capabilityChromium': 1, 'measurementChromium': 1,
+                'unverifiedConsumption': True, 'capabilityVerified': True, 'measurementVerified': False}
+            with patch('run_ap06_r9.measure', side_effect=self._measure_fixture(calls)), \
+                 patch.object(runner, 'validate_trace',
+                     side_effect=[{'status': 'NATIVE_CAPABILITY_PASS'}, {'status': 'NATIVE_CAPABILITY_PASS'}]), \
+                 patch.object(runner, 'publish'), \
+                 patch.object(runner, 'execution_state', return_value=state), \
+                 patch.object(runner, 'stop_and_verify_backend_cleanup', return_value={'status': 'PASS'}):
+                decision = runner.run_profiled_pair(wave, Path(temporary) / 'historical',
+                    {'implementationHead': 'h' * 40},
+                    SimpleNamespace(environment=lambda *_a, **_k: ({}, [])))
+            self.assertEqual(decision['capabilityChromium'], 1)
+            self.assertEqual(decision['measurementChromium'], 'UNVERIFIED')
+
+    def test_inconclusive_decision_consumption_comes_from_durable_receipts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            wave, _out, _authority, _identity = self._profiled_wave(temporary)
+            state = {'reservationCreated': True, 'launchAttempts': 1, 'browserLaunches': 1,
+                'retries': 0, 'capabilityChromium': 1, 'measurementChromium': 0,
+                'unverifiedConsumption': True, 'capabilityVerified': False, 'measurementVerified': True}
+            with patch.object(runner, 'execution_state', return_value=state), \
+                 patch.object(runner, 'publish'), \
+                 patch.object(runner, 'stop_and_verify_backend_cleanup', return_value={'status': 'PASS'}):
+                decision = runner.publish_inconclusive_decision(wave, {
+                    'status': 'NATIVE_INCONCLUSIVE', 'reason': 'NATIVE_HEAPS_V2_NOT_EMITTED'})
+            self.assertEqual(decision['capabilityChromium'], 'UNVERIFIED')
+            self.assertEqual(decision['measurementChromium'], 0)
+            self.assertFalse(decision['abAuthorized'])
+
     def test_backend_cleanup_failure_blocks_green_inconclusive(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary); authority = base / 'authority'; identity = 'a' * 64
@@ -339,12 +622,16 @@ class R12R14PreparationTests(unittest.TestCase):
             (out / 'baseline/authority-config.local.json').write_text(json.dumps(
                 {'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
             # Dynamic port configured
-            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps({
-                'backendOrigin': 'http://127.0.0.1:49999'
+            (out / 'pipeline/backend-live.json').write_text(json.dumps({
+                'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True
             }), encoding='utf-8')
-            (out / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps({'status': 'PASS'}))
+            (out / 'baseline/backend-runtime.local.json').write_text(
+                json.dumps(runtime_config(out, port=49999)), encoding='utf-8')
+            (out / 'pipeline/backend-runtime-cleanup.json').write_text(
+                json.dumps(valid_cleanup_receipt()), encoding='utf-8')
 
             wave = type('Wave', (), {'output': out, 'save': lambda _self, name, value:
+                (out / name).parent.mkdir(parents=True, exist_ok=True) or
                 (out / name).write_text(json.dumps(value), encoding='utf-8')})()
 
             probed_ports = []
@@ -450,9 +737,13 @@ class R12R14PreparationTests(unittest.TestCase):
                 (output / 'pipeline/native-trace.json').write_text(json.dumps({
                     'authorityRelativePath': 'r12-r14-native/traces/r12-r14-native-trace-capability.json'
                 }), encoding='utf-8')
-                (output / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps({
-                    'status': 'PASS'
+                (output / 'pipeline/backend-live.json').write_text(json.dumps({
+                    'status': 'READY', 'backendOrigin': 'http://127.0.0.1:49999', 'isolated': True
                 }), encoding='utf-8')
+                (output / 'baseline/backend-runtime.local.json').write_text(
+                    json.dumps(runtime_config(output, port=49999)), encoding='utf-8')
+                (output / 'pipeline/backend-runtime-cleanup.json').write_text(
+                    json.dumps(valid_cleanup_receipt()), encoding='utf-8')
 
             wave.command = fake_capability_command
 
@@ -460,7 +751,9 @@ class R12R14PreparationTests(unittest.TestCase):
             with patch('run_ap06_r12_r13_native.verify_frozen_campaign', return_value=frozen_mock):
                 with patch('run_ap06_r12_r2.validate_browser_receipt', return_value=None):
                     with patch('run_ap06_r12_r2_native.environment', return_value=({}, [])):
-                        decision = r14.run_capability(wave, root / 'historical')
+                        with patch('socket.create_connection',
+                                side_effect=ConnectionRefusedError('Connection refused')):
+                            decision = r14.run_capability(wave, root / 'historical')
 
             # Verify conclusive handling: heaps_v2 not emitted -> INCONCLUSIVE decision, 0 A/B launches
             self.assertEqual(decision['status'], 'R12R14_NATIVE_CAPABILITY_INCONCLUSIVE')

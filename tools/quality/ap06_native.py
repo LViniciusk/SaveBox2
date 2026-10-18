@@ -231,7 +231,19 @@ def validate_canonical_filetime(value):
         return None
     return val
 
-def _proof_matches(receipt,pid):
+MAX_SAFE_FILETIME_INTEGER = (1 << 53) - 1
+
+def _legacy_creation_time(value):
+    """Return a comparable legacy FILETIME, None when absent, or INVALID."""
+    if value is None:
+        return None
+    if type(value) is int and value > 0:
+        return value
+    if isinstance(value, str):
+        return validate_canonical_filetime(value)
+    return 'INVALID'
+
+def _proof_matches(receipt,pid,*,allow_legacy=False):
     proof=receipt.get('rendererIdentityProof')
     if not isinstance(proof,dict):return False
     if not (proof.get('status')=='PASS' and proof.get('preRegistered') is True and \
@@ -242,16 +254,6 @@ def _proof_matches(receipt,pid):
         proof.get('linkedToProfiledProcess') is True and proof.get('processIdentityCount')==1 and \
         proof.get('checkpointPhases')==list(PHASES)):
         return False
-
-    proof_exact = proof.get('creationTimeExact')
-    if proof_exact is not None:
-        proof_time = validate_canonical_filetime(proof_exact)
-        if proof_time is None:
-            return False
-    else:
-        if type(proof.get('creationTime')) is not int or proof['creationTime'] <= 0:
-            return False
-        proof_time = proof['creationTime']
 
     audit=receipt.get('processExitAudit')
     if not isinstance(audit,dict) or audit.get('status')!='PASS' or audit.get('method')!='retained-win32-process-handles':
@@ -268,14 +270,31 @@ def _proof_matches(receipt,pid):
     if audited.get('pid')!=pid:
         return False
 
+    proof_exact = proof.get('creationTimeExact')
     audited_exact = audited.get('creationTimeExact')
-    if audited_exact is not None:
-        audited_time = validate_canonical_filetime(audited_exact)
-        if audited_time is None or audited_time != proof_time:
+    if proof_exact is None and audited_exact is None:
+        if not allow_legacy:
             return False
+        proof_legacy = _legacy_creation_time(proof.get('creationTime'))
+        audited_legacy = _legacy_creation_time(audited.get('creationTime'))
+        if type(proof_legacy) is not int or type(audited_legacy) is not int or \
+            proof_legacy <= 0 or proof_legacy != audited_legacy:
+            return False
+        proof_time = audited_time = proof_legacy
     else:
-        if audited.get('creationTime') != proof_time:
+        proof_time = validate_canonical_filetime(proof_exact)
+        audited_time = validate_canonical_filetime(audited_exact)
+        if proof_time is None or audited_time is None or proof_time != audited_time:
             return False
+        # Legacy integers are advisory for new proofs. A safe integer must not
+        # contradict the canonical value; an unsafe one cannot be compared
+        # without reproducing the JavaScript Number precision loss.
+        for legacy in (_legacy_creation_time(proof.get('creationTime')),
+                _legacy_creation_time(audited.get('creationTime'))):
+            if legacy == 'INVALID':
+                return False
+            if type(legacy) is int and legacy <= MAX_SAFE_FILETIME_INTEGER and legacy != proof_time:
+                return False
 
     samples=receipt.get('processSamples')
     if not isinstance(samples,list) or len(samples)<4:
@@ -304,6 +323,10 @@ def _proof_matches(receipt,pid):
         return False
 
     return True
+
+def _legacy_proof_matches(receipt,pid):
+    """Historical replay only. New proofs must use _proof_matches without fallback."""
+    return _proof_matches(receipt,pid,allow_legacy=True)
 
 def _aggregate_trace(events,receipt):
     """Strict allocation aggregates; snapshots do not identify individual lifetimes or prove leaks."""
