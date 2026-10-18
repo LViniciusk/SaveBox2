@@ -40,7 +40,35 @@ RUNTIME_INPUTS=('authority-config.local.json','backend-runtime.local.json','play
 
 def strict_freeze_namespace(output):
     return Path(output).name in ('readiness-wave12-r11-factorial','readiness-wave12-r11-native',
-        'readiness-wave12-r12-factorial','readiness-wave12-r12-native','readiness-wave12-r13-native')
+        'readiness-wave12-r12-factorial','readiness-wave12-r12-native','readiness-wave12-r13-native',
+        'readiness-wave12-r14-native')
+
+
+def load_native_budget(path, expected, task_sha):
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError('NATIVE_BUDGET_FILE_MISSING')
+    raw = path.read_bytes()
+
+    try:
+        budget = json.loads(raw.decode('utf-8-sig'))
+    except (UnicodeError, ValueError):
+        raise ValueError('NATIVE_BUDGET_JSON_INVALID') from None
+
+    if (
+        not isinstance(budget, dict)
+        or budget.get('approved') is not True
+        or budget.get('approvedByTaskSha256') != task_sha
+        or set(budget.keys()) != {'approved', 'approvedByTaskSha256', *expected.keys()}
+        or any(
+            type(budget.get(key)) is not int
+            or budget[key] != value
+            for key, value in expected.items()
+        )
+    ):
+        raise ValueError('NATIVE_BUDGET_AUTHORITY_INVALID')
+
+    return budget
 
 
 class FreezeFailure(WaveFailure):
@@ -116,7 +144,7 @@ def validate_compile_scope(commands):
 
 def validate_test_receipt(output, tests):
     required=('python','node','typescript','angularBuild','native')
-    if Path(output).name!='readiness-wave12-r13-native':required+=('global',)
+    if Path(output).name not in ('readiness-wave12-r13-native','readiness-wave12-r14-native'):required+=('global',)
     if tests.get('status')!='PASS' or any(tests.get(name,{}).get('status') not in
             (('PASS','DOCUMENTED_EXCEPTION') if name=='global' else ('PASS',)) for name in required):
         raise ValueError('AP06_FREEZE_TEST_AUTHORITY_INVALID')

@@ -142,7 +142,7 @@ def validate_condition(raw, condition, stage, freeze, fixtures):
 
 
 def validate_freeze_preflight(wave,unit,output):
-    if wave.output.name=='readiness-wave12-r13-native':
+    if wave.output.name in ('readiness-wave12-r13-native', 'readiness-wave12-r14-native'):
         if (unit.get('status')!='PASS' or unit.get('preflightMode')!='build-only' or
                 unit.get('unitBrowserLaunches')!=0 or unit.get('browserLaunches')!=0):
             raise WaveFailure('R12R13_BUILD_PREFLIGHT_INVALID')
@@ -164,7 +164,7 @@ def validate_freeze_preflight(wave,unit,output):
 def publication_namespace(wave):
     name=wave.output.name
     if name=='readiness-wave10-r3':return 'r10-r3'
-    if re.fullmatch(r'readiness-wave(?:11(?:-r[23])?|12(?:-r(?:[2-9]|1[0-3])-(?:factorial|native))?)',name):
+    if re.fullmatch(r'readiness-wave(?:11(?:-r[23])?|12(?:-r(?:[2-9]|1[0-4])-(?:factorial|native))?)',name):
         return name.replace('readiness-wave','r')
     return ''
 
@@ -182,7 +182,7 @@ def collect_freeze_inputs(wave, products, extra_files=()):
     files={path:wave.root/path for path in tracked}
     if publication_namespace(wave):
         header=wave.root/'backend/include/crow_all.h'
-        if re.fullmatch(r'readiness-wave12-r(?:8|9|1[0-3])-(factorial|native)',wave.output.name):
+        if re.fullmatch(r'readiness-wave12-r(?:8|9|1[0-4])-(factorial|native)',wave.output.name):
             from ap06_freeze import validate_native_build_authority
             backend=validate_native_build_authority(wave)
             if header.is_file():files['backend/include/crow_all.h']=header

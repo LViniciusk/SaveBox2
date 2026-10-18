@@ -22,7 +22,7 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
 
 
 def native_since(first):
-    return TRACE_PREFIX in tuple(f'r12-r{i}-native' for i in range(first,14))
+    return TRACE_PREFIX in tuple(f'r12-r{i}-native' for i in range(first,15))
 
 
 def configure_campaign(output,publisher):

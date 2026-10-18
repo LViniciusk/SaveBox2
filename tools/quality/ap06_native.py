@@ -226,13 +226,58 @@ def _event_guid(event):
 def _proof_matches(receipt,pid):
     proof=receipt.get('rendererIdentityProof')
     if not isinstance(proof,dict):return False
-    return proof.get('status')=='PASS' and proof.get('preRegistered') is True and \
-        proof.get('campaign')=='AP-06-R12-R13-native' and proof.get('rendererPid')==pid and \
+    if not (proof.get('status')=='PASS' and proof.get('preRegistered') is True and \
+        proof.get('campaign') in ('AP-06-R12-R14-native','AP-06-R12-R13-native') and \
+        proof.get('rendererPid')==pid and \
         type(proof.get('creationTime')) is int and proof['creationTime']>0 and \
-        isinstance(proof.get('roles'),list) and 'renderer' in proof['roles'] and \
+        isinstance(proof.get('roles'),list) and proof['roles']==['renderer'] and \
         proof.get('attestationMethod')=='retained-win32-process-handles' and \
         proof.get('linkedToProfiledProcess') is True and proof.get('processIdentityCount')==1 and \
-        proof.get('checkpointPhases')==list(PHASES)
+        proof.get('checkpointPhases')==list(PHASES)):
+        return False
+
+    audit=receipt.get('processExitAudit')
+    if not isinstance(audit,dict) or audit.get('status')!='PASS' or audit.get('method')!='retained-win32-process-handles':
+        return False
+    if audit.get('reusedPidCount',0)!=0 or audit.get('timedOutProcessCount',0)!=0 or audit.get('waitFailedProcessCount',0)!=0:
+        return False
+    processes=audit.get('processes')
+    if not isinstance(processes,list):
+        return False
+    renderer_processes=[p for p in processes if isinstance(p,dict) and 'renderer' in p.get('roles',())]
+    if len(renderer_processes)!=1:
+        return False
+    audited=renderer_processes[0]
+    if audited.get('pid')!=pid or audited.get('creationTime')!=proof['creationTime']:
+        return False
+
+    samples=receipt.get('processSamples')
+    if not isinstance(samples,list) or len(samples)<4:
+        return False
+    sample_map={s.get('phase'):s for s in samples if isinstance(s,dict)}
+    for phase in PHASES:
+        s=sample_map.get(phase)
+        if not s or not isinstance(s.get('processes'),list):
+            return False
+        sample_renderers=[p for p in s['processes'] if isinstance(p,dict) and p.get('type')=='renderer']
+        if len(sample_renderers)!=1 or sample_renderers[0].get('pid')!=pid:
+            return False
+
+    handle_release=receipt.get('handleRelease')
+    if not isinstance(handle_release,dict) or handle_release.get('status')!='PASS':
+        return False
+    proc_handles=handle_release.get('processHandles',{})
+    if proc_handles.get('closeFailures',0)!=0 or proc_handles.get('releasedProcessHandles',0)<=0:
+        return False
+
+    browser_id=receipt.get('browserIdentity')
+    if not isinstance(browser_id,dict):
+        return False
+    before=browser_id.get('before')
+    if not isinstance(before,dict) or before.get('nativeFlagsValidated') is not True:
+        return False
+
+    return True
 
 def _aggregate_trace(events,receipt):
     """Strict allocation aggregates; snapshots do not identify individual lifetimes or prove leaks."""

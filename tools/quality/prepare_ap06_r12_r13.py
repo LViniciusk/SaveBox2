@@ -20,10 +20,18 @@ DECISION_STATUS = 'R12R12_FACTORIAL_CONFIRMED'
 PAIR = ['r12r2.0', 'r12r2.2']
 CAMPAIGN = 'AP-06-R12-R13-native'
 OUTPUT = '.quality/readiness-wave12-r13-native'
+TASK_PATH = 'quality/ap06-r12-r13.md'
 TRACE_SHA256 = 'da8d207b98b0979fb280ac821fde04c1a09ef3178acc22835d92ba9281798df6'
 TRACE_BYTES = 4_430_975
 PHASES = ['baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final']
 NATIVE_BUDGET = {'capability': 1, 'profiledA': 1, 'profiledB': 1, 'maximum': 3, 'retries': 0}
+
+
+def configure_campaign(campaign, output, task_path):
+    global CAMPAIGN, OUTPUT, TASK_PATH
+    CAMPAIGN = campaign
+    OUTPUT = output
+    TASK_PATH = task_path
 
 
 def require(value, reason):
@@ -274,8 +282,8 @@ def prepare(wave, source):
     (wave.output / 'fixtures/manifest.json').write_bytes((source / 'fixtures/manifest.json').read_bytes())
     for name in ('workload.json', 'corpus-provenance.json'):
         (wave.output / 'baseline' / name).write_bytes((source / 'baseline' / name).read_bytes())
-    task = wave.root / 'quality/ap06-r12-r13.md'
-    require(task.is_file(), 'R12R13_TASK_AUTHORITY_MISSING')
+    task = wave.root / TASK_PATH
+    require(task.is_file(), 'AP06_TASK_AUTHORITY_MISSING')
     task_hash = sha256(task)
     (wave.output / 'baseline/task.md').write_bytes(task.read_bytes())
     wave.save('baseline/task-provenance.json', {'sourceSha256': task_hash, 'sourceBytes': task.stat().st_size})

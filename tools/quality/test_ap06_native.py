@@ -137,4 +137,120 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(interpret(500,200,400,False),'INCONCLUSIVE')
         self.assertEqual(interpret(500,200,0,True),'OBSERVED_TRACKED_RELEASE')
 
+    def test_renderer_identity_proof_and_negative_matrix(self):
+        def valid_proof_receipt(pid=42, creation_time=123456, campaign='AP-06-R12-R14-native'):
+            side = receipt()
+            side['rendererIdentityProof'] = {
+                'status': 'PASS', 'campaign': campaign, 'preRegistered': True,
+                'rendererPid': pid, 'creationTime': creation_time, 'roles': ['renderer'],
+                'attestationMethod': 'retained-win32-process-handles',
+                'linkedToProfiledProcess': True, 'processIdentityCount': 1,
+                'checkpointPhases': ['baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final']
+            }
+            side['processExitAudit'] = {
+                'status': 'PASS', 'method': 'retained-win32-process-handles',
+                'reusedPidCount': 0, 'timedOutProcessCount': 0, 'waitFailedProcessCount': 0,
+                'closedProcessCount': 1,
+                'processes': [{'pid': pid, 'creationTime': creation_time, 'roles': ['renderer']}]
+            }
+            side['processSamples'] = [
+                {'phase': p, 'processes': [{'pid': pid, 'type': 'renderer'}]}
+                for p in ('baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final')
+            ]
+            side['handleRelease'] = {
+                'status': 'PASS',
+                'processHandles': {'releasedProcessHandles': 1, 'closeFailures': 0}
+            }
+            side['browserIdentity'] = {
+                'before': {'nativeFlagsValidated': True}
+            }
+            return side
+
+        trace_without_name = events()[1:]
+
+        res = aggregate_trace(iter(trace_without_name), valid_proof_receipt(), detailed=True)
+        self.assertEqual(res['status'], 'NATIVE_CAPABILITY_PASS')
+
+        negatives = [
+            lambda r: r['rendererIdentityProof'].update(rendererPid=999),
+            lambda r: r['rendererIdentityProof'].update(creationTime=999999),
+            lambda r: r['processExitAudit'].update(reusedPidCount=1),
+            lambda r: r['rendererIdentityProof'].update(roles=['utility']),
+            lambda r: r['processExitAudit']['processes'][0].update(roles=['gpu']),
+            lambda r: r['handleRelease']['processHandles'].update(releasedProcessHandles=0),
+            lambda r: r['handleRelease']['processHandles'].update(closeFailures=1),
+            lambda r: r['handleRelease'].update(status='FAIL'),
+            lambda r: r['rendererIdentityProof'].update(attestationMethod='unsupported-method'),
+            lambda r: r.pop('processExitAudit'),
+            lambda r: r['processExitAudit'].update(status='FAIL'),
+            lambda r: r['processExitAudit']['processes'].append({'pid': 43, 'creationTime': 123457, 'roles': ['renderer']}),
+            lambda r: r['processSamples'][0]['processes'].append({'pid': 43, 'type': 'renderer'}),
+            lambda r: r['processSamples'][1]['processes'][0].update(pid=99),
+            lambda r: r['rendererIdentityProof'].update(linkedToProfiledProcess=False),
+            lambda r: r['browserIdentity']['before'].update(nativeFlagsValidated=False),
+            lambda r: r.pop('browserIdentity'),
+            lambda r: r.pop('processSamples'),
+            lambda r: r['rendererIdentityProof'].update(processIdentityCount=2),
+            lambda r: r['rendererIdentityProof'].update(checkpointPhases=['baseline']),
+        ]
+
+        for mutator in negatives:
+            side = valid_proof_receipt()
+            mutator(side)
+            result = aggregate_trace(iter(trace_without_name), side, detailed=True)
+            self.assertEqual(result.get('status'), 'NATIVE_INCONCLUSIVE')
+            self.assertEqual(result.get('reason'), 'NATIVE_RENDERER_METADATA_MISSING')
+
+    def test_load_native_budget_bom_and_negative_matrix(self):
+        from ap06_freeze import load_native_budget
+        expected = {'capability': 1, 'profiledA': 1, 'profiledB': 1, 'maximum': 3, 'retries': 0}
+        task_sha = 'a' * 64
+        valid_dict = {'approved': True, **expected, 'approvedByTaskSha256': task_sha}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp) / 'budget.json'
+
+            tmp_path.write_bytes(json.dumps(valid_dict).encode('utf-8'))
+            budget = load_native_budget(tmp_path, expected, task_sha)
+            self.assertEqual(budget['approved'], True)
+
+            tmp_path.write_bytes(b'\xef\xbb\xbf' + json.dumps(valid_dict).encode('utf-8'))
+            budget_bom = load_native_budget(tmp_path, expected, task_sha)
+            self.assertEqual(budget_bom['approved'], True)
+
+            tmp_path.write_bytes(json.dumps(valid_dict).encode('utf-8')[:15])
+            with self.assertRaisesRegex(ValueError, 'NATIVE_BUDGET_JSON_INVALID'):
+                load_native_budget(tmp_path, expected, task_sha)
+
+            tmp_path.write_bytes(b'\xff\xfe\x00\x00garbage')
+            with self.assertRaisesRegex(ValueError, 'NATIVE_BUDGET_JSON_INVALID'):
+                load_native_budget(tmp_path, expected, task_sha)
+
+            tampered = dict(valid_dict, maximum=4)
+            tmp_path.write_bytes(json.dumps(tampered).encode('utf-8'))
+            with self.assertRaisesRegex(ValueError, 'NATIVE_BUDGET_AUTHORITY_INVALID'):
+                load_native_budget(tmp_path, expected, task_sha)
+
+            tmp_path.write_bytes(json.dumps(dict(valid_dict, approved=False)).encode('utf-8'))
+            with self.assertRaisesRegex(ValueError, 'NATIVE_BUDGET_AUTHORITY_INVALID'):
+                load_native_budget(tmp_path, expected, task_sha)
+
+            tmp_path.write_bytes(json.dumps(dict(valid_dict, approvedByTaskSha256='b'*64)).encode('utf-8'))
+            with self.assertRaisesRegex(ValueError, 'NATIVE_BUDGET_AUTHORITY_INVALID'):
+                load_native_budget(tmp_path, expected, task_sha)
+
+            tmp_path.write_bytes(json.dumps(dict(valid_dict, capability=True)).encode('utf-8'))
+            with self.assertRaisesRegex(ValueError, 'NATIVE_BUDGET_AUTHORITY_INVALID'):
+                load_native_budget(tmp_path, expected, task_sha)
+
+            tmp_path.write_bytes(json.dumps(dict(valid_dict, extra=1)).encode('utf-8'))
+            with self.assertRaisesRegex(ValueError, 'NATIVE_BUDGET_AUTHORITY_INVALID'):
+                load_native_budget(tmp_path, expected, task_sha)
+
+            no_max = dict(valid_dict)
+            del no_max['maximum']
+            tmp_path.write_bytes(json.dumps(no_max).encode('utf-8'))
+            with self.assertRaisesRegex(ValueError, 'NATIVE_BUDGET_AUTHORITY_INVALID'):
+                load_native_budget(tmp_path, expected, task_sha)
+
 if __name__=='__main__':unittest.main()

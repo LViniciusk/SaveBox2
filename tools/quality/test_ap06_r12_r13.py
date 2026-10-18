@@ -87,5 +87,123 @@ class R12R13PreparationTests(unittest.TestCase):
             manifest = verify_publication(authority, identity, 'r12-r13-native-trace-capability')
             self.assertEqual(manifest['campaign'], CAMPAIGN)
 
+    def test_execution_state_accounting(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary)
+            pipeline = out / 'pipeline'; pipeline.mkdir()
+            formal = out / 'formal'; formal.mkdir()
+
+            # Empty state
+            s0 = r13.execution_state(out)
+            self.assertEqual(s0['browserLaunches'], 0)
+            self.assertEqual(s0['launchAttempts'], 0)
+            self.assertFalse(s0['unverifiedConsumption'])
+
+            # Reservation created without receipt -> unverified consumption, cannot declare 0
+            (pipeline / 'capability-reservation.json').write_text('{}')
+            s1 = r13.execution_state(out)
+            self.assertEqual(s1['launchAttempts'], 1)
+            self.assertEqual(s1['browserLaunches'], 0)
+            self.assertTrue(s1['unverifiedConsumption'])
+
+            # Receipt present
+            (pipeline / 'native-receipt.json').write_text(json.dumps({
+                'launchAttempts': 1, 'browserLaunches': 1, 'retries': 0
+            }))
+            s2 = r13.execution_state(out)
+            self.assertEqual(s2['launchAttempts'], 1)
+            self.assertEqual(s2['browserLaunches'], 1)
+            self.assertEqual(s2['capabilityChromium'], 1)
+            self.assertFalse(s2['unverifiedConsumption'])
+
+            # Add formal measurements
+            for d in ('05-r12r2.0', '06-r12r2.2'):
+                mdir = formal / d; mdir.mkdir()
+                (mdir / 'native-receipt.json').write_text(json.dumps({
+                    'launchAttempts': 1, 'browserLaunches': 1, 'retries': 0, 'status': 'CAPTURED'
+                }))
+            s3 = r13.execution_state(out)
+            self.assertEqual(s3['launchAttempts'], 3)
+            self.assertEqual(s3['browserLaunches'], 3)
+            self.assertEqual(s3['measurementChromium'], 2)
+            self.assertFalse(s3['unverifiedConsumption'])
+
+    def test_backend_cleanup_verification_states(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary); authority = base / 'authority'; identity = 'a' * 64
+            initialize(authority, identity, campaign=CAMPAIGN)
+            out = base / 'output'; (out / 'pipeline').mkdir(parents=True); (out / 'baseline').mkdir(parents=True)
+            (out / 'baseline/authority-config.local.json').write_text(json.dumps(
+                {'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
+            wave = type('Wave', (), {'output': out, 'save': lambda _self, name, value:
+                (out / name).write_text(json.dumps(value), encoding='utf-8')})()
+
+            # Missing cleanup receipt -> UNVERIFIED
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                res = r13.stop_and_verify_backend_cleanup(wave)
+                self.assertEqual(res['status'], 'UNVERIFIED')
+                self.assertEqual(res['reason'], 'BACKEND_CLEANUP_RECEIPT_MISSING')
+
+            # Corrupted cleanup receipt -> UNVERIFIED
+            cleanup_file = out / 'pipeline/backend-runtime-cleanup.json'
+            cleanup_file.write_text('bad json')
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                res = r13.stop_and_verify_backend_cleanup(wave)
+                self.assertEqual(res['status'], 'UNVERIFIED')
+                self.assertEqual(res['reason'], 'BACKEND_CLEANUP_RECEIPT_CORRUPT')
+
+            # Cleanup receipt FAIL -> FAIL
+            cleanup_file.write_text(json.dumps({'status': 'FAIL', 'failureClass': 'POSTGRES_STOP_FAILED'}))
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                res = r13.stop_and_verify_backend_cleanup(wave)
+                self.assertEqual(res['status'], 'FAIL')
+                self.assertEqual(res['reason'], 'POSTGRES_STOP_FAILED')
+
+            # Runtime still exists -> FAIL
+            cleanup_file.write_text(json.dumps({'status': 'PASS'}))
+            rt_dir = base / 'runtime_cwd'; rt_dir.mkdir()
+            (out / 'baseline/backend-runtime.local.json').write_text(json.dumps({'cwd': str(rt_dir)}))
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                res = r13.stop_and_verify_backend_cleanup(wave)
+                self.assertEqual(res['status'], 'FAIL')
+                self.assertEqual(res['reason'], 'BACKEND_RUNTIME_STILL_EXISTS')
+
+            # Cleaned up runtime and valid receipt -> PASS with verified publication
+            rt_dir.rmdir()
+            with patch('socket.create_connection', side_effect=ConnectionRefusedError):
+                res = r13.stop_and_verify_backend_cleanup(wave)
+                self.assertEqual(res['status'], 'PASS')
+                manifest = verify_publication(authority, identity, 'backend-cleanup')
+                self.assertEqual(manifest['campaign'], CAMPAIGN)
+
+    def test_record_durable_stop_persists_publishes_and_reads_back(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary); authority = base / 'authority'; identity = 'a' * 64
+            initialize(authority, identity, campaign=CAMPAIGN)
+            out = base / 'output'; (out / 'pipeline').mkdir(parents=True); (out / 'baseline').mkdir(parents=True)
+            (out / 'final').mkdir(parents=True)
+            (out / 'baseline/authority-config.local.json').write_text(json.dumps(
+                {'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
+            wave = type('Wave', (), {'output': out, 'save': lambda _self, name, value:
+                (out / name).write_text(json.dumps(value), encoding='utf-8')})()
+
+            (out / 'pipeline/capability-reservation.json').write_text('{}')
+            (out / 'pipeline/backend-runtime-cleanup.json').write_text(json.dumps({'status': 'PASS'}))
+
+            payload = r13.record_durable_stop(wave, 'INTEGRITY_CHECK_FAILED', stage='preflight')
+            self.assertEqual(payload['status'], 'STOP')
+            self.assertEqual(payload['reason'], 'INTEGRITY_CHECK_FAILED')
+            self.assertEqual(payload['failureStage'], 'preflight')
+            self.assertEqual(payload['failureClass'], 'INTEGRITY_CHECK_FAILED')
+            self.assertTrue(payload['reservationCreated'])
+            self.assertEqual(payload['scientificChromium'], 'UNVERIFIED')
+            self.assertEqual(payload['cleanupStatus'], 'PASS')
+            self.assertEqual(payload['publicationStatus'], 'PASS')
+
+            # Verify published file
+            manifest = verify_publication(authority, identity, 'stop')
+            self.assertEqual(manifest['campaign'], CAMPAIGN)
+            self.assertTrue((out / 'final/STOP.json').is_file())
+
 
 if __name__ == '__main__': unittest.main()
