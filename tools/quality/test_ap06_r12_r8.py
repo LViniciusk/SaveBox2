@@ -104,12 +104,13 @@ class ProductTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);output=root/'.quality/readiness-wave12-r8-factorial';baseline=output/'baseline';build=output/'tooling/backend-build'
             baseline.mkdir(parents=True);build.mkdir(parents=True)
+            header=root/'backend/include/crow_all.h';header.parent.mkdir(parents=True);header.write_text('owned header')
             for name,contents in {'nanika_ap06_local_server.exe':b'server','savebox_tests.exe':b'production',
                     'nanika_ap06_tests.exe':b'experimental','compile_commands.json':b'compile','CMakeCache.txt':b'cache'}.items():
                 (build/name).write_bytes(contents)
             backend={'status':'PASS','binarySha256':factorial.sha256(build/'nanika_ap06_local_server.exe'),
                 'compileCommandsSha256':factorial.sha256(build/'compile_commands.json'),
-                'cmakeCacheSha256':factorial.sha256(build/'CMakeCache.txt'),'crowHeaderSha256':'a'*64,
+                'cmakeCacheSha256':factorial.sha256(build/'CMakeCache.txt'),'crowHeaderSha256':factorial.sha256(header),
                 'crowHeaderSource':'reused R7 build receipt; ignored amalgamated header unavailable'}
             artifacts={'server':backend['binarySha256'],'compileCommands':backend['compileCommandsSha256'],
                 'cmakeCache':backend['cmakeCacheSha256'],'productionTests':factorial.sha256(build/'savebox_tests.exe'),
@@ -226,10 +227,12 @@ class ProductTests(unittest.TestCase):
                 'cmakeCacheSha256':factorial.sha256(build/'CMakeCache.txt'),'crowHeaderSha256':'a'*64}
             (output/'baseline/experimental-backend.json').write_text(json.dumps(prior))
             with patch.object(local_backend,'ROOT',root),patch.object(local_backend,'OUTPUT',output),\
+                    patch('ap06_freeze.validate_native_build_authority',return_value=prior) as authority,\
                     patch.object(local_backend.subprocess,'check_output',side_effect=['Nanika AP06 local laboratory R10-R3','14.3.0']):
                 result=local_backend.verify_experimental_build()
+                authority.assert_called_once()
             self.assertEqual(result['crowHeaderSha256'],'a'*64)
-            self.assertTrue(result['crowHeaderSource'].startswith('reused R7 build receipt'))
+            self.assertEqual(result['crowHeaderSource'],'independently verified native build authority')
 
     def test_validated_r8_build_is_reused_without_a_second_build(self):
         with tempfile.TemporaryDirectory() as temporary:

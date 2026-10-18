@@ -3,6 +3,8 @@ import argparse
 from collections import Counter
 import json
 import math
+import re
+from contextlib import nullcontext
 from pathlib import Path
 import subprocess
 import sys
@@ -31,11 +33,7 @@ def publish(wave, name, files):
     if wave.output.name == 'readiness-wave10-r3':
         name = name if name.startswith('r10-r3-') else 'r10-r3-'+name
         files = {'r10-r3/'+relative:source for relative,source in files.items()}
-    if wave.output.name in ('readiness-wave11','readiness-wave11-r2','readiness-wave11-r3','readiness-wave12','readiness-wave12-r2-factorial','readiness-wave12-r2-native',
-            'readiness-wave12-r3-factorial','readiness-wave12-r3-native','readiness-wave12-r4-factorial','readiness-wave12-r4-native',
-            'readiness-wave12-r5-factorial','readiness-wave12-r5-native','readiness-wave12-r6-factorial','readiness-wave12-r6-native',
-            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native','readiness-wave12-r9-factorial','readiness-wave12-r9-native',
-            'readiness-wave12-r10-factorial','readiness-wave12-r10-native'):
+    if publication_namespace(wave) and wave.output.name != 'readiness-wave10-r3':
         prefix=wave.output.name.replace('readiness-wave','r')
         name = name if name.startswith(prefix+'-') else prefix+'-'+name
         files = {prefix+'/'+relative:source for relative,source in files.items()}
@@ -65,6 +63,14 @@ def verify_freeze(wave, freeze):
     for path, digest in freeze['files'].items():
         if sha256(wave.root/path) != digest:
             raise WaveFailure('R9_FROZEN_FILE_CHANGED_' + path)
+    if 'runtimeInputs' in freeze:
+        from ap06_freeze import runtime_input_manifest
+        if runtime_input_manifest(wave)!=freeze['runtimeInputs']:
+            raise WaveFailure('R12R11_FREEZE_INTEGRITY_FAILED')
+        manifest=verify_publication(Path(config['AP06_AUTHORITY_ROOT']),config['identity'],freeze['implementationPublication'])
+        prefix=publication_namespace(wave)+'/tooling/source/'
+        if {row['path']:row['sha256'] for row in manifest['files']}!={prefix+name:digest for name,digest in freeze['files'].items()}:
+            raise WaveFailure('R12R11_FREEZE_READBACK_FAILED')
     if wave.git('rev-parse', 'HEAD').strip() != freeze['implementationHead']:
         raise WaveFailure('R9_IMPLEMENTATION_HEAD_CHANGED')
 
@@ -145,46 +151,81 @@ def validate_freeze_preflight(wave,unit,output):
     return assets,products,workers,fixture_hash
 
 
-def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r9-probe.mjs', runner_path=None,
-                          extra_files=(), extra_publications=(), protocol=None):
-    target=wave.output/'tooling/freeze.json'
-    if target.exists() or wave.git('status','--porcelain').strip(): raise WaveFailure('R9_FREEZE_REQUIRES_CLEAN_COMMITTED_IMPLEMENTATION')
-    unit=read(wave.output/'tooling/angular-unit-1.json')
-    assets,products,workers,fixture_hash=validate_freeze_preflight(wave,unit,output)
+def publication_namespace(wave):
+    name=wave.output.name
+    if name=='readiness-wave10-r3':return 'r10-r3'
+    if re.fullmatch(r'readiness-wave(?:11(?:-r[23])?|12(?:-r(?:[2-9]|10|11)-(?:factorial|native))?)',name):
+        return name.replace('readiness-wave','r')
+    return ''
+
+
+def validate_freeze_readiness(wave, *, output, extra_files=(), extra_publications=(), preflight_complete=False):
+    from ap06_freeze import freeze_stage,validate_freeze_plan
+    with freeze_stage('inputs'):
+        _,products,_=build_products(wave.root,output)
+        files=collect_freeze_inputs(wave,products,extra_files)
+    return validate_freeze_plan(wave,files,extra_publications,preflight_complete=preflight_complete)
+
+
+def collect_freeze_inputs(wave, products, extra_files=()):
     tracked=wave.git('ls-files').splitlines()
     files={path:wave.root/path for path in tracked}
-    if wave.output.name in ('readiness-wave10-r3','readiness-wave11','readiness-wave11-r2','readiness-wave11-r3','readiness-wave12','readiness-wave12-r2-factorial','readiness-wave12-r2-native',
-            'readiness-wave12-r3-factorial','readiness-wave12-r3-native','readiness-wave12-r4-factorial','readiness-wave12-r4-native',
-            'readiness-wave12-r5-factorial','readiness-wave12-r5-native','readiness-wave12-r6-factorial','readiness-wave12-r6-native',
-            'readiness-wave12-r7-factorial','readiness-wave12-r7-native','readiness-wave12-r8-factorial','readiness-wave12-r8-native','readiness-wave12-r9-factorial','readiness-wave12-r9-native',
-            'readiness-wave12-r10-factorial','readiness-wave12-r10-native'):
+    if publication_namespace(wave):
         header=wave.root/'backend/include/crow_all.h'
-        if wave.output.name.startswith(('readiness-wave12-r8-','readiness-wave12-r9-')):
-            backend=read(wave.output/'baseline/experimental-backend.json')
-            if header.is_file():
-                if sha256(header)!=backend.get('crowHeaderSha256'):raise WaveFailure('R12R8_CROW_HEADER_AUTHORITY_MISMATCH')
-                files['backend/include/crow_all.h']=header
-            elif backend.get('status')!='PASS' or not backend.get('crowHeaderSource','').startswith('reused R7 build receipt'):
-                raise WaveFailure('R12R8_CROW_HEADER_AUTHORITY_MISSING')
+        if re.fullmatch(r'readiness-wave12-r(?:8|9|10|11)-(factorial|native)',wave.output.name):
+            from ap06_freeze import validate_native_build_authority
+            backend=validate_native_build_authority(wave)
+            if header.is_file():files['backend/include/crow_all.h']=header
         else:files['backend/include/crow_all.h']=header
     for path in products: files[path]=wave.root/path
     for name in ('savebox_server.exe','nanika_e2e_fixture.exe'):
         path=wave.output/'tooling/backend-build'/name;files[path.relative_to(wave.root).as_posix()]=path
+    if wave.output.name in ('readiness-wave12-r11-factorial','readiness-wave12-r11-native'):
+        from ap06_freeze import NATIVE_FILES
+        for name in NATIVE_FILES.values():
+            path=wave.output/'tooling/backend-build'/name;files[path.relative_to(wave.root).as_posix()]=path
+        for name in ('native-production.xml','native-experimental.xml'):
+            path=wave.output/'baseline'/name;files[path.relative_to(wave.root).as_posix()]=path
     for path in (wave.output/'fixtures').rglob('*'):
         if path.is_file(): files[path.relative_to(wave.root).as_posix()]=path
     for name in ('baseline/budget.json','baseline/workload.json','baseline/backend-authority.json','baseline/historical-r9.json',
                  'baseline/versions.json','baseline/tests.json','baseline/task.md','tooling/angular-unit-1.json','tooling/kasumi.cjs',*extra_files):
         path=wave.output/name;files[path.relative_to(wave.root).as_posix()]=path
-    receipt=publish(wave,'implementation',{'tooling/source/'+name:path for name,path in files.items()})
+    return files
+
+
+def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r9-probe.mjs', runner_path=None,
+                          extra_files=(), extra_publications=(), protocol=None):
+    from ap06_freeze import freeze_stage,validate_freeze_plan
+    strict=wave.output.name in ('readiness-wave12-r11-factorial','readiness-wave12-r11-native')
+    stage=lambda name:freeze_stage(name) if strict else nullcontext()
+    target=wave.output/'tooling/freeze.json'
+    if strict and (wave.output/'pipeline/freeze-attempt.json').exists():
+        from ap06_freeze import FreezeFailure
+        raise FreezeFailure('integrity','FileExistsError')
+    if target.exists() or wave.git('status','--porcelain').strip(): raise WaveFailure('R9_FREEZE_REQUIRES_CLEAN_COMMITTED_IMPLEMENTATION')
+    with stage('preflight'):
+        unit=read(wave.output/'tooling/angular-unit-1.json')
+        assets,products,workers,fixture_hash=validate_freeze_preflight(wave,unit,output)
+    with stage('inputs'):
+        files=collect_freeze_inputs(wave,products,extra_files)
+    if strict:
+        ready=validate_freeze_plan(wave,files,extra_publications,preflight_complete=True,include_manifest=True)
+        before=read(wave.output/'baseline/freeze-readiness.json')
+        with stage('integrity'):
+            if before['sourceManifestSha256']!=ready['sourceManifestSha256']:
+                raise ValueError('AP06_FREEZE_STATIC_INPUTS_CHANGED')
+        with (wave.output/'pipeline/freeze-attempt.json').open('x') as stream:
+            json.dump({'implementationHead':wave.git('rev-parse','HEAD'),'retries':0},stream)
+    with stage('publication'):
+        receipt=publish(wave,'implementation',{'tooling/source/'+name:path for name,path in files.items()})
+    if strict:
+        with stage('readback'):
+            config=read(wave.output/'baseline/authority-config.local.json')
+            verify_publication(Path(config['AP06_AUTHORITY_ROOT']),config['identity'],publication_namespace(wave)+'-implementation')
     config=read(wave.output/'baseline/authority-config.local.json');authority=Path(config['AP06_AUTHORITY_ROOT'])
-    prefix = {'readiness-wave10-r3':'r10-r3-','readiness-wave11':'r11-','readiness-wave11-r2':'r11-r2-','readiness-wave11-r3':'r11-r3-','readiness-wave12':'r12-','readiness-wave12-r2-factorial':'r12-r2-factorial-','readiness-wave12-r2-native':'r12-r2-native-','readiness-wave12-r3-factorial':'r12-r3-factorial-','readiness-wave12-r3-native':'r12-r3-native-',
-        'readiness-wave12-r4-factorial':'r12-r4-factorial-','readiness-wave12-r4-native':'r12-r4-native-',
-        'readiness-wave12-r5-factorial':'r12-r5-factorial-','readiness-wave12-r5-native':'r12-r5-native-',
-        'readiness-wave12-r6-factorial':'r12-r6-factorial-','readiness-wave12-r6-native':'r12-r6-native-',
-        'readiness-wave12-r7-factorial':'r12-r7-factorial-','readiness-wave12-r7-native':'r12-r7-native-',
-        'readiness-wave12-r8-factorial':'r12-r8-factorial-','readiness-wave12-r9-factorial':'r12-r9-factorial-','readiness-wave12-r9-native':'r12-r9-native-',
-        'readiness-wave12-r10-factorial':'r12-r10-factorial-','readiness-wave12-r10-native':'r12-r10-native-',
-            'readiness-wave12-r8-native':'r12-r8-native-'}.get(wave.output.name,'')
+    prefix = publication_namespace(wave)
+    prefix = prefix+'-' if prefix else ''
     implementation_name = prefix+'implementation'
     freeze_name = prefix+'freeze'
     freeze={'campaign':'AP-06-R9-R2','status':'FROZEN','implementationHead':wave.git('rev-parse','HEAD').strip(),
@@ -194,16 +235,32 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
         'appProducts':products,'workers':workers,'pageScriptSha256':unit['pageScriptSha256'],
         'multiplexedContract':unit['multiplexedContract'],'backendAuthoritySha256':sha256(wave.output/'baseline/backend-authority.json'),
         'backendFileMapping':read(wave.output/'baseline/backend-authority.json')['fileMapping'],
-        'workload':read(wave.output/'baseline/workload.json'),'files':{name:sha256(path) for name,path in files.items()},
+        'workload':read(wave.output/'baseline/workload.json'),'files':{row['path']:row['sha256'] for row in ready['inputs']} if strict else {name:sha256(path) for name,path in files.items()},
         'publicationHashes':{'corpus-publication':sha256(authority/'manifests/corpus-publication.json'),implementation_name:receipt['manifestSha256']},
         'chromiumVersion':VERSION,'budget':read(wave.output/'baseline/budget.json'),
         'checkpoints':dict.fromkeys(CHECKPOINTS,'PASS')}
     freeze['extraPublications']=list(extra_publications)
     freeze['publicationHashes'].update({name:sha256(authority/'manifests'/f'{name}.json') for name in extra_publications})
     freeze.update(protocol or {})
-    wave.save('tooling/freeze.json',freeze)
-    publish(wave,'freeze',{'freeze/freeze.json':target})
-    verify_freeze(wave,freeze)
+    if strict:freeze['runtimeInputs']=ready['runtimeInputs']
+    if strict:freeze['status']='SNAPSHOT_AWAITING_READBACK'
+    with stage('integrity'):
+        wave.save('tooling/freeze.json',freeze)
+    with stage('publication'):
+        publish(wave,'freeze',{'freeze/freeze.json':target})
+    with stage('readback'):
+        verify_freeze(wave,freeze)
+    if strict:
+        with stage('readback'):
+            independent=subprocess.run([sys.executable,str(wave.root/'tools/quality/ap06_authorities.py'),
+                '--root',str(authority),'--identity',config['identity'],'--expected-freeze-sha256',sha256(target),
+                '--freeze-relative',publication_namespace(wave)+'/freeze/freeze.json'],
+                capture_output=True,check=True,text=True,timeout=120)
+            if json.loads(independent.stdout).get('status')!='PASS':
+                raise WaveFailure('R12R11_FREEZE_READBACK_FAILED')
+            wave.save('baseline/freeze-complete.json',{'status':'FROZEN','freezeSha256':sha256(target),
+                'implementationHead':freeze['implementationHead'],'independentReadback':True})
+            publish(wave,'freeze-complete',{'evidence/freeze-complete.json':wave.output/'baseline/freeze-complete.json'})
     print(json.dumps({'status':'READY_FOR_MEASUREMENT','files':len(files),'freezeSha256':sha256(target)}),flush=True)
 
 

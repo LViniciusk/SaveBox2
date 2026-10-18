@@ -224,6 +224,7 @@ if __name__ == '__main__':
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--identity', required=True)
     parser.add_argument('--expected-freeze-sha256')
+    parser.add_argument('--freeze-relative', default='freeze/freeze.json')
     args = parser.parse_args()
     validate_owned_destination(args.root, args.identity)
     campaign = json.loads((args.root/'authority.json').read_text())['campaign']
@@ -232,7 +233,7 @@ if __name__ == '__main__':
         data = json.loads(path.read_text())
         if isinstance(data, dict) and data.get('campaign') == campaign and 'files' in data:
             verify_publication(args.root, args.identity, path.stem); count += 1
-    if args.expected_freeze_sha256 and sha256(args.root/'freeze/freeze.json') != args.expected_freeze_sha256:
+    if args.expected_freeze_sha256 and sha256(checked_path(args.root/relative_path(args.freeze_relative))) != args.expected_freeze_sha256:
         raise ValueError('AUTHORITY_FREEZE_SEAL_MISMATCH')
     if not count: raise ValueError('AUTHORITY_NO_PUBLISHED_MANIFESTS')
     print(json.dumps({'status': 'PASS', 'verifiedPublications': count, 'worktreeRequired': False}))

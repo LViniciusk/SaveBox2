@@ -14,7 +14,7 @@ import {AUTOPLAY_ARGS,NATIVE_ARGS} from './ap06-browser-identity.mjs';
 test('R9 complete preflight uses real Windows handles and Python receipt consumers',
   {skip:process.platform!=='win32'||!process.env.AP06_R9_SIMULATION},async()=>{
     const data=JSON.parse(readFileSync(process.env.AP06_R9_SIMULATION,'utf8'));
-    const root=mkdtempSync(join(tmpdir(),'ap06-r9-simulation-')),profiles=join(root,'profiles');mkdirSync(profiles);
+    const root=data.identityRoot??mkdtempSync(join(tmpdir(),'ap06-r9-simulation-')),profiles=join(root,'profiles');mkdirSync(profiles);
     const old={...process.env},children=[];
     const python=process.env.WAVE1_PYTHON,helper=fileURLToPath(new URL('../../tools/quality/ap06_browser_identity.py',import.meta.url));
     const shell=join(root,'chrome-headless-shell.exe');copyFileSync(process.execPath,shell);
@@ -77,6 +77,6 @@ test('R9 complete preflight uses real Windows handles and Python receipt consume
     }finally{
       await Promise.all(children.map(stop));
       for(const key of Object.keys(process.env))if(!(key in old))delete process.env[key];
-      Object.assign(process.env,old);rmSync(root,{recursive:true,force:true});
+      Object.assign(process.env,old);if(!data.identityRoot)rmSync(root,{recursive:true,force:true});
     }
   });

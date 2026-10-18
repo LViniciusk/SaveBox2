@@ -12,3 +12,5 @@ tools/quality/run_readiness_wave1.py text eol=lf
 # Preserve the supplied R9 authority bytes, including Markdown hard breaks.
 quality/ap06-r12-r9.md -text whitespace=-blank-at-eol
 quality/ap06-r12-r10.md -text whitespace=-blank-at-eol
+
+quality/ap06-r12-r11.md -text whitespace=-blank-at-eol

@@ -1,5 +1,19 @@
 # Arquitetura do Frontend
 
+## Status documental
+
+Esta página descreve a organização do frontend versionado e suas responsabilidades no navegador. O comportamento de cada fluxo deve ser conferido nos serviços e testes correspondentes.
+
+## Fontes de autoridade no repositório
+
+- `frontend/angular.json`: projetos e configurações de build.
+- `frontend/src/main.ts`: bootstrap da aplicação.
+- `frontend/src/app/app.config.ts`: composição dos providers da aplicação.
+
+## Fora do escopo
+
+Experimentos de transporte e memória, dados de usuários e valores de configuração de uma instalação não são especificados nesta página.
+
 O frontend do Nanika é uma aplicação **Angular standalone** executada no navegador.
 
 Ele concentra a interface, o estado de runtime, a criptografia client-side e a coordenação das operações de arquivos. O backend continua responsável por autenticação, autorização, persistência e controle dos storages, enquanto o navegador mantém as chaves necessárias para recuperar o plaintext dos arquivos.

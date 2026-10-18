@@ -1,5 +1,20 @@
 # Arquitetura de Deployment
 
+## Status documental
+
+Esta página descreve a topologia definida nas configurações versionadas. A presença de uma configuração no repositório não comprova sua aplicação em um host em execução.
+
+## Fontes de autoridade no repositório
+
+- `docker-compose.yml`: serviços, redes e volumes.
+- `frontend/nginx.conf`: servidor estático e encaminhamento interno da API.
+- `deploy/nginx/nanika.conf`: configuração de ingresso do host.
+- `deploy/cloudflared/config.yml.example`: modelo do Tunnel.
+
+## Fora do escopo
+
+Esta página não contém segredos, configuração efetiva dos hosts nem certificação da disponibilidade pública. O laboratório AP-06 utiliza recursos locais isolados e não descreve o deployment público.
+
 O deployment do Nanika utiliza **Docker Compose** para executar frontend, backend e PostgreSQL em uma rede privada, enquanto um **Nginx no host** atua como ponto de entrada público da aplicação.
 
 Frontend e backend são publicados apenas no loopback da máquina. O PostgreSQL não possui porta pública no deployment principal.
@@ -433,7 +448,7 @@ Somente a primeira camada pertence ao ingresso público normal da aplicação.
 
 ## Persistência
 
-Os containers podem ser recriados sem que todo o estado seja descartado.
+Os containers podem ser recriados preservando o estado persistente.
 
 ```text id="8dehhs"
 PostgreSQL Container

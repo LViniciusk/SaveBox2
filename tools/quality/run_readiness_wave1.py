@@ -174,7 +174,8 @@ class Wave:
         self.env = self.host_env.copy()
         if os.name == 'nt':
             self.env['PATH'] = 'C:/msys64/ucrt64/bin;' + self.env['PATH']
-        self.node = shutil.which('node') or 'node'
+        node = shutil.which('node')
+        self.node = str(Path(node).resolve(strict=True)) if node else 'node'
         self.server_binary = self.root / ('backend/build/savebox_server.exe' if os.name == 'nt' else 'backend/build/savebox_server')
         self.fixture_binary = self.root / ('backend/build/nanika_e2e_fixture.exe' if os.name == 'nt' else 'backend/build/nanika_e2e_fixture')
         self.test_binary = self.root / ('backend/build/savebox_tests.exe' if os.name == 'nt' else 'backend/build/savebox_tests')

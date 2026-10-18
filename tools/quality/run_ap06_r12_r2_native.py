@@ -9,6 +9,7 @@ from run_ap06_r12 import require
 from run_ap06_r12_r2 import OUTPUT as FACTORIAL,validate_condition
 from ap06_authorities import checked_path,private_permissions,validate_owned_destination,publish_authorities,sha256
 from ap06_native import trace_events,aggregate_trace
+from ap06_freeze import FreezeFailure
 
 OUTPUT='.quality/readiness-wave12-r2-native'
 CAMPAIGN='AP-06-R12-R2-native'
@@ -18,35 +19,29 @@ FACTORIAL_STATUS='R12R2_FACTORIAL_CONFIRMED'
 
 def configure_campaign(output,publisher):
     global OUTPUT,PUBLISHER,CAMPAIGN,TRACE_PREFIX,FACTORIAL,FACTORIAL_STATUS
-    require(output in ('.quality/readiness-wave12-r3-native','.quality/readiness-wave12-r4-native',
-        '.quality/readiness-wave12-r5-native','.quality/readiness-wave12-r6-native','.quality/readiness-wave12-r7-native',
-        '.quality/readiness-wave12-r8-native','.quality/readiness-wave12-r9-native','.quality/readiness-wave12-r10-native'),'R12R3_NATIVE_CAMPAIGN_INVALID')
-    r10=output=='.quality/readiness-wave12-r10-native';r9=output=='.quality/readiness-wave12-r9-native'
-    r8=output=='.quality/readiness-wave12-r8-native';r7=output=='.quality/readiness-wave12-r7-native';r6=output=='.quality/readiness-wave12-r6-native'
-    r5=output in ('.quality/readiness-wave12-r5-native','.quality/readiness-wave12-r6-native','.quality/readiness-wave12-r7-native','.quality/readiness-wave12-r8-native','.quality/readiness-wave12-r9-native','.quality/readiness-wave12-r10-native')
-    r4=output in ('.quality/readiness-wave12-r4-native','.quality/readiness-wave12-r5-native','.quality/readiness-wave12-r6-native','.quality/readiness-wave12-r7-native','.quality/readiness-wave12-r8-native','.quality/readiness-wave12-r9-native','.quality/readiness-wave12-r10-native')
+    match=re.fullmatch(r'\.quality/readiness-wave12-r([3-9]|10|11)-native',output)
+    require(match is not None,'R12R3_NATIVE_CAMPAIGN_INVALID')
+    round_name=match[1]
     OUTPUT,PUBLISHER=output,Path(publisher).resolve()
-    CAMPAIGN,TRACE_PREFIX=('AP-06-R12-R10-native','r12-r10-native') if r10 else ('AP-06-R12-R9-native','r12-r9-native') if r9 else ('AP-06-R12-R8-native','r12-r8-native') if r8 else ('AP-06-R12-R7-native','r12-r7-native') if r7 else ('AP-06-R12-R6-native','r12-r6-native') if r6 else ('AP-06-R12-R5-native','r12-r5-native') if r5 else ('AP-06-R12-R4-native','r12-r4-native') if r4 else ('AP-06-R12-R3-native','r12-r3-native')
-    FACTORIAL='.quality/readiness-wave12-r10-factorial' if r10 else '.quality/readiness-wave12-r9-factorial' if r9 else '.quality/readiness-wave12-r8-factorial' if r8 else '.quality/readiness-wave12-r7-factorial' if r7 else '.quality/readiness-wave12-r6-factorial' if r6 else '.quality/readiness-wave12-r5-factorial' if r5 else '.quality/readiness-wave12-r4-factorial' if r4 else '.quality/readiness-wave12-r3-factorial'
-    FACTORIAL_STATUS='R12R10_FACTORIAL_CONFIRMED' if r10 else 'R12R9_FACTORIAL_CONFIRMED' if r9 else 'R12R8_FACTORIAL_CONFIRMED' if r8 else 'R12R7_FACTORIAL_CONFIRMED' if r7 else 'R12R6_FACTORIAL_CONFIRMED' if r6 else 'R12R5_FACTORIAL_CONFIRMED' if r5 else 'R12R4_FACTORIAL_CONFIRMED' if r4 else 'R12R3_FACTORIAL_CONFIRMED'
+    CAMPAIGN,TRACE_PREFIX=f'AP-06-R12-R{round_name}-native',f'r12-r{round_name}-native'
+    FACTORIAL=f'.quality/readiness-wave12-r{round_name}-factorial'
+    FACTORIAL_STATUS=f'R12R{round_name}_FACTORIAL_CONFIRMED'
     import run_ap06_r12_r2 as factorial
-    factorial.configure_campaign(FACTORIAL,Path(publisher).resolve(),'AP-06-R12-R10-factorial' if r10 else 'AP-06-R12-R9-factorial' if r9 else 'AP-06-R12-R8-factorial' if r8 else 'AP-06-R12-R7-factorial' if r7 else 'AP-06-R12-R6-factorial' if r6 else 'AP-06-R12-R5-factorial' if r5 else 'AP-06-R12-R4-factorial' if r4 else 'AP-06-R12-R3-factorial')
+    factorial.configure_campaign(FACTORIAL,PUBLISHER,f'AP-06-R12-R{round_name}-factorial')
+
+
+def campaign_prefix():
+    return 'R12'+CAMPAIGN.split('-')[-2]
+
 
 def campaign_decision(value):
-    if TRACE_PREFIX=='r12-r10-native':return dict(value,status=value['status'].replace('R12R2_','R12R10_'))
-    if TRACE_PREFIX=='r12-r9-native':return dict(value,status=value['status'].replace('R12R2_','R12R9_'))
-    if TRACE_PREFIX=='r12-r8-native':return dict(value,status=value['status'].replace('R12R2_','R12R8_'))
-    if TRACE_PREFIX=='r12-r7-native':return dict(value,status=value['status'].replace('R12R2_','R12R7_'))
-    if TRACE_PREFIX=='r12-r6-native':return dict(value,status=value['status'].replace('R12R2_','R12R6_'))
-    if TRACE_PREFIX=='r12-r5-native':return dict(value,status=value['status'].replace('R12R2_','R12R5_'))
-    if TRACE_PREFIX=='r12-r4-native':return dict(value,status=value['status'].replace('R12R2_','R12R4_'))
-    if TRACE_PREFIX=='r12-r3-native':return dict(value,status=value['status'].replace('R12R2_','R12R3_'))
-    return value
+    return dict(value,status=value['status'].replace('R12R2_',campaign_prefix()+'_'))
+
 
 def native_budget(budget,previous,requested):
     require(budget.get('approved') is True and budget.get('developmentMaximum')==1 and budget.get('measurementMaximum')==2 and
         budget.get('measurementRetries')==0 and type(previous) is int and 0<=previous<2 and type(requested) is int and requested==1 and
-        (TRACE_PREFIX not in ('r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native') or (budget.get('globalMaximum')==14 and budget.get('nativeCapabilityMaximum')==1 and
+        (TRACE_PREFIX not in ('r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native') or (budget.get('globalMaximum')==14 and budget.get('nativeCapabilityMaximum')==1 and
             budget.get('nativeMeasurementMaximum')==2)),'R12R2_NATIVE_BUDGET_EXCEEDED')
 
 def private_trace_path(wave,directory):
@@ -89,17 +84,23 @@ def environment(wave,directory,condition,stage='formal',freeze=None):
     env,assets=runtime_environment(wave,directory,condition,stage,freeze,output=OUTPUT,publisher=PUBLISHER)
     env.update(AP06_R11_KEYS=str(wave.root/'tools/quality/ap06_r11_keys.py'),AP06_R11_AUTHORITY=str(wave.output/'baseline/authority-config.local.json'),
         AP06_R12R2_ATTEMPT=stage+'-'+directory.name,AP06_NATIVE_TRACE=str(private_trace_path(wave,directory)),AP06_NATIVE_RECEIPT=str(directory/'native-receipt.json'))
-    if TRACE_PREFIX in ('r12-r9-native','r12-r10-native'):env.pop('AP06_R9_PRIVATE_KEYS',None)
-    if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native'):env['AP06_BROWSER_IDENTITY']=str(wave.output/'baseline/browser-identity.json')
-    if TRACE_PREFIX in ('r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native'):env['AP06_R5_PROCESS_HANDLE_AUDIT']='1'
-    if TRACE_PREFIX in ('r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native'):
+    if TRACE_PREFIX in ('r12-r9-native','r12-r10-native','r12-r11-native'):env.pop('AP06_R9_PRIVATE_KEYS',None)
+    if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native'):env['AP06_BROWSER_IDENTITY']=str(wave.output/'baseline/browser-identity.json')
+    if TRACE_PREFIX in ('r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native'):env['AP06_R5_PROCESS_HANDLE_AUDIT']='1'
+    if TRACE_PREFIX in ('r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native'):
         identity=read(wave.output/'baseline/browser-identity.json');profile_root=checked_path(Path(identity['launchProtocol']['profileRoot']))
         private_permissions(profile_root);env.update(AP06_BROWSER_TEMP_ROOT=str(profile_root),TEMP=str(profile_root),TMP=str(profile_root))
     return env,assets
 
 def verify_identity_freeze(wave,frozen):
     verify_r11_freeze(wave,frozen)
-    if TRACE_PREFIX=='r12-r10-native' and wave.output.name=='readiness-wave12-r10-factorial':
+    if TRACE_PREFIX=='r12-r11-native':
+        from ap06_freeze import verify_freeze_completion
+        verify_freeze_completion(wave,frozen)
+    if TRACE_PREFIX=='r12-r11-native' and wave.output.name=='readiness-wave12-r11-factorial':
+        import run_ap06_r12_r2 as factorial
+        factorial.validate_r11_authority(wave,frozen.get('protocol'));factorial.validate_r8_corpus(wave)
+    elif TRACE_PREFIX=='r12-r10-native' and wave.output.name=='readiness-wave12-r10-factorial':
         import run_ap06_r12_r2 as factorial
         factorial.validate_r10_authority(wave,frozen.get('protocol'));factorial.validate_r8_corpus(wave)
     elif TRACE_PREFIX=='r12-r9-native' and wave.output.name=='readiness-wave12-r9-factorial':
@@ -112,10 +113,10 @@ def verify_identity_freeze(wave,frozen):
         import run_ap06_r12_r2 as factorial
         (factorial.validate_r7_authority if TRACE_PREFIX=='r12-r7-native' else factorial.validate_r6_authority)(wave,frozen.get('protocol'))
         factorial.validate_r6_corpus(wave)
-    if TRACE_PREFIX in ('r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native'):
+    if TRACE_PREFIX in ('r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native'):
         from ap06_browser_identity import verify_identity
         identity=read(wave.output/'baseline/browser-identity.json')
-        prefix='R12R10' if TRACE_PREFIX=='r12-r10-native' else 'R12R9' if TRACE_PREFIX=='r12-r9-native' else 'R12R8' if TRACE_PREFIX=='r12-r8-native' else 'R12R7' if TRACE_PREFIX=='r12-r7-native' else 'R12R6' if TRACE_PREFIX=='r12-r6-native' else 'R12R5' if TRACE_PREFIX=='r12-r5-native' else 'R12R4'
+        prefix=campaign_prefix()
         require(frozen.get('browserIdentity')==identity,prefix+'_BROWSER_FREEZE_CHANGED');verify_identity(identity)
 
 def verify(wave,frozen):
@@ -129,12 +130,19 @@ def prepare(wave):
     require(decision['status']==FACTORIAL_STATUS and not (wave.output/'baseline/factorial-gate.json').exists(),'R12R2_NATIVE_GATE_NOT_AUTHORIZED_OR_RESTARTED')
     for name in ('baseline','pipeline','tooling','formal','final'):(wave.output/name).mkdir(parents=True,exist_ok=True)
     private_permissions(wave.output,create=True)
+    if TRACE_PREFIX=='r12-r11-native':private_permissions(wave.output/'baseline',create=True)
     for directory in ('fixtures','tooling/app','tooling/backend-build'):shutil.copytree(source/directory,wave.output/directory,dirs_exist_ok=False)
     names=('authority-config.local.json','backend-runtime.local.json','player-auth.local.json','backend-authority.json','versions.json','tests.json',
         'task.md','workload.json','historical-r9.json','backend-isolation.json','experimental-backend.json','ci.json','runtime-credentials.dpapi',
         'runtime-credentials-custody.json','custody-readback.json','prechecks.json')
     for name in names:shutil.copyfile(source/'baseline'/name,wave.output/'baseline'/name)
-    if TRACE_PREFIX in ('r12-r8-native','r12-r9-native','r12-r10-native'):
+    if TRACE_PREFIX=='r12-r11-native':
+        from run_ap06_r12_r2 import security_freeze_files
+        for name in security_freeze_files():
+            shutil.copyfile(source/name,wave.output/name)
+        for name in ('native-production.xml','native-experimental.xml'):
+            shutil.copyfile(source/'baseline'/name,wave.output/'baseline'/name)
+    if TRACE_PREFIX in ('r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native'):
         shutil.copyfile(source/'baseline/quality-baseline-ci.json',wave.output/'baseline/quality-baseline-ci.json')
         shutil.copyfile(source/'baseline/dependency-audit.json',wave.output/'baseline/dependency-audit.json')
         for name in ('native-binary-reuse.json','native-tests-summary.json'):
@@ -142,15 +150,15 @@ def prepare(wave):
         shutil.copyfile(source/'baseline/global-quality-r8.json',wave.output/'baseline/global-quality-r8.json')
         for name in ('secret-scan-receipt.json','secret-scan.json'):
             shutil.copyfile(source/'baseline'/name,wave.output/'baseline'/name)
-    if TRACE_PREFIX in ('r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native'):
+    if TRACE_PREFIX in ('r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native'):
         for name in ('task-provenance.json','corpus-provenance.json'):
             shutil.copyfile(source/'baseline'/name,wave.output/'baseline'/name)
-    if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native'):
+    if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native'):
         shutil.copyfile(source/'baseline/browser-identity.json',wave.output/'baseline/browser-identity.json')
         shutil.copyfile(source/'baseline/browser-identity-publication.json',wave.output/'baseline/browser-identity-publication.json')
-    if TRACE_PREFIX in ('r12-r9-native','r12-r10-native'):
+    if TRACE_PREFIX in ('r12-r9-native','r12-r10-native','r12-r11-native'):
         for name in ('runtime-credentials-readback.json','offline-ready.json','offline-integration.json',
-            *(('playwright-identity-preflight.json',) if TRACE_PREFIX=='r12-r10-native' else ())):
+            *(('playwright-identity-preflight.json',) if TRACE_PREFIX in ('r12-r10-native','r12-r11-native') else ())):
             shutil.copyfile(source/'baseline'/name,wave.output/'baseline'/name)
     shutil.copyfile(source/'tooling/kasumi.cjs',wave.output/'tooling/kasumi.cjs')
     wave.save('baseline/budget.json',{'approved':True,'developmentMaximum':1,'measurementMaximum':2,'measurementRetries':0,
@@ -163,17 +171,36 @@ def prepare(wave):
         'checkpoints':['baseline','cycle-6-close','idle-120s','forced-GC-final'],'limits':{'traceBytes':512*1024*1024,'eventBytes':32*1024*1024,'cdpTimeoutMs':30000,'streamTimeoutMs':120000},
         'interpretation':'Sampled live aggregate cohorts only; allocator coverage unproven; no individual lifetime, function culprit or LEAK_CONFIRMED from residual private bytes.'})
 
+def native_freeze_extra_files():
+    from run_ap06_r12_r2 import security_freeze_files
+    identity_files=('baseline/browser-identity.json','baseline/browser-identity-publication.json','pipeline/native-receipt.json')
+    return (*(security_freeze_files() if TRACE_PREFIX=='r12-r11-native' else ()),
+            'baseline/factorial-gate.json','baseline/native-capability.json','baseline/preregistered-protocol.json','baseline/backend-isolation.json',
+            *(('baseline/task-provenance.json','baseline/corpus-provenance.json') if TRACE_PREFIX in ('r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native') else ()),
+            'baseline/ci.json',*(('baseline/quality-baseline-ci.json','baseline/dependency-audit.json','baseline/native-binary-reuse.json',
+                'baseline/native-tests-summary.json','baseline/global-quality-r8.json','baseline/secret-scan-receipt.json',
+                'baseline/secret-scan.json') if TRACE_PREFIX in ('r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native') else ()),
+            *(('baseline/runtime-credentials-readback.json','baseline/offline-ready.json','baseline/offline-integration.json','tooling/app/stats.json',
+                'baseline/playwright-identity-preflight.json') if TRACE_PREFIX in ('r12-r10-native','r12-r11-native') else
+                ('baseline/runtime-credentials-readback.json','baseline/offline-ready.json','baseline/offline-integration.json','tooling/app/stats.json') if TRACE_PREFIX=='r12-r9-native' else ()),
+            'baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json','tooling/backend-build/nanika_ap06_local_server.exe',*identity_files)
+
+
 def run(wave):
     require(not any((wave.output/p).exists() for p in ('pipeline/capability-reservation.json','final/STOP.json','final/decision.json')),'R12R2_NATIVE_NO_RETRY_OR_RESUME')
     prepare(wave)
     factorial=Wave(wave.root);factorial.output=wave.root/FACTORIAL;frozen=read(factorial.output/'tooling/freeze.json');verify_identity_freeze(factorial,frozen)
+    if TRACE_PREFIX=='r12-r11-native':
+        from run_ap06_r9 import validate_freeze_readiness
+        ready=validate_freeze_readiness(wave,output=OUTPUT,extra_files=native_freeze_extra_files(),extra_publications=('custody',))
+        wave.save('baseline/freeze-readiness.json',ready)
     target=wave.output/'pipeline/native-receipt.json'
     with (wave.output/'pipeline/capability-reservation.json').open('x') as stream:json.dump({'maximum':1,'retries':0,'implementationHead':frozen['implementationHead']},stream)
     publish(wave,'capability-reserved',{'evidence/capability-reservation.json':wave.output/'pipeline/capability-reservation.json'})
     env,_=environment(wave,wave.output/'pipeline','r12r2.0');wave.command('native-capability',[wave.node,'tools/ap06-native-capability.mjs'],wave.root/'frontend',env)
     seal_trace(wave,target);record=read(target)
-    if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native'):verify_identity_freeze(factorial,frozen)
-    if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native'):
+    if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native'):verify_identity_freeze(factorial,frozen)
+    if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native'):
         from run_ap06_r12_r2 import validate_browser_receipt
         validate_browser_receipt(record,read(wave.output/'baseline/browser-identity.json'),native=True,
             process_samples=record.get('processSamples',()))
@@ -186,17 +213,9 @@ def run(wave):
     unit.update(appProducts=products,pageScriptSha256=frozen['pageScriptSha256'],nativeCapabilitySha256=sha256(wave.output/'baseline/native-capability.json'),
         nativeGateBrowserLaunches=1,provenance='Factorial app preflight plus one independent native capability browser, no extra browser')
     wave.save('tooling/angular-unit-1.json',unit)
-    identity_files=('baseline/browser-identity.json','baseline/browser-identity-publication.json','pipeline/native-receipt.json') if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native') else ()
+    identity_files=('baseline/browser-identity.json','baseline/browser-identity-publication.json','pipeline/native-receipt.json') if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native') else ()
     freeze_implementation(wave,output=OUTPUT,harness='frontend/tools/ap06-r12-r2-native-probe.mjs',runner_path=PUBLISHER,extra_publications=('custody',),
-        extra_files=('baseline/factorial-gate.json','baseline/native-capability.json','baseline/preregistered-protocol.json','baseline/backend-isolation.json',
-            *(('baseline/task-provenance.json','baseline/corpus-provenance.json') if TRACE_PREFIX in ('r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native') else ()),
-            'baseline/ci.json',*(('baseline/quality-baseline-ci.json','baseline/dependency-audit.json','baseline/native-binary-reuse.json',
-                'baseline/native-tests-summary.json','baseline/global-quality-r8.json','baseline/secret-scan-receipt.json',
-                'baseline/secret-scan.json') if TRACE_PREFIX in ('r12-r8-native','r12-r9-native','r12-r10-native') else ()),
-            *(('baseline/runtime-credentials-readback.json','baseline/offline-ready.json','baseline/offline-integration.json','tooling/app/stats.json',
-                'baseline/playwright-identity-preflight.json') if TRACE_PREFIX=='r12-r10-native' else
-                ('baseline/runtime-credentials-readback.json','baseline/offline-ready.json','baseline/offline-integration.json','tooling/app/stats.json') if TRACE_PREFIX=='r12-r9-native' else ()),
-            'baseline/runtime-credentials.dpapi','baseline/runtime-credentials-custody.json','tooling/backend-build/nanika_ap06_local_server.exe',*identity_files),
+        extra_files=native_freeze_extra_files(),
         protocol={'campaign':CAMPAIGN,**({'browserIdentity':read(wave.output/'baseline/browser-identity.json')} if identity_files else {}),'protocol':read(wave.output/'baseline/preregistered-protocol.json')})
     if identity_files:
         from ap06_browser_identity import verify_identity
@@ -220,8 +239,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix='ap06-native-') as tmp:
         wave.temp=Path(tmp)
         try:
-            if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native') and args.run and (wave.output/'final/STOP.json').exists():
-                prefix='R12R10' if TRACE_PREFIX=='r12-r10-native' else 'R12R9' if TRACE_PREFIX=='r12-r9-native' else 'R12R8' if TRACE_PREFIX=='r12-r8-native' else 'R12R7' if TRACE_PREFIX=='r12-r7-native' else 'R12R6' if TRACE_PREFIX=='r12-r6-native' else 'R12R5' if TRACE_PREFIX=='r12-r5-native' else 'R12R4' if TRACE_PREFIX=='r12-r4-native' else 'R12R3'
+            if TRACE_PREFIX in ('r12-r3-native','r12-r4-native','r12-r5-native','r12-r6-native','r12-r7-native','r12-r8-native','r12-r9-native','r12-r10-native','r12-r11-native') and args.run and (wave.output/'final/STOP.json').exists():
+                prefix=campaign_prefix()
                 print(json.dumps({'status':prefix+'_NATIVE_STOP','reason':prefix+'_NATIVE_NO_RETRY_OR_RESUME'}));return 1
             if args.run:run(wave)
             elif args.verify_freeze:verify(wave,read(wave.output/'tooling/freeze.json'))
@@ -230,6 +249,11 @@ def main():
                 path=checked_path(args.publish_raw.absolute());require(path.is_relative_to(wave.output) and re.fullmatch(r'formal-0[56]-r12r2\.[0-3]',args.snapshot or ''),'R12R2_NATIVE_RAW_PATH_INVALID')
                 publish(wave,'raw-'+args.snapshot,{f'evidence/raws/{args.snapshot}.json':path})
             else:parser.error('action required')
+        except FreezeFailure as error:
+            stop=campaign_decision({'status':'R12R2_NATIVE_STOP','reason':error.failure_class,
+                'failureStage':error.stage,'failureClass':error.failure_class,'factorialResultPreserved':True})
+            wave.save('final/STOP.json',stop)
+            publish(wave,'stop',{'evidence/STOP.json':wave.output/'final/STOP.json'});print(json.dumps(stop));return 1
         except (WaveFailure,ValueError,OSError,subprocess.SubprocessError,KeyError,TypeError,IndexError) as error:
             reason=str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+',str(error)) else 'R12R2_NATIVE_EXECUTION_FAILED'
             stop=campaign_decision({'status':'R12R2_NATIVE_STOP','reason':reason,'factorialResultPreserved':True});wave.save('final/STOP.json',stop)

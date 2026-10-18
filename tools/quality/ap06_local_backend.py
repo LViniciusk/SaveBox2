@@ -14,7 +14,7 @@ from ap06_authorities import sha256, checked_path, private_permissions
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / os.environ.get('AP06_EXPERIMENT_ROOT', '.quality/readiness-wave8')
-EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3','readiness-wave11-r3':'r10_r3','readiness-wave12':'r10_r3','readiness-wave12-r2-factorial':'r10_r3','readiness-wave12-r2-native':'r10_r3','readiness-wave12-r3-factorial':'r10_r3','readiness-wave12-r3-native':'r10_r3','readiness-wave12-r4-factorial':'r10_r3','readiness-wave12-r4-native':'r10_r3','readiness-wave12-r5-factorial':'r10_r3','readiness-wave12-r5-native':'r10_r3','readiness-wave12-r6-factorial':'r10_r3','readiness-wave12-r6-native':'r10_r3','readiness-wave12-r7-factorial':'r10_r3','readiness-wave12-r7-native':'r10_r3','readiness-wave12-r8-factorial':'r10_r3','readiness-wave12-r9-factorial':'r10_r3','readiness-wave12-r9-native':'r10_r3','readiness-wave12-r10-factorial':'r10_r3','readiness-wave12-r10-native':'r10_r3',
+EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3','readiness-wave11-r3':'r10_r3','readiness-wave12':'r10_r3','readiness-wave12-r2-factorial':'r10_r3','readiness-wave12-r2-native':'r10_r3','readiness-wave12-r3-factorial':'r10_r3','readiness-wave12-r3-native':'r10_r3','readiness-wave12-r4-factorial':'r10_r3','readiness-wave12-r4-native':'r10_r3','readiness-wave12-r5-factorial':'r10_r3','readiness-wave12-r5-native':'r10_r3','readiness-wave12-r6-factorial':'r10_r3','readiness-wave12-r6-native':'r10_r3','readiness-wave12-r7-factorial':'r10_r3','readiness-wave12-r7-native':'r10_r3','readiness-wave12-r8-factorial':'r10_r3','readiness-wave12-r9-factorial':'r10_r3','readiness-wave12-r9-native':'r10_r3','readiness-wave12-r10-factorial':'r10_r3','readiness-wave12-r10-native':'r10_r3','readiness-wave12-r11-factorial':'r10_r3','readiness-wave12-r11-native':'r10_r3',
     'readiness-wave12-r8-native':'r10_r3'}.get(OUTPUT.name,'r8')
 R3 = EXPERIMENT_ID == 'r10_r3'
 BACKEND_PORT, APP_PORT = 42187, 42088
@@ -51,10 +51,10 @@ def build_experimental():
         '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON','-DBUILD_TESTS=ON','-DBUILD_AP06_LOCAL_TEST_SERVER=ON'],env=env,check=True)
     subprocess.run(['cmake','--build',str(build),'--target','nanika_ap06_local_server','nanika_ap06_tests',
         'savebox_server','savebox_tests','nanika_e2e_fixture','--parallel','2'],env=env,check=True)
-    verify_experimental_build()
+    verify_experimental_build(fresh=True)
 
 
-def verify_experimental_build():
+def verify_experimental_build(fresh=False):
     build = OUTPUT/'tooling/backend-build'
     commands = json.loads((build/'compile_commands.json').read_text())
     for target,experimental in [('nanika_ap06_local_server',True),('savebox_server',False),('nanika_ap06_tests',True),('savebox_tests',False)]:
@@ -65,14 +65,16 @@ def verify_experimental_build():
     version = subprocess.check_output([str(binary),'--version'],text=True).strip()
     if version != 'Nanika AP06 local laboratory R10-R3': raise RuntimeError('AP06_BINARY_VERSION_INVALID')
     crow = ROOT/'backend/include/crow_all.h'
+    previous=None
+    if not fresh:
+        from ap06_freeze import validate_native_build_authority
+        from run_readiness_wave1 import Wave
+        wave=Wave(ROOT);wave.output=OUTPUT
+        previous=validate_native_build_authority(wave)
     if crow.is_file():crow_hash=sha256(crow);crow_source='worktree'
     else:
-        previous=json.loads((OUTPUT/'baseline/experimental-backend.json').read_text(encoding='utf-8'))
-        if (not OUTPUT.name.startswith(('readiness-wave12-r8-','readiness-wave12-r9-','readiness-wave12-r10-')) or previous.get('status')!='PASS' or
-                previous.get('binarySha256')!=sha256(binary) or previous.get('compileCommandsSha256')!=sha256(build/'compile_commands.json') or
-                previous.get('cmakeCacheSha256')!=sha256(build/'CMakeCache.txt') or not previous.get('crowHeaderSha256')):
-            raise RuntimeError('AP06_EXPERIMENTAL_BUILD_REUSE_INVALID')
-        crow_hash=previous['crowHeaderSha256'];crow_source='reused R7 build receipt; ignored amalgamated header unavailable'
+        if previous is None:raise RuntimeError('AP06_CROW_HEADER_AUTHORITY_MISSING')
+        crow_hash=previous['crowHeaderSha256'];crow_source='independently verified native build authority'
     result = {'status':'PASS','target':'nanika_ap06_local_server','version':version,
         'binarySha256':sha256(binary),'compileCommandsSha256':sha256(build/'compile_commands.json'),
         'cmakeCacheSha256':sha256(build/'CMakeCache.txt'),'crowHeaderSha256':crow_hash,'crowHeaderSource':crow_source,
@@ -321,7 +323,7 @@ def serve():
             'postgresPid':int((pgdata/'postmaster.pid').read_text().splitlines()[0]), 'database':database,
             'backendOrigin':config['backendOrigin'],'appOrigin':f'http://127.0.0.1:{APP_PORT}', 'isolated':True,
             'resumedExistingOwnedCluster':resume})
-        if OUTPUT.name.startswith(('readiness-wave12-r9-','readiness-wave12-r10-')):
+        if OUTPUT.name.startswith(('readiness-wave12-r9-','readiness-wave12-r10-','readiness-wave12-r11-')):
             record_runtime_isolation(config,json.loads((OUTPUT/'pipeline/backend-live.json').read_text()))
         print('R8 native backend/PostgreSQL READY',flush=True)
         stop = OUTPUT/'pipeline/stop-backend.request'

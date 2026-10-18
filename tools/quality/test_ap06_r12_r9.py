@@ -110,6 +110,43 @@ class ErrorContractTests(unittest.TestCase):
         self.assertEqual(combined.cleanup_failure_class, 'R12R9_CLEANUP_FAILED')
 
 
+def simulate_preflight(wave, env, assets, files, directory, identity_root=None):
+    from run_ap06_integration_probe import read
+    from run_ap06_transport_probe import media_server
+    from test_ap06_r12_r2 import complete_raw
+    root=wave.root
+    mapping = read(wave.output/'baseline/backend-authority.json')['fileMapping']
+    fixtures = read(wave.output/'fixtures/manifest.json')
+    ranges = read(wave.output/'baseline/workload.json')['rangesPerCycle']
+    conditions = {}
+    for condition in factorial.CONDITIONS:
+        raw, _, _ = complete_raw(condition)
+        run = raw['runs'][0]
+        network = run['rangeNetwork']
+        network['requests'] = network['requests'][:9]
+        for row, (_, wanted_range) in zip(network['requests'], ranges):
+            row['range'] = wanted_range
+            row['fileId'] = mapping[row['fixture']]['fileId']
+            row['url'] = f"http://127.0.0.1:42187/files/{row['fileId']}/download"
+            row['headers']['content-range'] = 'bytes '+wanted_range.removeprefix('bytes=')+'/'+str(fixtures[row['fixture']]['ciphertextBytes'])
+        backend = {'pendingGets': 0, 'rows': [{'fileId': row['fileId'], 'status': 206} for row in network['requests']]}
+        conditions[condition] = {'network': network, 'backend': backend, 'counters': run['samples'][1]['counters']}
+    config = directory/'config.json'
+    config.write_text(json.dumps({'conditions': conditions, 'proof': factorial.expected_proof('r10.1'),
+        'identityOutput': str(directory/'identity.json'), **({'identityRoot':str(identity_root)} if identity_root else {})}))
+    env.update(AP06_R9_SIMULATION=str(config), AP06_R7_UNIT_OUTPUT=str(directory/'raw.json'))
+    (directory/'reservation.simulated.json').write_text(json.dumps({'simulated': True, 'scientificChromium': 0}))
+    with media_server(files, True, 'application/octet-stream', assets, port=42088) as (origin, _):
+        env['AP06_R5_MEDIA_ORIGIN'] = origin
+        result = subprocess.run([wave.node, '--test', 'tools/ap06-r12-r9-preflight.test.mjs'], cwd=root/'frontend',
+            env=env, capture_output=True, text=True, timeout=120)
+    (directory/'node-test.log').write_text(result.stdout+result.stderr)
+    if result.returncode:raise RuntimeError('R12R11_SIMULATED_PREFLIGHT_FAILED')
+    unit = read(directory/'raw.json')
+    identity = read(directory/'identity.json')
+    return unit,identity
+
+
 @unittest.skipUnless(os.environ.get('AP06_R9_LIVE_INTEGRATION') == '1', 'Opt in to the owned live R9 laboratory')
 class LivePipelineTests(unittest.TestCase):
     def test_real_offline_gates_complete_simulated_browser_and_freeze_contract(self):
@@ -130,35 +167,7 @@ class LivePipelineTests(unittest.TestCase):
                 wave.temp = Path(temporary)
                 env, assets, files, _ = factorial.prepare_scientific_preflight(wave,
                     require_ci=os.environ.get('AP06_R9_REQUIRE_CI') == '1')
-                mapping = read(wave.output/'baseline/backend-authority.json')['fileMapping']
-                fixtures = read(wave.output/'fixtures/manifest.json')
-                ranges = read(wave.output/'baseline/workload.json')['rangesPerCycle']
-                conditions = {}
-                for condition in factorial.CONDITIONS:
-                    raw, _, _ = complete_raw(condition)
-                    run = raw['runs'][0]
-                    network = run['rangeNetwork']
-                    network['requests'] = network['requests'][:9]
-                    for row, (_, wanted_range) in zip(network['requests'], ranges):
-                        row['range'] = wanted_range
-                        row['fileId'] = mapping[row['fixture']]['fileId']
-                        row['url'] = f"http://127.0.0.1:42187/files/{row['fileId']}/download"
-                        row['headers']['content-range'] = 'bytes '+wanted_range.removeprefix('bytes=')+'/'+str(fixtures[row['fixture']]['ciphertextBytes'])
-                    backend = {'pendingGets': 0, 'rows': [{'fileId': row['fileId'], 'status': 206} for row in network['requests']]}
-                    conditions[condition] = {'network': network, 'backend': backend, 'counters': run['samples'][1]['counters']}
-                config = directory/'config.json'
-                config.write_text(json.dumps({'conditions': conditions, 'proof': factorial.expected_proof('r10.1'),
-                    'identityOutput': str(directory/'identity.json')}))
-                env.update(AP06_R9_SIMULATION=str(config), AP06_R7_UNIT_OUTPUT=str(directory/'raw.json'))
-                (directory/'reservation.simulated.json').write_text(json.dumps({'simulated': True, 'scientificChromium': 0}))
-                with media_server(files, True, 'application/octet-stream', assets, port=42088) as (origin, _):
-                    env['AP06_R5_MEDIA_ORIGIN'] = origin
-                    result = subprocess.run([wave.node, '--test', 'tools/ap06-r12-r9-preflight.test.mjs'], cwd=root/'frontend',
-                        env=env, capture_output=True, text=True, timeout=120)
-                (directory/'node-test.log').write_text(result.stdout+result.stderr)
-                self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
-                unit = read(directory/'raw.json')
-                identity = read(directory/'identity.json')
+                unit,identity=simulate_preflight(wave,env,assets,files,directory)
                 self.assertTrue(factorial.validate_preflight_receipt(wave, unit, identity))
                 validate_freeze_preflight(wave, unit, factorial.OUTPUT)
                 for mutate in (lambda r: r['multiplexedContract'].update(fixtureHash='bad'),
