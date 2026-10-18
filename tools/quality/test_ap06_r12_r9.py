@@ -110,7 +110,7 @@ class ErrorContractTests(unittest.TestCase):
         self.assertEqual(combined.cleanup_failure_class, 'R12R9_CLEANUP_FAILED')
 
 
-def simulate_preflight(wave, env, assets, files, directory, identity_root=None):
+def simulate_preflight(wave, env, assets, files, directory, identity_root=None, executable_source=None, chromium_version=None):
     from run_ap06_integration_probe import read
     from run_ap06_transport_probe import media_server
     from test_ap06_r12_r2 import complete_raw
@@ -133,7 +133,8 @@ def simulate_preflight(wave, env, assets, files, directory, identity_root=None):
         conditions[condition] = {'network': network, 'backend': backend, 'counters': run['samples'][1]['counters']}
     config = directory/'config.json'
     config.write_text(json.dumps({'conditions': conditions, 'proof': factorial.expected_proof('r10.1'),
-        'identityOutput': str(directory/'identity.json'), **({'identityRoot':str(identity_root)} if identity_root else {})}))
+        'identityOutput': str(directory/'identity.json'), **({'identityRoot':str(identity_root)} if identity_root else {}),
+        **({'executableSource':str(executable_source),'chromiumVersion':chromium_version} if executable_source else {})}))
     env.update(AP06_R9_SIMULATION=str(config), AP06_R7_UNIT_OUTPUT=str(directory/'raw.json'))
     (directory/'reservation.simulated.json').write_text(json.dumps({'simulated': True, 'scientificChromium': 0}))
     with media_server(files, True, 'application/octet-stream', assets, port=42088) as (origin, _):

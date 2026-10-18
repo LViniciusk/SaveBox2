@@ -499,7 +499,8 @@ import {launchAttestedBrowser,closeBrowserWithIdentity,registerBrowserProcesses,
 export async function runTransmuxProbe({ pageScript = transmuxPageScript(), countersFactory = newTransmuxCounters,
   cleanupValidator = validateCleanupOwnership, functionalValidator = validateTransmuxOwnership, snapshot = ownershipSnapshot,
   launchOptions = {}, configurePage = null, initializePage = null, identity = {}, beforeRun = null, afterRun = null,
-  auxiliaryMetrics = null, repetitions = null, runLabel = null, idleAfterTeardownMs = 0, naturalCloseDelayMs = 1000 } = {}) {
+  auxiliaryMetrics = null, repetitions = null, runLabel = null, idleAfterTeardownMs = 0, naturalCloseDelayMs = 1000,
+  browserType = chromium, identityResolver = undefined } = {}) {
   if (![0,30000,120000].includes(idleAfterTeardownMs) || ![0,1000].includes(naturalCloseDelayMs)) throw new Error('INVALID_CHECKPOINT_TIMING');
   const expectedChromiumVersion = validateExpectedChromiumVersion(process.env.AP06_R5_CHROMIUM_VERSION);
   const { AP06_R5_MODE: mode, AP06_R5_STAGE: stage, AP06_R5_ARTIFACT_DIR: artifactDir,
@@ -539,7 +540,7 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
     raw.runs.push(run); raw.launchAttempts++; flush();
     let browser = null, page = null, pageInitialized = false, closeObservation = null;
     try {
-      browser = await launchAttestedBrowser(chromium,launchOptions,run,()=>{raw.browserLaunches++;flush();});
+      browser = await launchAttestedBrowser(browserType,launchOptions,run,()=>{raw.browserLaunches++;flush();},identityResolver);
       run.browserVersion = browser.version();
       if (run.browserVersion !== expectedChromiumVersion) throw new Error('CHROMIUM_VERSION_MISMATCH');
       const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block' });

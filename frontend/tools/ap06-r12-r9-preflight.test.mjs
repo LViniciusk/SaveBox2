@@ -17,10 +17,10 @@ test('R9 complete preflight uses real Windows handles and Python receipt consume
     const root=data.identityRoot??mkdtempSync(join(tmpdir(),'ap06-r9-simulation-')),profiles=join(root,'profiles');mkdirSync(profiles);
     const old={...process.env},children=[];
     const python=process.env.WAVE1_PYTHON,helper=fileURLToPath(new URL('../../tools/quality/ap06_browser_identity.py',import.meta.url));
-    const shell=join(root,'chrome-headless-shell.exe');copyFileSync(process.execPath,shell);
+    const shell=join(root,'chrome-headless-shell.exe');copyFileSync(data.executableSource??process.execPath,shell);
     const observed=JSON.parse(execFileSync(python,[helper,'--inspect',shell],{encoding:'utf8',windowsHide:true}));
     const fixedArgs=['-e','setInterval(()=>{},1000)','--'],suffixArgs=['--remote-debugging-pipe','--no-startup-window'];
-    const identity={...observed,mode:'headless-shell',chromiumVersion:observed.productVersion??'test-version',installationDirectory:root,
+    const identity={...observed,mode:'headless-shell',chromiumVersion:data.chromiumVersion??observed.productVersion??'test-version',installationDirectory:root,
       installationFiles:{},launchProtocol:{fixedArgs,suffixArgs,profileRoot:profiles,profileArgPrefix:'--user-data-dir=',
         profileNamePrefix:'playwright_chromiumdev_profile-',allowedExperimentalArgs:[[...AUTOPLAY_ARGS],[...AUTOPLAY_ARGS,...NATIVE_ARGS]]}};
     const manifest=join(root,'identity.json');writeFileSync(manifest,JSON.stringify(identity));

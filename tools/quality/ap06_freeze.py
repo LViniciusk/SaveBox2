@@ -33,8 +33,14 @@ DYNAMIC_INPUTS = frozenset((
     'baseline/offline-ready.json', 'baseline/freeze-readiness.json',
     'baseline/native-capability.json', 'pipeline/native-receipt.json',
     'baseline/offline-integration.json', 'tooling/offline-simulation/result.json',
+    'tooling/offline-simulation/measurement-consumers.json',
 ))
 RUNTIME_INPUTS=('authority-config.local.json','backend-runtime.local.json','player-auth.local.json')
+
+
+def strict_freeze_namespace(output):
+    return Path(output).name in ('readiness-wave12-r11-factorial','readiness-wave12-r11-native',
+        'readiness-wave12-r12-factorial','readiness-wave12-r12-native')
 
 
 class FreezeFailure(WaveFailure):

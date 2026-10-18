@@ -79,7 +79,8 @@ def build_products(root, output=OUTPUT):
     root = Path(root).resolve()
     r12r8 = Path(output).as_posix() in ('.quality/readiness-wave12-r8-factorial','.quality/readiness-wave12-r9-factorial','.quality/readiness-wave12-r9-native',
         '.quality/readiness-wave12-r10-factorial','.quality/readiness-wave12-r10-native',
-        '.quality/readiness-wave12-r11-factorial','.quality/readiness-wave12-r11-native')
+        '.quality/readiness-wave12-r11-factorial','.quality/readiness-wave12-r11-native',
+        '.quality/readiness-wave12-r12-factorial','.quality/readiness-wave12-r12-native')
 
     def fail(reason):
         raise WaveFailure('R12R9_APP_PRODUCTS_INVALID' if Path(output).name.startswith('readiness-wave12-r9-') else reason if r12r8 else 'R8_EXECUTABLE_BUNDLES_MISSING')

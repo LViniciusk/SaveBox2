@@ -154,7 +154,7 @@ def validate_freeze_preflight(wave,unit,output):
 def publication_namespace(wave):
     name=wave.output.name
     if name=='readiness-wave10-r3':return 'r10-r3'
-    if re.fullmatch(r'readiness-wave(?:11(?:-r[23])?|12(?:-r(?:[2-9]|10|11)-(?:factorial|native))?)',name):
+    if re.fullmatch(r'readiness-wave(?:11(?:-r[23])?|12(?:-r(?:[2-9]|1[0-2])-(?:factorial|native))?)',name):
         return name.replace('readiness-wave','r')
     return ''
 
@@ -172,7 +172,7 @@ def collect_freeze_inputs(wave, products, extra_files=()):
     files={path:wave.root/path for path in tracked}
     if publication_namespace(wave):
         header=wave.root/'backend/include/crow_all.h'
-        if re.fullmatch(r'readiness-wave12-r(?:8|9|10|11)-(factorial|native)',wave.output.name):
+        if re.fullmatch(r'readiness-wave12-r(?:8|9|1[0-2])-(factorial|native)',wave.output.name):
             from ap06_freeze import validate_native_build_authority
             backend=validate_native_build_authority(wave)
             if header.is_file():files['backend/include/crow_all.h']=header
@@ -180,7 +180,8 @@ def collect_freeze_inputs(wave, products, extra_files=()):
     for path in products: files[path]=wave.root/path
     for name in ('savebox_server.exe','nanika_e2e_fixture.exe'):
         path=wave.output/'tooling/backend-build'/name;files[path.relative_to(wave.root).as_posix()]=path
-    if wave.output.name in ('readiness-wave12-r11-factorial','readiness-wave12-r11-native'):
+    from ap06_freeze import strict_freeze_namespace
+    if strict_freeze_namespace(wave.output):
         from ap06_freeze import NATIVE_FILES
         for name in NATIVE_FILES.values():
             path=wave.output/'tooling/backend-build'/name;files[path.relative_to(wave.root).as_posix()]=path
@@ -196,8 +197,8 @@ def collect_freeze_inputs(wave, products, extra_files=()):
 
 def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r9-probe.mjs', runner_path=None,
                           extra_files=(), extra_publications=(), protocol=None):
-    from ap06_freeze import freeze_stage,validate_freeze_plan
-    strict=wave.output.name in ('readiness-wave12-r11-factorial','readiness-wave12-r11-native')
+    from ap06_freeze import freeze_stage,validate_freeze_plan,strict_freeze_namespace
+    strict=strict_freeze_namespace(wave.output)
     stage=lambda name:freeze_stage(name) if strict else nullcontext()
     target=wave.output/'tooling/freeze.json'
     if strict and (wave.output/'pipeline/freeze-attempt.json').exists():

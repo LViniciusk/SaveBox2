@@ -81,11 +81,19 @@ class StoppedMeasurementReplayTests(unittest.TestCase):
 @unittest.skipUnless(os.name=='nt' and os.environ.get('AP06_R11_LIVE_INTEGRATION')=='1',
     'Opt in to the owned R11 laboratory; no Chromium is launched')
 class LiveFreezePipelineTests(unittest.TestCase):
+    round_number=11
+
+    def validate_measurements(self,lab,frozen,unit,identity,directory):
+        for condition in factorial.CONDITIONS:
+            raw,fixture_freeze,fixtures=retained_measurement(condition)
+            self.assertEqual(factorial.validate_condition(raw,condition,'triage',fixture_freeze,fixtures),'R12R2_FACTORIAL_VALID')
+
     def test_real_environment_simulated_preflight_disposable_freeze_and_measurement_preparation(self):
         root=Path(__file__).resolve().parents[2]
+        number=self.round_number
         previous=factorial.OUTPUT,factorial.PUBLISHER,factorial.CAMPAIGN
         previous_native=(native.OUTPUT,native.PUBLISHER,native.CAMPAIGN,native.TRACE_PREFIX,native.FACTORIAL,native.FACTORIAL_STATUS)
-        factorial.configure_campaign('.quality/readiness-wave12-r11-factorial',root/'tools/quality/run_ap06_r12_r11.py','AP-06-R12-R11-factorial')
+        factorial.configure_campaign(f'.quality/readiness-wave12-r{number}-factorial',root/f'tools/quality/run_ap06_r12_r{number}.py',f'AP-06-R12-R{number}-factorial')
         wave=Wave(root);wave.output=root/factorial.OUTPUT
         directory=wave.output/'tooling/offline-simulation';directory.mkdir(exist_ok=True)
         try:
@@ -93,7 +101,13 @@ class LiveFreezePipelineTests(unittest.TestCase):
                 temporary=Path(temporary);private_permissions(temporary,create=True);wave.temp=temporary
                 env,assets,files,_=factorial.prepare_scientific_preflight(wave,require_ci=False,publish_identity=True)
                 identity_root=temporary/'identity';identity_root.mkdir();private_permissions(identity_root,create=True)
-                unit,identity=simulate_preflight(wave,env,assets,files,directory,identity_root)
+                source=None
+                if number==12:
+                    import subprocess
+                    source=temporary/'process-stub.exe';cpp=temporary/'process-stub.cpp'
+                    cpp.write_text('#include <windows.h>\nint main(){for(;;)Sleep(1000);}\n',encoding='utf-8')
+                    subprocess.run(['C:/msys64/ucrt64/bin/g++.exe','-O2','-static','-s',str(cpp),'-o',str(source)],check=True,capture_output=True)
+                unit,identity=simulate_preflight(wave,env,assets,files,directory,identity_root,source,factorial.VERSION)
                 factorial.validate_preflight_receipt(wave,unit,identity)
                 for mutation in (lambda r:r['cases'].pop(),lambda r:r.pop('handleRelease'),
                         lambda r:r['browserIdentity']['after'].update(processCreationTime=0),
@@ -115,7 +129,7 @@ class LiveFreezePipelineTests(unittest.TestCase):
                     target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,target)
                 for name in ('accounts.local.json','player-auth.local.json','backend-runtime.local.json'):
                     shutil.copyfile(wave.output/'baseline'/name,lab.output/'baseline'/name)
-                prepare_authority(lab,wave.output)
+                prepare_authority(lab,wave.output,round_number=number)
                 config=factorial.read(lab.output/'baseline/authority-config.local.json')
                 for name in ('runtime-credentials.dpapi','runtime-credentials-custody.json','runtime-credentials-readback.json'):
                     path=lab.output/'baseline'/name
@@ -123,7 +137,7 @@ class LiveFreezePipelineTests(unittest.TestCase):
                 credentials={name:factorial.read(lab.output/'baseline'/name) for name in
                     ('accounts.local.json','player-auth.local.json','backend-runtime.local.json')}
                 seal_runtime_credentials(lab.output/'baseline',config['identity'],sha256(Path(config['AP06_AUTHORITY_ROOT'])/'manifests/corpus.json'),
-                    'AP-06-R12-R11-factorial',credentials)
+                    f'AP-06-R12-R{number}-factorial',credentials)
                 lab.save('baseline/browser-identity.json',identity)
                 versions=factorial.read(lab.output/'baseline/versions.json')
                 versions['chromium']={'executablePath':identity['executablePath'],
@@ -136,6 +150,8 @@ class LiveFreezePipelineTests(unittest.TestCase):
                 lab.save('baseline/ci.json',{'headSha':wave.git('rev-parse','HEAD'),'conclusion':'success','syntheticContractFixture':True})
                 lab.save('baseline/offline-integration.json',{'status':'SYNTHETIC_CONTRACT_FIXTURE','scientificChromium':0})
                 lab.save('tooling/offline-simulation/result.json',{'status':'SYNTHETIC_CONTRACT_FIXTURE','scientificChromium':0})
+                if number==12:
+                    lab.save('tooling/offline-simulation/measurement-consumers.json',{'status':'SYNTHETIC_CONTRACT_FIXTURE','scientificChromium':0})
                 ready=freezer.validate_freeze_readiness(lab,output=factorial.OUTPUT,
                     extra_files=factorial.freeze_extra_files(),extra_publications=factorial.freeze_publications(lab))
                 lab.save('baseline/freeze-readiness.json',ready)
@@ -148,9 +164,7 @@ class LiveFreezePipelineTests(unittest.TestCase):
                 attempt=lab.output/'triage/01-r12r2.0';attempt.mkdir()
                 prepared,_=factorial.environment(lab,attempt,'r12r2.0','triage',frozen)
                 self.assertEqual(Path(prepared['AP06_BROWSER_IDENTITY']),lab.output/'baseline/browser-identity.json')
-                for condition in factorial.CONDITIONS:
-                    raw,fixture_freeze,fixtures=retained_measurement(condition)
-                    self.assertEqual(factorial.validate_condition(raw,condition,'triage',fixture_freeze,fixtures),'R12R2_FACTORIAL_VALID')
+                self.validate_measurements(lab,frozen,unit,identity,directory)
                 values=dict(zip(factorial.CONDITIONS,(500,500,100,350)))
                 candidate=factorial.classify(lab,values)
                 self.assertEqual(candidate['pair'],['r12r2.0','r12r2.2'])
@@ -159,26 +173,27 @@ class LiveFreezePipelineTests(unittest.TestCase):
                 confirmed=factorial.classify(lab,values,formal,candidate)
                 self.assertEqual(confirmed['status'],'R12R2_FACTORIAL_CONFIRMED')
                 lab.save('pipeline/triage-decision.json',dict(candidate,pair=candidate['pair']))
-                native.configure_campaign('.quality/readiness-wave12-r11-native',lab_root/'tools/quality/run_ap06_r12_r11_native.py')
+                native.configure_campaign(f'.quality/readiness-wave12-r{number}-native',lab_root/f'tools/quality/run_ap06_r12_r{number}_native.py')
                 native_wave=Wave(lab_root);native_wave.output=lab_root/native.OUTPUT;native_wave.temp=temporary
                 native_wave.git=lab.git
-                lab.save('final/decision.json',{'status':'R12R11_FORMAL_DISAGREEMENT','syntheticContractFixture':True})
+                lab.save('final/decision.json',{'status':f'R12R{number}_FORMAL_DISAGREEMENT','syntheticContractFixture':True})
                 with self.assertRaises(RuntimeError):native.prepare(native_wave)
-                lab.save('final/decision.json',dict(confirmed,status='R12R11_FACTORIAL_CONFIRMED',syntheticContractFixture=True))
+                lab.save('final/decision.json',dict(confirmed,status=f'R12R{number}_FACTORIAL_CONFIRMED',syntheticContractFixture=True))
                 native.prepare(native_wave)
                 native_ready=freezer.validate_freeze_readiness(native_wave,output=native.OUTPUT,
                     extra_files=native.native_freeze_extra_files(),extra_publications=('custody',))
                 self.assertEqual(native_ready['status'],'PASS')
                 real_config=factorial.read(wave.output/'baseline/authority-config.local.json')
                 manifests=Path(real_config['AP06_AUTHORITY_ROOT'])/'manifests'
-                snapshots=sum((manifests/('r12-r11-factorial-'+name+'.json')).exists()
+                snapshots=sum((manifests/(f'r12-r{number}-factorial-'+name+'.json')).exists()
                     for name in ('implementation','freeze','freeze-complete'))
                 self.assertEqual(snapshots,0)
                 self.assertFalse((wave.output/'pipeline/development-reservation.json').exists())
                 result={'status':'PASS','simulatedChromiumCdp':True,'cases':len(unit['cases']),
                     'realWindowsProcessHandles':True,'preflightReceipt':'PASS','disposablePublicationReadback':'PASS',
                     'freezeVerified':'PASS','triagePrepared':True,'nativePrepared':True,'negativeReceiptsRejected':4,
-                    'scientificChromium':0,'reservationCreated':False,'scientificAuthoritySnapshots':snapshots}
+                    'scientificChromium':0,'reservationCreated':False,'scientificAuthoritySnapshots':snapshots,
+                    **getattr(self,'measurement_result',{})}
                 wave.save('tooling/offline-simulation/result.json',result)
             wave.save('baseline/offline-integration.json',dict(result,realDpapiBuildBackendMediaOs=True,
                 receiptRoundtrip='PASS',freezeConsumerRoundtrip='PASS',trackedTreeSha256=factorial.tracked_tree_sha(wave),
