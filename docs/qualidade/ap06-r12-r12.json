@@ -1,0 +1,1095 @@
+{
+  "campaign": "AP-06-R12-R12-factorial",
+  "date": "2026-10-18",
+  "result": "R12R12_FACTORIAL_CONFIRMED",
+  "nativeResult": "R12R12_NATIVE_INCONCLUSIVE",
+  "taskAcceptance": "FACTORIAL_SCIENCE_COMPLETED_NATIVE_INCONCLUSIVE",
+  "measurementHead": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+  "implementationHead": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+  "statusByArea": {
+    "engineering": "GREEN",
+    "operational": "GREEN_FACTORIAL_PREFLIGHT_AND_FREEZE",
+    "scientific": "VALID_FACTORIAL_CONFIRMED",
+    "native": "INCONCLUSIVE_TRACE_CONTRACT_INVALID"
+  },
+  "git": {
+    "branch": "integration/ap06-r12-stabilization",
+    "base": "frontend",
+    "canonicalDraftPr": 38,
+    "referenceHead": "7b7d174caf1777dd1b8a08f05f108a104de63ebf",
+    "documentationHeadAndFinalCi": "Exact documentation commit and its final Backend CI / Quality Baseline URLs are recorded in the canonical PR #38 body after this report is committed; a file cannot embed its own commit hash.",
+    "historicalPrsClosedOrMergedByThisTask": false,
+    "historicalComponentHeadsPreserved": [
+      {
+        "number": 25,
+        "headRefName": "investigation/ap06-r10",
+        "headRefOid": "5ecd6cf8240d19650135ec91b3efd5fb134c6162",
+        "title": "AP-06 R10-R3: isolated local backend and ownership campaign",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 27,
+        "headRefName": "investigation/ap06-r11",
+        "headRefOid": "8f877438b74d5acddce6086eed02fe966466cdc1",
+        "title": "investigation(ap06): R11 renderer retention attribution",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 28,
+        "headRefName": "investigation/ap06-r12",
+        "headRefOid": "5dbd3fd65326e54b1b6abf7e440f241f7277fc83",
+        "title": "investigation(ap06): R12 HTTP materialization memory attribution",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 29,
+        "headRefName": "investigation/ap06-r12-r2",
+        "headRefOid": "f32b7fe480e32ab83c576530d39b314b87778d25",
+        "title": "investigation(ap06): R12 R2 factorial and native memory attribution",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 30,
+        "headRefName": "investigation/ap06-r12-r3",
+        "headRefOid": "bb3e34c85266765c83537243306c169385319168",
+        "title": "investigation(ap06): R12-R3 browser attestation and factorial recovery",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 31,
+        "headRefName": "investigation/ap06-r12-r4",
+        "headRefOid": "8d6cc516dc0f5cd8d0744443138cdf7a614d8e28",
+        "title": "investigation(ap06): R12-R4 browser attestation recovery",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 32,
+        "headRefName": "investigation/ap06-r12-r5",
+        "headRefOid": "25dec809d212dbda1ff93433182e1ed9f332875e",
+        "title": "investigation(ap06): R12-R5 process lifecycle and backend recovery",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 33,
+        "headRefName": "investigation/ap06-r12-r6",
+        "headRefOid": "38df0ba8889da1bd087c7c80b2e8ae0833242217",
+        "title": "investigation(ap06): R12-R6 scientific authority and factorial execution",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 34,
+        "headRefName": "investigation/ap06-r12-r7",
+        "headRefOid": "032bcfd30c379172adfba94d96e39dc639c59708",
+        "title": "investigation(ap06): R12-R7 browser attestation lifecycle recovery",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 35,
+        "headRefName": "investigation/ap06-r12-r8",
+        "headRefOid": "62a16268b863652f55af7d88c8a00f15f6285631",
+        "title": "investigation(ap06): R12-R8 offline preflight readiness and factorial recovery",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 36,
+        "headRefName": "investigation/ap06-r12-r9",
+        "headRefOid": "43a591ad952ba2e64ab52dc47e7f503cb8c667b6",
+        "title": "investigation(ap06): R12-R9 custody and full preflight recovery",
+        "ancestorOfR10": true
+      },
+      {
+        "number": 37,
+        "headRefName": "investigation/ap06-r12-r10",
+        "headRefOid": "5dbd77a9eb36ad2f37f757c0d3c52d0f82ef7624",
+        "title": "investigation(ap06): R12-R10 real Playwright identity recovery",
+        "ancestorOfR10": true
+      }
+    ]
+  },
+  "authority": {
+    "taskPath": "quality/ap06-r12-r12.md",
+    "taskSha256": "856457970cf220f33e33010945f3df1c104bc0cd11fadce9f3f7cce9fee7b135",
+    "taskBytes": 19183,
+    "corpusManifestSha256": "d7fd432cefac1fa57a03d67dbda980799e6905e04a9ca0e2ed9b3b9d45bdae0b",
+    "baseline": "Verified R7 regenerated corpus archived by R10; cipher/plain hashes checked, independent corpus publication/readback.",
+    "originalR6Identity": "UNPROVEN",
+    "newIdentity": true,
+    "newCurrentUserDpapiSeal": true,
+    "newRuntimeAccountsDatabaseAndProcesses": true,
+    "r11RuntimeOrFreezeReused": false,
+    "plaintextFdkPersisted": false
+  },
+  "changes": [
+    "Forward the strict Win32 retained-handle audit through the full HTTP consumer; preserve the native=True consumer boundary.",
+    "Enable existing R11 capabilities for R12 via small round predicates; preserve historical capability boundaries.",
+    "Require a complete real-producer disposable integration receipt at the same implementation HEAD before scientific reservation.",
+    "Use minimal R12 wrappers and shared authority preparation; no production backend behavior changes."
+  ],
+  "tests": {
+    "python": {
+      "status": "PASS",
+      "tests": 569,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 3,
+      "snapshotSha256": "207b7fd80a5f460cbf189fab5e1d22e60ea9d3719a60a816ece553c28f349455",
+      "failedTests": [],
+      "implementationHead": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+      "resolvedHistoricalDocumentationBoundaries": [
+        "docs/arquitetura/visao-geral.md",
+        "docs/arquitetura/frontend.md",
+        "docs/arquitetura/backend.md",
+        "docs/arquitetura/deployment.md"
+      ]
+    },
+    "node": {
+      "status": "PASS",
+      "exitCode": 0,
+      "files": 20,
+      "implementationHead": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+      "counts": {
+        "tests": 137,
+        "pass": 135,
+        "fail": 0,
+        "skipped": 2
+      }
+    },
+    "explicitLiveIntegration": {
+      "status": "PASS",
+      "exitCode": 0,
+      "implementationHead": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+      "explicitOptIn": true,
+      "scientificChromium": 0,
+      "tests": 3,
+      "skipped": 0,
+      "durationSeconds": 719.232
+    },
+    "producerConsumers": {
+      "status": "PASS",
+      "producer": "runFactorialProbe/runTransmuxProbe",
+      "implementationHead": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+      "conditions": [
+        "r12r2.0",
+        "r12r2.1",
+        "r12r2.2",
+        "r12r2.3"
+      ],
+      "triageConsumers": 4,
+      "formalConsumers": 4,
+      "nativeConsumers": 4,
+      "formalConfirmationRuns": 6,
+      "formalConfirmationOrder": [
+        "r12r2.0",
+        "r12r2.2",
+        "r12r2.2",
+        "r12r2.0",
+        "r12r2.0",
+        "r12r2.2"
+      ],
+      "negativeMutationKinds": 17,
+      "realWindowsHandles": true,
+      "realAuthenticatedBackendRanges": true,
+      "classifierConfirmedAndRejectedCorrectly": true,
+      "differentHeadRejected": true,
+      "rawHashes": {
+        "triage-r12r2.0": "f96d85354f8316f92f85e482919a049235ccaef74750e79828f5abd31884f213",
+        "triage-r12r2.1": "aebc87d8842345f67358077092789091a393bab0c8e32e58b2e5f6a599b9a610",
+        "triage-r12r2.2": "bdeb725adbcc00d3cf9bea29ab0faaac872c3eabc351e6c0c93a5908520d310b",
+        "triage-r12r2.3": "f0a9440f3d4445be51dabb39ae2e71d913694c9235a84d23ec52d0779cbeb2f9",
+        "formal-r12r2.0": "4362ddf21935ee803b3ca77c09b4fca8365a7cac42aec5bedae1a1f39d79a2b4",
+        "formal-r12r2.1": "d56777ff525638569cd94525446e1c911ee302bffd2a8658e9cf7108ca199a82",
+        "formal-r12r2.2": "7b385333d17146170f55a5bead16e8079041620b255d2dd049a8ae302bb074b4",
+        "formal-r12r2.3": "7e93a61ab2362ace06b99a3e0a8b3bf5ad9a14e754733d825f54947cc2a53734",
+        "native-r12r2.0": "4fd8e03bcc89a292fcc26ef387f666b806e9528b244973d8ed36ac1206827ea0",
+        "native-r12r2.1": "571b267c2437a6ecd571a8dd7b98e80128b5663faad7f3d83c66bf6ce59bb873",
+        "native-r12r2.2": "28fb207f29d16be7922b58e348da92f2d3391cb9c11ab8e75148bcdebaafbb79",
+        "native-r12r2.3": "f9c7652d83c7613ff33411f1c9a12ccd3bfdeb1afc822c92ccf719948b9f03cb",
+        "confirmation-05-r12r2.0": "a82b48e19c90e3bb4daffa14bc66e906a77b81fb5f4632c52704e6354c80f7a8",
+        "confirmation-06-r12r2.2": "154272d4a862c646ec84034d66e443c38d124e6df91fb95efc261bac5a5666a1",
+        "confirmation-07-r12r2.2": "9925ae30db80d074646e6c24a77988181d66a039285565955d379631b9dfdf54",
+        "confirmation-08-r12r2.0": "61f1d3973e3773dc27f00e3a140428e113189b1d4bef312fc5599eff3f52097e",
+        "confirmation-09-r12r2.0": "e596242798904168899c01e79275f0bb1e4b277a9ec366896c9ec95e2421e7d7",
+        "confirmation-10-r12r2.2": "8d16f4a031b1483174dfc7ebd779bf0acad12a3a8f86905d1daee00ae3afe731"
+      },
+      "simulatedBrowserCdp": true,
+      "scientificChromium": 0
+    },
+    "liveIntegration": {
+      "cases": 5,
+      "completeMeasurementConsumers": "PASS",
+      "contractResultSha256": "4d2d9fd5263b8cd071b74c3288def969e5b9326b812657c203071def26b204a9",
+      "disposablePublicationReadback": "PASS",
+      "freezeConsumerRoundtrip": "PASS",
+      "freezeVerified": "PASS",
+      "implementationHead": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+      "measurementConsumerReceiptSha256": "f5a8ecc68d422e42ea12fd7135718d9b6c6702f40cced54f4ed13518231e91ee",
+      "nativePrepared": true,
+      "negativeReceiptsRejected": 4,
+      "preflightReceipt": "PASS",
+      "realDpapiBuildBackendMediaOs": true,
+      "realWindowsProcessHandles": true,
+      "receiptRoundtrip": "PASS",
+      "reservationCreated": false,
+      "scientificAuthoritySnapshots": 0,
+      "scientificChromium": 0,
+      "simulatedChromiumCdp": true,
+      "status": "PASS",
+      "trackedTreeSha256": "35182a892bcc554ed709ad3ba16a9d4ce57d67a2b96ce1ff2ac6cb1f38bc0647",
+      "triagePrepared": true
+    },
+    "angularBuild": {
+      "counts": [],
+      "exitCode": 0,
+      "logPersisted": false,
+      "name": "r12-r12-angular-build",
+      "status": "PASS",
+      "wallSeconds": 57.037
+    },
+    "typescript": {
+      "command": "tsc --noEmit -p tsconfig.app.json",
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    "native": {
+      "implementationHead": "7b7d174caf1777dd1b8a08f05f108a104de63ebf",
+      "seed": 60102,
+      "status": "PASS",
+      "suites": {
+        "experimental": {
+          "assertionsFailed": 0,
+          "assertionsPassed": 26021,
+          "casesFailed": 0,
+          "casesPassed": 17,
+          "expectedFailures": 0,
+          "status": "PASS",
+          "xmlSha256": "83ffb5eb727a1679e1030cc5b64d0d46cc967d00c2a41c2d3a28161f471b2205"
+        },
+        "production": {
+          "assertionsFailed": 0,
+          "assertionsPassed": 14330,
+          "casesFailed": 0,
+          "casesPassed": 320,
+          "expectedFailures": 0,
+          "status": "PASS",
+          "xmlSha256": "e0798b53c6e62b5528f21a1ad6cd41fbd8d11223de64827dc71adf2035425a1a"
+        }
+      }
+    },
+    "syntax": {
+      "implementationHead": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+      "nodeModulesChecked": 55,
+      "nodeSyntax": "PASS",
+      "pythonAstFiles": 99,
+      "status": "PASS"
+    },
+    "diff": {
+      "implementationHead": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+      "status": "PASS"
+    },
+    "gitleaks": {
+      "status": "PASS",
+      "scanner": "gitleaks",
+      "version": "v8.30.1",
+      "findings": 6,
+      "actionableFindings": 0,
+      "trackedTreeSha256": "35182a892bcc554ed709ad3ba16a9d4ce57d67a2b96ce1ff2ac6cb1f38bc0647",
+      "scopeFiles": 177
+    },
+    "negativeCoverage": {
+      "singleFieldMutationKinds": 17,
+      "singleFieldMutationsPerFourArms": 68,
+      "additionalChecks": [
+        "native flags absent in each of four arms",
+        "different implementation HEAD",
+        "formal order",
+        "formal separation",
+        "candidate contrast",
+        "four invalid preflight receipts"
+      ]
+    },
+    "terminalRawAndClassifierReadback": "PASS",
+    "r11ReadOnlyReplay": {
+      "status": "PASS",
+      "before": {
+        "raw": "1337428937e8b469bc3dbd7c227f77f0b29894b4a4ce3fe7e0f6ad53ae004781",
+        "freeze": "b25e21194b9b57f893ca302a6ad1960f429146a407bbeea3d6522be6b74002af",
+        "stop": "698413102b1e6ff680ea55eaf96f17899810cf4ea57a985ac3a72c694506f92a"
+      },
+      "after": {
+        "raw": "1337428937e8b469bc3dbd7c227f77f0b29894b4a4ce3fe7e0f6ad53ae004781",
+        "freeze": "b25e21194b9b57f893ca302a6ad1960f429146a407bbeea3d6522be6b74002af",
+        "stop": "698413102b1e6ff680ea55eaf96f17899810cf4ea57a985ac3a72c694506f92a"
+      },
+      "unchanged": true,
+      "matchesPublishedR11Digests": true,
+      "scientificReclassification": false,
+      "scientificChromium": 0,
+      "finalHashesStillEqual": true
+    }
+  },
+  "ci": {
+    "measurementBackend": {
+      "attempt": 1,
+      "conclusion": "success",
+      "databaseId": 39118862644,
+      "headSha": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+      "status": "completed",
+      "url": "https://github.com/LViniciusk/SaveBox2/actions/runs/39118862644",
+      "workflowName": "Backend CI",
+      "jobs": [
+        {
+          "name": "Backend / Windows MSVC",
+          "conclusion": "success"
+        },
+        {
+          "name": "Backend / Linux GCC",
+          "conclusion": "success"
+        },
+        {
+          "name": "Backend / Linux Coverage",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "measurementQuality": {
+      "attempt": 2,
+      "conclusion": "success",
+      "databaseId": 39118865046,
+      "headSha": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+      "status": "completed",
+      "url": "https://github.com/LViniciusk/SaveBox2/actions/runs/39118865046",
+      "workflowName": "Quality Baseline",
+      "jobs": [
+        {
+          "name": "e2e",
+          "conclusion": "success"
+        },
+        {
+          "name": "quality-report",
+          "conclusion": "success"
+        }
+      ]
+    },
+    "earlierFailurePreserved": {
+      "url": "https://github.com/LViniciusk/SaveBox2/actions/runs/39118865046/attempts/1",
+      "test": "recovery.spec.ts: upload remained at 50% after 120 seconds",
+      "sameHeadRerun": "attempt 2 passed; no code/assert/timeout changes; zero scientific retries"
+    },
+    "finalDocumentationCiSource": "Canonical Draft PR #38 body, pinned to the commit that adds these reports."
+  },
+  "preflight": {
+    "status": "PASS",
+    "cases": 5,
+    "attempts": 1,
+    "launches": 1,
+    "browserClosed": true,
+    "firstAttestation": "PASS",
+    "secondAttestation": "PASS",
+    "samePid": true,
+    "sameCreationTime": true,
+    "registeredProcesses": 8,
+    "closedProcesses": 8,
+    "audit": "PASS",
+    "handleRelease": "PASS",
+    "cleanup": "PASS",
+    "rawSha256": "8505e10183adb08a153f212d06f6a7521d8908bc16adbed72cbd93328f8193a7"
+  },
+  "freeze": {
+    "freezeSha256": "5e6631c142e121ac612fe5a109c8fe43307131e92159246feeb7e29bc32d6725",
+    "implementationHead": "cbaf2ac1c831e9bc98b8e568435c69bd43304334",
+    "independentReadback": true,
+    "status": "FROZEN",
+    "snapshotStatus": "SNAPSHOT_AWAITING_READBACK",
+    "fileCount": 685,
+    "staticInputCount": 676,
+    "deferredInputs": 9,
+    "finalIndependentReadback": {
+      "status": "PASS",
+      "verifiedPublications": 65,
+      "worktreeRequired": false
+    }
+  },
+  "protocol": {
+    "conditions": {
+      "r12r2.0": {
+        "metadata": "xhr",
+        "payload": "xhr"
+      },
+      "r12r2.1": {
+        "metadata": "fetch",
+        "payload": "xhr"
+      },
+      "r12r2.2": {
+        "metadata": "xhr",
+        "payload": "fetch"
+      },
+      "r12r2.3": {
+        "metadata": "fetch",
+        "payload": "fetch"
+      }
+    },
+    "triageOrder": [
+      "r12r2.0",
+      "r12r2.1",
+      "r12r2.2",
+      "r12r2.3"
+    ],
+    "formalOrder": "A,B,B,A,A,B",
+    "corpus": {
+      "acceptance": "all four arms use these identical fixture bytes, exact ranges, metadata authentication and six-cycle workload; historical R6 identity remains unproven",
+      "allThreeTransportsEqual": true,
+      "bytesPerCycle": 25559136,
+      "chunkBytes": 4194304,
+      "chunkCount": 3,
+      "cycles": 6,
+      "fixtureCount": 3,
+      "fixtureHashesFrozenBeforeMeasurement": true,
+      "fixtures": [
+        {
+          "chunkBytes": 4194304,
+          "chunkCount": 3,
+          "cipherBytes": 9629853,
+          "cipherSha256": "1dc1ac1ec4d1f8245175d9256f525e161cdb2eb52e5d46dcc137687bd4ab42f7",
+          "id": 0,
+          "lastChunkBytes": 1241083,
+          "plainBytes": 9629691,
+          "plainSha256": "9980042bb6376aed8a565ddd744c6b663fd284084bc92256e615e1028e84486b"
+        },
+        {
+          "chunkBytes": 4194304,
+          "chunkCount": 3,
+          "cipherBytes": 10743165,
+          "cipherSha256": "0646ee83f68ec0d2f45aa9753b2891c0833e843ba388d364d4fed7bb75ebdf1e",
+          "id": 1,
+          "lastChunkBytes": 2354392,
+          "plainBytes": 10743000,
+          "plainSha256": "cebc73609ab2a25de3c362fbff29e5faf43608743db45bf1410527d1c341349f"
+        },
+        {
+          "chunkBytes": 4194304,
+          "chunkCount": 3,
+          "cipherBytes": 11179393,
+          "cipherSha256": "bdd54a0f3c1aa6a427b53f3c96826051d08984e6b9c5bb72b84c94bfa5bbadb7",
+          "id": 2,
+          "lastChunkBytes": 2790623,
+          "plainBytes": 11179231,
+          "plainSha256": "fa219875eb1ebb4f6f3439ab627d6d55e08b3526a89973bc0d2690a50cf98487"
+        }
+      ],
+      "historicalAbsoluteDeltasComparedAsEquivalent": false,
+      "historicalR6Identity": "NOT_PROVEN_NEW_R12R6_BASELINE",
+      "historicalRawsCombined": false,
+      "manifestSha256": "d7fd432cefac1fa57a03d67dbda980799e6905e04a9ca0e2ed9b3b9d45bdae0b",
+      "mediaConstraints": {
+        "bitrateKbps": 2400,
+        "chunkBytes": 4194304,
+        "chunkCount": 3,
+        "container": "mp4",
+        "height": 360,
+        "width": 640
+      },
+      "metadataBytesPerCycle": 393216,
+      "payloadBytesPerCycle": 25165920,
+      "rangesPerCycle": [
+        [
+          0,
+          "bytes=0-131071"
+        ],
+        [
+          0,
+          "bytes=114-4194433"
+        ],
+        [
+          0,
+          "bytes=4194434-8388753"
+        ],
+        [
+          1,
+          "bytes=0-131071"
+        ],
+        [
+          1,
+          "bytes=117-4194436"
+        ],
+        [
+          1,
+          "bytes=4194437-8388756"
+        ],
+        [
+          2,
+          "bytes=0-131071"
+        ],
+        [
+          2,
+          "bytes=114-4194433"
+        ],
+        [
+          2,
+          "bytes=4194434-8388753"
+        ]
+      ],
+      "requestsPerCycle": 9,
+      "sameManifestAndBytesAcrossConditions": true,
+      "sessions": 18
+    },
+    "metrics": {
+      "independentRunPerCondition": true,
+      "primary": "renderer-private-delta-cycle-6",
+      "primaryDefinition": "renderer private bytes at cycle-6 close minus baseline renderer private bytes",
+      "secondary": "total-chromium-private-delta",
+      "secondaryDefinition": "total private bytes of the owned Chromium process tree at cycle-6 close minus baseline",
+      "unit": "MiB"
+    },
+    "thresholds": {
+      "contrastSelection": "first eligible contrast in fixed order",
+      "controlCondition": "r12r2.3",
+      "controlMiB": 300,
+      "formalSeparation": "min(highDeltas)-max(lowDeltas) >= threshold",
+      "formalSeparationMiB": 150,
+      "sameDirectionAsTriage": true,
+      "triageComparison": "absolute difference >= threshold",
+      "triageMiB": 150
+    },
+    "order": [
+      [
+        "r12r2.0",
+        "r12r2.2"
+      ],
+      [
+        "r12r2.1",
+        "r12r2.3"
+      ],
+      [
+        "r12r2.0",
+        "r12r2.1"
+      ],
+      [
+        "r12r2.2",
+        "r12r2.3"
+      ]
+    ],
+    "budget": {
+      "formal": 6,
+      "maximum": 14,
+      "nativeCapability": 1,
+      "nativeMeasurements": 2,
+      "preflight": 1,
+      "retries": 0,
+      "triage": 4
+    }
+  },
+  "scientific": {
+    "ap06": "OPEN",
+    "chromiumMeasurement": 10,
+    "contrast": 1,
+    "highCondition": "r12r2.2",
+    "lowCondition": "r12r2.0",
+    "pair": [
+      "r12r2.0",
+      "r12r2.2"
+    ],
+    "retries": 0,
+    "separationMiB": 430.9453125,
+    "status": "R12R12_FACTORIAL_CONFIRMED",
+    "triageValues": {
+      "r12r2.0": 4.66796875,
+      "r12r2.1": 16.8671875,
+      "r12r2.2": 432.74609375,
+      "r12r2.3": 437.734375
+    },
+    "raws": [
+      {
+        "condition": "r12r2.0",
+        "stage": "triage",
+        "runId": "triage-01-r12r2.0",
+        "metadataTransport": "xhr",
+        "payloadTransport": "xhr",
+        "rawPath": ".quality/readiness-wave12-r12-factorial/triage/01-r12r2.0/crypto-transmux-mse.raw.json",
+        "rawSha256": "ade6722f43cd6ee698b8e4a3174505e7cd043c88f8ec0a7b1b03707d04eee716",
+        "rawBytes": 258493,
+        "status": "R12R2_FACTORIAL_VALID",
+        "rendererPrivateDeltaMiB": 4.66796875,
+        "treePrivateDeltaMiB": 173.23046875,
+        "rendererIdle120DeltaMiB": -1.6171875,
+        "rendererAfterGcDeltaMiB": -2.84765625,
+        "sampleCount": 11,
+        "rangeCount": 54,
+        "rangeBytes": 153354816,
+        "allRanges206": true,
+        "functionalStatus": "PASS",
+        "cleanupStatus": "PASS",
+        "browserClosed": true,
+        "processAudit": {
+          "status": "PASS",
+          "method": "retained-win32-process-handles",
+          "registered": 4,
+          "closed": 4,
+          "timedOut": 0,
+          "closedHashVerified": true,
+          "handleRelease": "PASS"
+        },
+        "attestationBefore": "PASS",
+        "attestationAfter": "PASS"
+      },
+      {
+        "condition": "r12r2.1",
+        "stage": "triage",
+        "runId": "triage-02-r12r2.1",
+        "metadataTransport": "fetch",
+        "payloadTransport": "xhr",
+        "rawPath": ".quality/readiness-wave12-r12-factorial/triage/02-r12r2.1/crypto-transmux-mse.raw.json",
+        "rawSha256": "583c2a0d958576e1ae2136f88e378468f1fae2a6c59e288cac89daa88347735a",
+        "rawBytes": 258590,
+        "status": "R12R2_FACTORIAL_VALID",
+        "rendererPrivateDeltaMiB": 16.8671875,
+        "treePrivateDeltaMiB": 184.66796875,
+        "rendererIdle120DeltaMiB": 5.65625,
+        "rendererAfterGcDeltaMiB": 4.4375,
+        "sampleCount": 11,
+        "rangeCount": 54,
+        "rangeBytes": 153354816,
+        "allRanges206": true,
+        "functionalStatus": "PASS",
+        "cleanupStatus": "PASS",
+        "browserClosed": true,
+        "processAudit": {
+          "status": "PASS",
+          "method": "retained-win32-process-handles",
+          "registered": 4,
+          "closed": 4,
+          "timedOut": 0,
+          "closedHashVerified": true,
+          "handleRelease": "PASS"
+        },
+        "attestationBefore": "PASS",
+        "attestationAfter": "PASS"
+      },
+      {
+        "condition": "r12r2.2",
+        "stage": "triage",
+        "runId": "triage-03-r12r2.2",
+        "metadataTransport": "xhr",
+        "payloadTransport": "fetch",
+        "rawPath": ".quality/readiness-wave12-r12-factorial/triage/03-r12r2.2/crypto-transmux-mse.raw.json",
+        "rawSha256": "8b89aea0211419de21929b966ff2ca650d0df9c27b17b13f2ac9941fc8cfa1a4",
+        "rawBytes": 258658,
+        "status": "R12R2_FACTORIAL_VALID",
+        "rendererPrivateDeltaMiB": 432.74609375,
+        "treePrivateDeltaMiB": 453.109375,
+        "rendererIdle120DeltaMiB": 387.81640625,
+        "rendererAfterGcDeltaMiB": 386.81640625,
+        "sampleCount": 11,
+        "rangeCount": 54,
+        "rangeBytes": 153354816,
+        "allRanges206": true,
+        "functionalStatus": "PASS",
+        "cleanupStatus": "PASS",
+        "browserClosed": true,
+        "processAudit": {
+          "status": "PASS",
+          "method": "retained-win32-process-handles",
+          "registered": 4,
+          "closed": 4,
+          "timedOut": 0,
+          "closedHashVerified": true,
+          "handleRelease": "PASS"
+        },
+        "attestationBefore": "PASS",
+        "attestationAfter": "PASS"
+      },
+      {
+        "condition": "r12r2.3",
+        "stage": "triage",
+        "runId": "triage-04-r12r2.3",
+        "metadataTransport": "fetch",
+        "payloadTransport": "fetch",
+        "rawPath": ".quality/readiness-wave12-r12-factorial/triage/04-r12r2.3/crypto-transmux-mse.raw.json",
+        "rawSha256": "25cad3020996b42732fc0e318da9e1e5cf8051610442f549e4cb8afa4e0a71f0",
+        "rawBytes": 258717,
+        "status": "R12R2_FACTORIAL_VALID",
+        "rendererPrivateDeltaMiB": 437.734375,
+        "treePrivateDeltaMiB": 459.05859375,
+        "rendererIdle120DeltaMiB": 387.1171875,
+        "rendererAfterGcDeltaMiB": 386.171875,
+        "sampleCount": 11,
+        "rangeCount": 54,
+        "rangeBytes": 153354816,
+        "allRanges206": true,
+        "functionalStatus": "PASS",
+        "cleanupStatus": "PASS",
+        "browserClosed": true,
+        "processAudit": {
+          "status": "PASS",
+          "method": "retained-win32-process-handles",
+          "registered": 4,
+          "closed": 4,
+          "timedOut": 0,
+          "closedHashVerified": true,
+          "handleRelease": "PASS"
+        },
+        "attestationBefore": "PASS",
+        "attestationAfter": "PASS"
+      },
+      {
+        "condition": "r12r2.0",
+        "stage": "formal",
+        "runId": "formal-05-r12r2.0",
+        "metadataTransport": "xhr",
+        "payloadTransport": "xhr",
+        "rawPath": ".quality/readiness-wave12-r12-factorial/formal/05-r12r2.0/crypto-transmux-mse.raw.json",
+        "rawSha256": "aed64de07d36beba94dcc7d010fbe8c6ac2f85fd77710990a6cc684653470f0b",
+        "rawBytes": 258463,
+        "status": "R12R2_FACTORIAL_VALID",
+        "rendererPrivateDeltaMiB": 4.20703125,
+        "treePrivateDeltaMiB": 173.21875,
+        "rendererIdle120DeltaMiB": -1.21484375,
+        "rendererAfterGcDeltaMiB": -2.2109375,
+        "sampleCount": 11,
+        "rangeCount": 54,
+        "rangeBytes": 153354816,
+        "allRanges206": true,
+        "functionalStatus": "PASS",
+        "cleanupStatus": "PASS",
+        "browserClosed": true,
+        "processAudit": {
+          "status": "PASS",
+          "method": "retained-win32-process-handles",
+          "registered": 4,
+          "closed": 4,
+          "timedOut": 0,
+          "closedHashVerified": true,
+          "handleRelease": "PASS"
+        },
+        "attestationBefore": "PASS",
+        "attestationAfter": "PASS"
+      },
+      {
+        "condition": "r12r2.2",
+        "stage": "formal",
+        "runId": "formal-06-r12r2.2",
+        "metadataTransport": "xhr",
+        "payloadTransport": "fetch",
+        "rawPath": ".quality/readiness-wave12-r12-factorial/formal/06-r12r2.2/crypto-transmux-mse.raw.json",
+        "rawSha256": "48c0dcd99b40adcba84085253305d8f1e60678fe47a9cceb1f8240c463a71705",
+        "rawBytes": 258712,
+        "status": "R12R2_FACTORIAL_VALID",
+        "rendererPrivateDeltaMiB": 435.26171875,
+        "treePrivateDeltaMiB": 455.6484375,
+        "rendererIdle120DeltaMiB": 393.49609375,
+        "rendererAfterGcDeltaMiB": 392.50390625,
+        "sampleCount": 11,
+        "rangeCount": 54,
+        "rangeBytes": 153354816,
+        "allRanges206": true,
+        "functionalStatus": "PASS",
+        "cleanupStatus": "PASS",
+        "browserClosed": true,
+        "processAudit": {
+          "status": "PASS",
+          "method": "retained-win32-process-handles",
+          "registered": 4,
+          "closed": 4,
+          "timedOut": 0,
+          "closedHashVerified": true,
+          "handleRelease": "PASS"
+        },
+        "attestationBefore": "PASS",
+        "attestationAfter": "PASS"
+      },
+      {
+        "condition": "r12r2.2",
+        "stage": "formal",
+        "runId": "formal-07-r12r2.2",
+        "metadataTransport": "xhr",
+        "payloadTransport": "fetch",
+        "rawPath": ".quality/readiness-wave12-r12-factorial/formal/07-r12r2.2/crypto-transmux-mse.raw.json",
+        "rawSha256": "89a0cadd81e76182e3823945fc6335735342a40a9743d9efc75b40f92433c971",
+        "rawBytes": 258569,
+        "status": "R12R2_FACTORIAL_VALID",
+        "rendererPrivateDeltaMiB": 435.19921875,
+        "treePrivateDeltaMiB": 455.59375,
+        "rendererIdle120DeltaMiB": 393.57421875,
+        "rendererAfterGcDeltaMiB": 392.60546875,
+        "sampleCount": 11,
+        "rangeCount": 54,
+        "rangeBytes": 153354816,
+        "allRanges206": true,
+        "functionalStatus": "PASS",
+        "cleanupStatus": "PASS",
+        "browserClosed": true,
+        "processAudit": {
+          "status": "PASS",
+          "method": "retained-win32-process-handles",
+          "registered": 4,
+          "closed": 4,
+          "timedOut": 0,
+          "closedHashVerified": true,
+          "handleRelease": "PASS"
+        },
+        "attestationBefore": "PASS",
+        "attestationAfter": "PASS"
+      },
+      {
+        "condition": "r12r2.0",
+        "stage": "formal",
+        "runId": "formal-08-r12r2.0",
+        "metadataTransport": "xhr",
+        "payloadTransport": "xhr",
+        "rawPath": ".quality/readiness-wave12-r12-factorial/formal/08-r12r2.0/crypto-transmux-mse.raw.json",
+        "rawSha256": "0c10614cb63cf2933feb8537b8428934b22d757a8edd49db1b8bd163711c6418",
+        "rawBytes": 258457,
+        "status": "R12R2_FACTORIAL_VALID",
+        "rendererPrivateDeltaMiB": 3.87890625,
+        "treePrivateDeltaMiB": 172.4921875,
+        "rendererIdle120DeltaMiB": -1.7421875,
+        "rendererAfterGcDeltaMiB": -2.67578125,
+        "sampleCount": 11,
+        "rangeCount": 54,
+        "rangeBytes": 153354816,
+        "allRanges206": true,
+        "functionalStatus": "PASS",
+        "cleanupStatus": "PASS",
+        "browserClosed": true,
+        "processAudit": {
+          "status": "PASS",
+          "method": "retained-win32-process-handles",
+          "registered": 4,
+          "closed": 4,
+          "timedOut": 0,
+          "closedHashVerified": true,
+          "handleRelease": "PASS"
+        },
+        "attestationBefore": "PASS",
+        "attestationAfter": "PASS"
+      },
+      {
+        "condition": "r12r2.0",
+        "stage": "formal",
+        "runId": "formal-09-r12r2.0",
+        "metadataTransport": "xhr",
+        "payloadTransport": "xhr",
+        "rawPath": ".quality/readiness-wave12-r12-factorial/formal/09-r12r2.0/crypto-transmux-mse.raw.json",
+        "rawSha256": "6838153d72e2108225ba4464dfdd46533bec243aed1965c1337f74a80fadc927",
+        "rawBytes": 258512,
+        "status": "R12R2_FACTORIAL_VALID",
+        "rendererPrivateDeltaMiB": 4.25390625,
+        "treePrivateDeltaMiB": 172.93359375,
+        "rendererIdle120DeltaMiB": -1.66015625,
+        "rendererAfterGcDeltaMiB": -2.859375,
+        "sampleCount": 11,
+        "rangeCount": 54,
+        "rangeBytes": 153354816,
+        "allRanges206": true,
+        "functionalStatus": "PASS",
+        "cleanupStatus": "PASS",
+        "browserClosed": true,
+        "processAudit": {
+          "status": "PASS",
+          "method": "retained-win32-process-handles",
+          "registered": 4,
+          "closed": 4,
+          "timedOut": 0,
+          "closedHashVerified": true,
+          "handleRelease": "PASS"
+        },
+        "attestationBefore": "PASS",
+        "attestationAfter": "PASS"
+      },
+      {
+        "condition": "r12r2.2",
+        "stage": "formal",
+        "runId": "formal-10-r12r2.2",
+        "metadataTransport": "xhr",
+        "payloadTransport": "fetch",
+        "rawPath": ".quality/readiness-wave12-r12-factorial/formal/10-r12r2.2/crypto-transmux-mse.raw.json",
+        "rawSha256": "3fb23d77667e308ed6a8ae32341f22c70aea65b4a7ee8f58d6111a4c31ce91cf",
+        "rawBytes": 258624,
+        "status": "R12R2_FACTORIAL_VALID",
+        "rendererPrivateDeltaMiB": 435.84375,
+        "treePrivateDeltaMiB": 456.1796875,
+        "rendererIdle120DeltaMiB": 393.96875,
+        "rendererAfterGcDeltaMiB": 393.03125,
+        "sampleCount": 11,
+        "rangeCount": 54,
+        "rangeBytes": 153354816,
+        "allRanges206": true,
+        "functionalStatus": "PASS",
+        "cleanupStatus": "PASS",
+        "browserClosed": true,
+        "processAudit": {
+          "status": "PASS",
+          "method": "retained-win32-process-handles",
+          "registered": 4,
+          "closed": 4,
+          "timedOut": 0,
+          "closedHashVerified": true,
+          "handleRelease": "PASS"
+        },
+        "attestationBefore": "PASS",
+        "attestationAfter": "PASS"
+      }
+    ],
+    "formalOrder": [
+      "r12r2.0",
+      "r12r2.2",
+      "r12r2.2",
+      "r12r2.0",
+      "r12r2.0",
+      "r12r2.2"
+    ],
+    "thresholdsChanged": false,
+    "scientificRetries": 0,
+    "nativeLeakConfirmed": false,
+    "scope": "Transport attribution driver on the fixed encrypted synthetic corpus; no production player, Worker, MSE or playback."
+  },
+  "native": {
+    "decision": {
+      "capabilityChromium": 1,
+      "measurementChromium": 0,
+      "reason": "NATIVE_TRACE_CONTRACT_INVALID",
+      "retries": 0,
+      "status": "R12R12_NATIVE_INCONCLUSIVE",
+      "traceBytes": 4430975,
+      "traceSha256": "da8d207b98b0979fb280ac821fde04c1a09ef3178acc22835d92ba9281798df6"
+    },
+    "captureStatus": "CAPTURED",
+    "receiptSha256": "40489512e30e1a1b8b60f806dae568d0701baac70d37f105972db9000a2225e8",
+    "trace": {
+      "complete": true,
+      "dataLossOccurred": false,
+      "activatedBeforeWorkload": true,
+      "flags": [
+        "--memlog=all",
+        "--memlog-stack-mode=native",
+        "--memlog-sampling-rate=16384",
+        "--memlog-keep-small-allocations"
+      ],
+      "samplingIntervalBytes": 16384,
+      "categories": [
+        "disabled-by-default-memory-infra"
+      ],
+      "traceFormat": "json",
+      "bytes": 4430975,
+      "sha256": "da8d207b98b0979fb280ac821fde04c1a09ef3178acc22835d92ba9281798df6",
+      "streamEof": true
+    },
+    "requestedCheckpoints": [
+      "baseline",
+      "cycle-6-close",
+      "idle-120s",
+      "forced-GC-final"
+    ],
+    "allDumpRequestsReportedSuccess": true,
+    "browserClosed": true,
+    "processAudit": "PASS",
+    "handleRelease": "PASS",
+    "readOnlyDiagnosis": {
+      "status": "READ_ONLY_DIAGNOSIS",
+      "classifierUnchanged": "R12R2_NATIVE_INCONCLUSIVE",
+      "exceptions": [
+        {
+          "type": "ValueError",
+          "code": "RENDERER_OR_DUMP_MISSING"
+        }
+      ],
+      "traceUnchanged": true,
+      "traceSha256": "da8d207b98b0979fb280ac821fde04c1a09ef3178acc22835d92ba9281798df6",
+      "additionalChromium": 0,
+      "scientificResultNotPromoted": true,
+      "correlation": {
+        "rendererEvents": 99,
+        "rendererNameMetadataEvents": 0,
+        "recognizedRendererName": false,
+        "rendererMemoryDumpEvents": 12,
+        "matchedDumpGuids": [
+          1,
+          2,
+          3
+        ],
+        "heapsV2InMatchedDumps": 0
+      }
+    },
+    "profiledMeasurements": 0,
+    "nativeFreezeCreated": false,
+    "criteriaRelaxed": false,
+    "resultReclassified": false,
+    "interpretation": "Trace capture completed, but renderer metadata, the final correlated dump and heaps_v2 allocation data required by the consumer are absent. No native cause, allocation lifetime or leak is established."
+  },
+  "budget": {
+    "maximum": 14,
+    "preflight": 1,
+    "triage": 4,
+    "formal": 6,
+    "nativeCapability": 1,
+    "nativeProfiled": 0,
+    "totalLaunchAttempts": 12,
+    "totalBrowsersLaunched": 12,
+    "unused": 2,
+    "retries": 0,
+    "additionalBrowsersAfterTerminalDecision": 0
+  },
+  "cleanup": {
+    "accounts": {
+      "status": "PASS",
+      "accountsRequested": 2,
+      "accountsCleaned": 2,
+      "removedFiles": 3,
+      "failureClass": null
+    },
+    "runtime": {
+      "status": "PASS",
+      "ownedServerStopped": true,
+      "ownedPostgresStopped": true,
+      "ownedClusterStorageAndDotenvRemoved": true,
+      "runtimePreservedForResume": false,
+      "personalServicesTouched": false
+    },
+    "foreignProcessesUnchanged": true,
+    "factorialCurrentCredentials": {
+      "status": "PASS",
+      "currentRuntimeEnvironmentRemoved": true,
+      "currentPlayerCredentialsRemoved": true,
+      "sealedArchiveRetained": true,
+      "liveRuntimeResumable": false
+    },
+    "nativeCurrentCredentials": {
+      "status": "PASS",
+      "currentRuntimeEnvironmentRemoved": true,
+      "currentPlayerCredentialsRemoved": true,
+      "sealedArchiveRetained": true,
+      "liveRuntimeResumable": false
+    },
+    "privateArchiveRetained": true,
+    "liveRuntimeResumable": false
+  },
+  "dependencies": {
+    "counts": {
+      "moderate": 7,
+      "high": 20,
+      "critical": 3,
+      "total": 30
+    },
+    "runtimeCounts": {
+      "high": 1,
+      "total": 1
+    },
+    "applicability": "Runtime Angular Router SSR advisory is not exposed by this static SPA lab. The other 29 findings affect tooling not exposed by its backend/media server; reviewed local inputs were used. This is not a project-wide security clearance.",
+    "upgradesPerformed": false,
+    "lockfileChanged": false
+  },
+  "versions": {
+    "node": "v24.21.0",
+    "playwright": "1.62.1",
+    "chromium": "151.0.7922.34",
+    "postgres": "postgres (PostgreSQL) 16.4",
+    "python": "3.12"
+  },
+  "limitations": [
+    "Native profiling remains inconclusive: no recognized renderer name metadata, only three of four correlated dump GUIDs and no matched heaps_v2 data; two profiled browsers were not authorized by the capability gate.",
+    "The experiment confirms relative private-byte retention associated with Fetch payload under this fixed workload; it does not prove a production-player leak or identify a native function.",
+    "Original R6 corpus identity remains unproven; the verified R7 regenerated baseline is used.",
+    "Thirty dependency findings remain recorded without broad upgrades.",
+    "Historical R11 STOP/raw/freeze remain terminal and byte-for-byte unchanged."
+  ],
+  "historicalPrPlan": "Keep #25 and #27-#37 and their branches/reports untouched. No merge or closure performed; #38 remains the canonical Draft against frontend."
+}
