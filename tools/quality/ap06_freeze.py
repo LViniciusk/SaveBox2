@@ -184,7 +184,7 @@ def validate_freeze_plan(wave, files, publications, *, preflight_complete, inclu
         prefix = wave.output.name.replace('readiness-wave', 'r')
         if (root/prefix/'tooling/source').exists():
             raise ValueError('AP06_FREEZE_PARTIAL_PUBLICATION_EXISTS')
-        for name in ('implementation', 'freeze'):
+        for name in ('implementation', 'freeze', 'freeze-complete'):
             relative_path('manifests/'+prefix+'-'+name+'.json')
             if (root/'manifests'/f'{prefix}-{name}.json').exists():
                 raise ValueError('AP06_FREEZE_PUBLICATION_ALREADY_EXISTS')

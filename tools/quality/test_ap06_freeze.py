@@ -201,6 +201,11 @@ class FreezePipelineTests(unittest.TestCase):
         (self.authority/'r12-r11-factorial/tooling/source/partial.txt').unlink()
         for name in ('r12-r11-factorial/tooling/source', 'r12-r11-factorial/tooling', 'r12-r11-factorial'):
             (self.authority/name).rmdir()
+        authority.publish_snapshot(self.authority,self.identity,'r12-r11-factorial-freeze-complete',
+            {'r12-r11-factorial/evidence/freeze-complete.json':self.output/'baseline/budget.json'},self.output/'pipeline')
+        with self.assertRaisesRegex(FreezeFailure,'PUBLICATION_FAILED'):self.readiness()
+        (self.authority/'manifests/r12-r11-factorial-freeze-complete.json').unlink()
+        (self.authority/'r12-r11-factorial/evidence/freeze-complete.json').unlink()
         # Unknown stray authority content also invalidates existing publication readback.
         self.write(self.authority/'stray.txt', 'stray')
         with self.assertRaisesRegex(FreezeFailure, 'READBACK_FAILED'): self.readiness()
