@@ -40,7 +40,7 @@ RUNTIME_INPUTS=('authority-config.local.json','backend-runtime.local.json','play
 
 def strict_freeze_namespace(output):
     return Path(output).name in ('readiness-wave12-r11-factorial','readiness-wave12-r11-native',
-        'readiness-wave12-r12-factorial','readiness-wave12-r12-native')
+        'readiness-wave12-r12-factorial','readiness-wave12-r12-native','readiness-wave12-r13-native')
 
 
 class FreezeFailure(WaveFailure):
@@ -114,6 +114,14 @@ def validate_compile_scope(commands):
             raise ValueError('AP06_NATIVE_COMPILATION_SCOPE_INVALID')
 
 
+def validate_test_receipt(output, tests):
+    required=('python','node','typescript','angularBuild','native')
+    if Path(output).name!='readiness-wave12-r13-native':required+=('global',)
+    if tests.get('status')!='PASS' or any(tests.get(name,{}).get('status') not in
+            (('PASS','DOCUMENTED_EXCEPTION') if name=='global' else ('PASS',)) for name in required):
+        raise ValueError('AP06_FREEZE_TEST_AUTHORITY_INVALID')
+
+
 def validate_native_build_authority(wave):
     """A missing header requires a separately published build, never a provenance string."""
     with freeze_stage('native-authority'):
@@ -168,10 +176,7 @@ def validate_freeze_plan(wave, files, publications, *, preflight_complete, inclu
                 any(not checked_path(path).is_file() or sha256(path)!=digest for path,digest in binaries)):
             raise ValueError('AP06_FREEZE_RUNTIME_IDENTITY_CHANGED')
         tests=read(wave.output/'baseline/tests.json')
-        if tests.get('status')!='PASS' or any(tests.get(name,{}).get('status') not in
-                (('PASS','DOCUMENTED_EXCEPTION') if name=='global' else ('PASS',))
-                for name in ('python','node','typescript','angularBuild','native','global')):
-            raise ValueError('AP06_FREEZE_TEST_AUTHORITY_INVALID')
+        validate_test_receipt(wave.output,tests)
         rows = []
         deferred = []
         for name, source in sorted(files.items()):

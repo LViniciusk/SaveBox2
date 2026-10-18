@@ -135,8 +135,8 @@ def seal_runtime_keys(runtime, identity, manifest):
     return {'status':'PASS','scope':'CurrentUser','protectedSha256':sha256(runtime/'fdks.dpapi')}
 
 
-def readback(root, identity):
-    root = validate_owned_destination(root,identity,campaign='AP-06-R10')
+def readback(root, identity, campaign='AP-06-R10'):
+    root = validate_owned_destination(root,identity,campaign=campaign)
     verify_publication(root,identity,'corpus-publication'); verify_publication(root,identity,'custody')
     context = json.loads(checked_path(root/'keys/custody.json').read_text())
     if context['identity'] != identity or context['manifestSha256'] != sha256(root/'manifests/corpus.json'):

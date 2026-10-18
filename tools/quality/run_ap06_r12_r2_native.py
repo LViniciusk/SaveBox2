@@ -22,7 +22,7 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
 
 
 def native_since(first):
-    return TRACE_PREFIX in tuple(f'r12-r{i}-native' for i in range(first,13))
+    return TRACE_PREFIX in tuple(f'r12-r{i}-native' for i in range(first,14))
 
 
 def configure_campaign(output,publisher):
@@ -70,7 +70,8 @@ def seal_trace(wave,receipt):
     if not path.exists():return {'status':'NO_TRACE_WRITTEN'}
     digest=sha256(path);data=read(receipt);trace=data.get('trace',data)
     if trace.get('sha256') is not None:require(trace['sha256']==digest and trace['bytes']==path.stat().st_size,'R12R2_NATIVE_TRACE_CHECKSUM_CHANGED')
-    manifest={'campaign':'AP-06-R10','files':[{'path':relative,'size':path.stat().st_size,'sha256':digest}]}
+    manifest={'campaign':read(authority/'authority.json')['campaign'],
+        'files':[{'path':relative,'size':path.stat().st_size,'sha256':digest}]}
     # Adopt the sealed stream in place: sensitive trace bytes never enter a worktree or temp publication copy.
     result=publish_authorities(authority,authority,manifest,config['identity'],TRACE_PREFIX+'-trace-'+path.stem)
     wave.save(str((receipt.parent/'native-trace-seal.json').relative_to(wave.output)),dict(result,traceSha256=digest,bytes=path.stat().st_size))
