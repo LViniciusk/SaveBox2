@@ -174,7 +174,8 @@ class Wave:
         self.env = self.host_env.copy()
         if os.name == 'nt':
             self.env['PATH'] = 'C:/msys64/ucrt64/bin;' + self.env['PATH']
-        self.node = shutil.which('node') or 'node'
+        node = shutil.which('node')
+        self.node = str(Path(node).resolve(strict=True)) if node else 'node'
         self.server_binary = self.root / ('backend/build/savebox_server.exe' if os.name == 'nt' else 'backend/build/savebox_server')
         self.fixture_binary = self.root / ('backend/build/nanika_e2e_fixture.exe' if os.name == 'nt' else 'backend/build/nanika_e2e_fixture')
         self.test_binary = self.root / ('backend/build/savebox_tests.exe' if os.name == 'nt' else 'backend/build/savebox_tests')
@@ -263,7 +264,7 @@ class Wave:
                 'saturationDefinition': 'First level with <=5% marginal throughput gain and >=20% median p95 growth versus previous level; observational heuristic, not an SLO'})
             self.save('pipeline/findings-entry.json', {key: {'name': value, 'status': 'OPEN'} for key, value in FINDINGS.items()})
 
-    def command(self, name, command, cwd=None, environment=None):
+    def command(self, name, command, cwd=None, environment=None, check=True):
         # Existing logged runner; private temporary logs are summarized, never copied wholesale.
         previous = os.environ.copy()
         try:
@@ -294,7 +295,7 @@ class Wave:
                 'Cannot read directory', 'Access is denied', 'cannot start', 'not captured', 'FAILED', 'ERROR',
             ) if signal.lower() in output.lower()]
         self.save(f'pipeline/commands/{name}.json', artifact)
-        if result['exit_code'] != 0: raise WaveFailure(f'COMMAND_FAILED_{name.upper()}')
+        if check and result['exit_code'] != 0: raise WaveFailure(f'COMMAND_FAILED_{name.upper()}')
         return output
 
     def dependencies(self):

@@ -3,6 +3,24 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { observeRangeNetwork, backendTraffic } from './ap06-r9-network.mjs';
 
+test('optional Auth/Store observation uses exact URLs and methods, sanitizes and shares duplicate detection', async () => {
+  const session=new EventEmitter();session.send=async()=>{};session.detach=async()=>{};
+  const observer=await observeRangeNetwork({newCDPSession:async()=>session},{},[{fixture:0,fileId:101}],{bootstrapHttp:true});
+  const emit=(requestId,url,method)=>session.emit('Network.requestWillBeSent',{requestId,type:'XHR',request:{url,method,headers:{Authorization:'secret'}}});
+  emit('bad','http://127.0.0.1:42187/login?x=1','POST');
+  emit('wrong-method','http://127.0.0.1:42187/login','GET');
+  emit('auth','http://127.0.0.1:42187/login','POST');
+  emit('auth','http://127.0.0.1:42187/login','POST');
+  session.emit('Network.responseReceived',{requestId:'auth',type:'XHR',response:{status:200,fromDiskCache:false,fromServiceWorker:false,headers:{'Set-Cookie':'secret','Content-Length':'2'}}});
+  session.emit('Network.loadingFinished',{requestId:'auth',encodedDataLength:202});
+  assert.equal(observer.data.bootstrapRequests.length,1);
+  assert.equal(observer.data.duplicateRequestIds,1);
+  assert.equal(observer.data.bootstrapRequests[0].kind,'auth');
+  assert.equal(observer.data.bootstrapRequests[0].encodedDataLength,202);
+  assert.equal(JSON.stringify(observer.data).includes('secret'),false);
+  await observer.close();assert.equal(session.eventNames().length,0);
+});
+
 test('passive CDP selects only approved ranges, sanitizes headers, correlates and detaches', async () => {
   const session = new EventEmitter(), calls = [];
   session.send = async command => calls.push(command); session.detach = async () => calls.push('detach');

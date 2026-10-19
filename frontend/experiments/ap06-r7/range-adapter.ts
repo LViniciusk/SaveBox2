@@ -13,6 +13,14 @@ export function validateBounds(start: number, end: number, total: number): void 
   }
 }
 
+export function parseRangeHeader(range: string, total: number) {
+  const match = /^bytes=(0|[1-9]\d*)-(0|[1-9]\d*)$/.exec(range);
+  if (!match) throw new Error('INVALID_RANGE_HEADER');
+  const start = Number(match[1]), end = Number(match[2]);
+  validateBounds(start, end, total);
+  return { start, end };
+}
+
 export function validatePartialResponse(response: { status: number; headers: { get(name: string): string | null } }, start: number, end: number, total: number): void {
   validateBounds(start, end, total);
   if (response.status !== 206 || response.headers.get('Content-Range') !== `bytes ${start}-${end}/${total}` ||

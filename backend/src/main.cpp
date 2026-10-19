@@ -22,13 +22,31 @@
 #include <mutex>
 #include <thread>
 
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+int main(int argc, char* argv[]) {
+    if (argc == 2 && std::string_view(argv[1]) == "--version") {
+        std::cout << "Nanika AP06 local laboratory R10-R3\n";
+        return 0;
+    }
+#else
 int main() {
+#endif
 
     std::string bind_address;
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+    std::optional<Ap06LocalRuntime::Config> ap06_config;
+#endif
     try {
         bind_address = DotEnv::get_bind_address();
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+        ap06_config = Ap06LocalRuntime::from_environment(bind_address, DotEnv::get_storage_path());
+#endif
     } catch (const std::exception&) {
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+        std::cerr << "[FATAL] AP06_LOCAL_RUNTIME_INVALID\n";
+#else
         std::cerr << "[FATAL] Invalid NANIKA_BIND_ADDRESS; expected 0.0.0.0 or 127.0.0.1.\n";
+#endif
         return 1;
     }
 
@@ -50,6 +68,16 @@ int main() {
 
     // Instancia as dependências
     DatabasePool pool(2, conn_str);
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+    std::optional<Ap06LocalRuntime> ap06_runtime;
+    try {
+        ap06_runtime = Ap06LocalRuntime::verify(*ap06_config, pool);
+    } catch (const std::exception&) {
+        std::cerr << "[FATAL] AP06_LOCAL_RUNTIME_INVALID\n";
+        if (prov_def) OSSL_PROVIDER_unload(prov_def);
+        return 1;
+    }
+#endif
     if (!DatabaseMigration::run(pool)) {
         std::cerr << "[FATAL] Schema do banco incompatível ou migração inicial falhou. Servidor não será iniciado.\n";
         if (prov_def) OSSL_PROVIDER_unload(prov_def);
@@ -112,7 +140,11 @@ int main() {
     // Configurando Instância do Crow WebServer
     NanikaCrowApp app;
     const bool trust_proxy_headers = DotEnv::trust_proxy_headers();
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+    app.get_middleware<RateLimitMiddleware>().init_ap06_local(pool, *ap06_runtime);
+#else
     app.get_middleware<RateLimitMiddleware>().init(pool, trust_proxy_headers);
+#endif
 
     // Configurando Rotaseador com injeção de dependência
     ApiRouter router(pool, auth, folder_mgr, &file_mgr, &chunker, &gdrive,
@@ -120,6 +152,14 @@ int main() {
 
     // Acopla as rotas ao servidor
     router.setup_routes(app);
+
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+    CROW_ROUTE(app, "/__ap06/actual-peer")([&](const crow::request& req) {
+        crow::response response(200, req.remote_ip_address);
+        response.set_header("Cache-Control", "no-store");
+        return response;
+    });
+#endif
 
     uint16_t port = DotEnv::get_port();
 

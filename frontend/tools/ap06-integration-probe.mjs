@@ -6,7 +6,8 @@ import { orchestrationPageScript } from './ap06-orchestration-probe.mjs';
 import { newIntegrationCounters, installIntegrationInstrumentation, integrationSnapshot,
   validateIntegrationCleanup, validateIntegrationFunctional } from './ap06-r7-instrumentation.mjs';
 
-export const AUTOPLAY_ARGS = ['--autoplay-policy=no-user-gesture-required'];
+export {AUTOPLAY_ARGS} from './ap06-browser-identity.mjs';
+import {AUTOPLAY_ARGS} from './ap06-browser-identity.mjs';
 export const MODES = { 'r8.0': 'component', 'r8.1': 'store', 'r8.2': 'backend' };
 
 export function integrationPageScript() {

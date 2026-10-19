@@ -10,6 +10,21 @@ static_assert(RateLimitMiddleware::MAX_BANNED_IPS == RateLimitMiddleware::MAX_CL
 static_assert(RateLimitMiddleware::MAX_BANNED_IPS == 10000);
 
 struct RateLimitMiddlewareTestProbe {
+    static auto state(RateLimitMiddleware& mw) {
+        std::shared_lock<std::shared_timed_mutex> lock(mw.mutex_);
+        int counts = 0;
+        for (const auto& row : mw.clients_) counts += row.second.auth_count + row.second.session_count + row.second.general_count;
+        return std::make_tuple(mw.clients_.size(), mw.banned_ips_cache.size(), mw.ban_cache_overflowed_,
+            mw.ban_refresh_in_flight_, mw.ban_persistence_in_flight_, mw.ddos_panic_until_epoch.load(),
+            mw.next_ban_sweep_, mw.next_ban_refresh_, mw.unpersisted_ban_until_, counts);
+    }
+    static void protection(RateLimitMiddleware& mw) {
+        mw.clients_["127.0.0.1"].auth_count = 14;
+        mw.banned_ips_cache["127.0.0.1"] = std::chrono::system_clock::now() + std::chrono::hours(1);
+        mw.banned_ips_cache["::1"] = std::chrono::system_clock::now() + std::chrono::hours(1);
+        mw.ban_cache_overflowed_ = true;
+        mw.ddos_panic_until_epoch.store(std::numeric_limits<int64_t>::max());
+    }
     static void budget(RateLimitMiddleware& mw, std::size_t limit) {
         mw.max_banned_ips_ = limit;
     }
@@ -64,7 +79,36 @@ struct RateLimitMiddlewareTestProbe {
         std::shared_lock<std::shared_timed_mutex> lock(mw.mutex_);
         return mw.clients_.at(ip).auth_count;
     }
+    static bool has_client(RateLimitMiddleware& mw, const std::string& ip) {
+        std::shared_lock<std::shared_timed_mutex> lock(mw.mutex_);
+        return mw.clients_.find(ip) != mw.clients_.end();
+    }
 };
+
+TEST_CASE("AP06 unverified and production loopback keep all native limits", "[ap06][rate_limiter][security]") {
+    STATIC_REQUIRE(RateLimitMiddleware::AUTH_LIMIT == 5);
+    STATIC_REQUIRE(RateLimitMiddleware::AUTH_BAN_THRESHOLD == 15);
+    for (const auto& peer : {"127.0.0.1", "::1"}) {
+        RateLimitMiddleware limiter;
+        for (int i = 1; i <= 16; ++i) {
+            crow::request req; req.remote_ip_address = peer; req.url = "/login";
+            crow::response res; RateLimitMiddleware::context ctx;
+            limiter.before_handle(req, res, ctx);
+            CHECK(res.code == (i <= 5 ? 200 : i < 15 ? 429 : 403));
+        }
+    }
+    for (const auto& row : {std::make_pair("/api/auth/refresh", RateLimitMiddleware::SESSION_CONTROL_LIMIT),
+                            std::make_pair("/files/1/download", RateLimitMiddleware::GENERAL_LIMIT)}) {
+        RateLimitMiddleware limiter;
+        for (int i = 1; i <= row.second + 1; ++i) {
+            crow::request req; req.remote_ip_address = "127.0.0.1"; req.url = row.first;
+            crow::response res; RateLimitMiddleware::context ctx;
+            limiter.before_handle(req, res, ctx);
+            CHECK(res.code == (i <= row.second ? 200 : 429));
+        }
+    }
+}
+
 
 namespace {
 crow::response request(RateLimitMiddleware& mw, const std::string& ip,
@@ -538,3 +582,68 @@ TEST_CASE("B.98 no-pool overflow recovers only after all uncached risk expires",
     CHECK(response.code == 200);
     CHECK_FALSE(RateLimitMiddlewareTestProbe::overflow(mw));
 }
+
+#ifdef NANIKA_AP06_LOCAL_TEST_SERVER
+TEST_CASE("AP06 verified local bypass precedes every mutation ban and protection", "[ap06][rate_limiter][security]") {
+    BanDatabase db;
+    auto& pool = db.pool;
+    const auto config = Ap06LocalRuntime::from_environment("127.0.0.1", DotEnv::get_storage_path());
+    const auto runtime = Ap06LocalRuntime::verify(config, pool);
+    RateLimitMiddleware limiter;
+    limiter.init_ap06_local(pool, runtime);
+    for (bool protection : {false, true}) {
+        if (protection) RateLimitMiddlewareTestProbe::protection(limiter);
+        const auto before = RateLimitMiddlewareTestProbe::state(limiter);
+        for (const auto& peer : {"127.0.0.1", "::1"}) {
+            for (const auto& row : {std::make_pair("/login", 32), std::make_pair("/api/auth/refresh", 64),
+                                    std::make_pair("/files/1/download", 5002)}) {
+                for (int i = 0; i < row.second; ++i) {
+                    crow::request req; req.remote_ip_address = peer; req.url = row.first;
+                    req.add_header("X-Real-IP", "203.0.113.10");
+                    crow::response res; RateLimitMiddleware::context ctx;
+                    limiter.before_handle(req, res, ctx); REQUIRE(res.code == 200);
+                }
+            }
+        }
+        CHECK(RateLimitMiddlewareTestProbe::state(limiter) == before);
+    }
+    for (const auto& peer : {"203.0.113.10", "192.168.1.10", "127.0.0.2", "127.0.0.3", "localhost", "", "::ffff:127.0.0.1"}) {
+        db.erase(peer);
+        RateLimitMiddleware normal;
+        normal.init_ap06_local(pool, runtime);
+        if (peer == std::string("127.0.0.2") || peer == std::string("127.0.0.3")) {
+            crow::request actual_peer; actual_peer.remote_ip_address = peer;
+            CHECK_FALSE(ClientIp::is_actual_loopback_peer(actual_peer));
+        }
+        for (int i = 1; i <= 16; ++i) {
+            crow::request req; req.remote_ip_address = peer; req.url = "/login";
+            req.add_header("Host", "localhost"); req.add_header("X-Real-IP", "127.0.0.1");
+            req.add_header("X-Forwarded-For", "127.0.0.1, ::1");
+            crow::response res; RateLimitMiddleware::context ctx;
+            normal.before_handle(req, res, ctx);
+            CHECK(res.code == (i <= 5 ? 200 : i < 15 ? 429 : 403));
+        }
+        if (peer == std::string("127.0.0.2") || peer == std::string("127.0.0.3")) {
+            CHECK(RateLimitMiddlewareTestProbe::auth_count(normal, peer) == 15);
+            CHECK_FALSE(RateLimitMiddlewareTestProbe::has_client(normal, "127.0.0.1"));
+            CHECK(db.count(peer) == 1);
+        }
+    }
+}
+
+TEST_CASE("AP06 startup rejects incomplete runtime configuration", "[ap06][rate_limiter][security]") {
+    const auto good = Ap06LocalRuntime::from_environment("127.0.0.1", DotEnv::get_storage_path());
+    CHECK_NOTHROW(Ap06LocalRuntime::validate(good));
+    for (const auto& bind : {"0.0.0.0", "192.168.1.10", "::1", "localhost"}) {
+        auto bad = good; bad.bind = bind; CHECK_THROWS(Ap06LocalRuntime::validate(bad));
+    }
+    auto bad = good; bad.fixture = "0"; CHECK_THROWS(Ap06LocalRuntime::validate(bad));
+    bad = good; bad.trust_proxy = true; CHECK_THROWS(Ap06LocalRuntime::validate(bad));
+    bad = good; bad.database = "production"; CHECK_THROWS(Ap06LocalRuntime::validate(bad));
+    bad = good; bad.user = "postgres"; CHECK_THROWS(Ap06LocalRuntime::validate(bad));
+    bad = good; bad.host = "192.168.1.10"; CHECK_THROWS(Ap06LocalRuntime::validate(bad));
+    bad = good; bad.identity = std::string(64, '0'); CHECK_THROWS(Ap06LocalRuntime::validate(bad));
+    bad = good; bad.runtime += "/missing"; CHECK_THROWS(Ap06LocalRuntime::validate(bad));
+    bad = good; bad.storage += "/missing"; CHECK_THROWS(Ap06LocalRuntime::validate(bad));
+}
+#endif

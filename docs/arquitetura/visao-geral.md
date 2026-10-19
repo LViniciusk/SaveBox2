@@ -1,5 +1,19 @@
 # Visão Geral da Arquitetura
 
+## Status documental
+
+Esta visão descreve os componentes e as fronteiras presentes no código versionado. Configurações de uma instalação em execução devem ser conferidas no respectivo ambiente.
+
+## Fontes de autoridade no repositório
+
+- `frontend/src/main.ts`: entrada da aplicação no navegador.
+- `backend/src/main.cpp`: composição do servidor HTTP.
+- `docker-compose.yml`: serviços e persistência da composição principal.
+
+## Fora do escopo
+
+Este documento não registra credenciais, configuração local de operadores ou resultados das campanhas experimentais AP-06. Os resultados medidos pertencem aos relatórios de qualidade.
+
 O Nanika é um agregador de armazenamento em nuvem com **criptografia ponta a ponta**, backend próprio e suporte a múltiplos destinos de storage.
 
 A arquitetura combina:

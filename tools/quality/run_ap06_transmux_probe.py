@@ -118,8 +118,9 @@ def cycle6_process_deltas(record):
 
 
 def validate_raw(raw, stage, mode, source_hash, fixture_hash, harness_hash=None, runner_hash=None,
-                 expected_chromium_version=None, transmux_chunks_per_cycle=3, control_lifecycle=True, identity_expectations=None):
-    expected = 1 if stage == 'triage' else 3
+                 expected_chromium_version=None, transmux_chunks_per_cycle=3, control_lifecycle=True, identity_expectations=None,
+                 expected_runs=None):
+    expected = expected_runs if expected_runs is not None else 1 if stage == 'triage' else 3
     if (raw.get('mode') != mode or raw.get('stage') != stage or raw.get('browserLaunches') != expected or
             raw.get('launchAttempts') != expected or raw.get('retries') != 0 or len(raw.get('runs', [])) != expected):
         raise WaveFailure('AP06_R5_LAUNCH_PROTOCOL_INVALID')

@@ -10,6 +10,8 @@ export function validateRawMetric(sample) {
   if (!['natural', 'forced-diagnostic'].includes(sample.gc)) throw new Error('Invalid GC identity');
   if (!['PASS', 'PENDING', 'FAIL'].includes(sample.functionalStatus)) throw new Error('Missing functional status');
   for (const key of REQUIRED_METRICS) {
+    if (['Nodes','Documents'].includes(key) && sample.metrics?.[key] === null &&
+        sample.rendererMemory?.dom?.unavailable?.[key === 'Nodes' ? 'nodes' : 'documents']) continue;
     if (!Number.isFinite(sample.metrics?.[key])) throw new Error(`Non-finite required metric: ${key}`);
   }
   for (const value of Object.values(sample.metrics)) {
@@ -54,16 +56,16 @@ export function groupProcessMetrics(sample, processInfo) {
   return { ...sample, processes, byType, byCategory, gpuDeviceMemory: { status: 'NOT_AVAILABLE' } };
 }
 
-export async function collectRawMetrics(cdp, identity, processReader) {
+export async function collectRawMetrics(cdp, identity, processReader, rendererMemory = null) {
   const performance = await cdp.send('Performance.getMetrics');
-  const dom = await cdp.send('Memory.getDOMCounters');
+  const dom = rendererMemory?.dom ?? await cdp.send('Memory.getDOMCounters');
   const exposed = Object.fromEntries(performance.metrics.map(({ name, value }) => [name, value]));
   let processMemory = { status: 'NOT_AVAILABLE', reason: 'No reliable owned-process memory collector' };
   if (processReader) {
     try { processMemory = await processReader(); } catch { processMemory.reason = 'Owned-process collector unavailable'; }
   }
   return validateRawMetric({
-    ...identity, timestamp: new Date().toISOString(), processMemory,
+    ...identity, ...(rendererMemory ? { rendererMemory } : {}), timestamp: new Date().toISOString(), processMemory,
     metrics: {
       JSHeapUsedSize: exposed.JSHeapUsedSize, JSHeapTotalSize: exposed.JSHeapTotalSize,
       Nodes: dom.nodes, Documents: dom.documents, LayoutObjects: exposed.LayoutObjects ?? null,

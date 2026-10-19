@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { collectRawMetrics, groupProcessMetrics, writeJsonAtomic } from './browser-memory-probe.mjs';
+import { collectRawMetrics, writeJsonAtomic } from './browser-memory-probe.mjs';
+import { sampleOwnedProcesses } from './ap06-process-sample.mjs';
 import {
   createMseSession, decryptWorkerChunk, disposableCryptoMaterial, newOwnership, summarizeMseRuns,
 } from './ap06-mse-probe.mjs';
@@ -486,9 +487,21 @@ export function ownershipSnapshot(counters) {
   };
 }
 
+export async function captureNaturalIdle(page,capture,milliseconds) {
+  if(![30000,120000].includes(milliseconds))throw new Error('INVALID_CHECKPOINT_TIMING');
+  await capture('post-teardown-settled',6);
+  await page.waitForTimeout(30000);await capture('idle-30s',6);
+  if(milliseconds===120000){await page.waitForTimeout(90000);await capture('idle-120s',6);}
+}
+
+import {launchAttestedBrowser,closeBrowserWithIdentity,registerBrowserProcesses,usesRetainedProcessAudit} from './ap06-browser-identity.mjs';
+
 export async function runTransmuxProbe({ pageScript = transmuxPageScript(), countersFactory = newTransmuxCounters,
   cleanupValidator = validateCleanupOwnership, functionalValidator = validateTransmuxOwnership, snapshot = ownershipSnapshot,
-  launchOptions = {}, configurePage = null, initializePage = null, identity = {}, beforeRun = null, afterRun = null } = {}) {
+  launchOptions = {}, configurePage = null, initializePage = null, identity = {}, beforeRun = null, afterRun = null,
+  auxiliaryMetrics = null, repetitions = null, runLabel = null, idleAfterTeardownMs = 0, naturalCloseDelayMs = 1000,
+  browserType = chromium, identityResolver = undefined } = {}) {
+  if (![0,30000,120000].includes(idleAfterTeardownMs) || ![0,1000].includes(naturalCloseDelayMs)) throw new Error('INVALID_CHECKPOINT_TIMING');
   const expectedChromiumVersion = validateExpectedChromiumVersion(process.env.AP06_R5_CHROMIUM_VERSION);
   const { AP06_R5_MODE: mode, AP06_R5_STAGE: stage, AP06_R5_ARTIFACT_DIR: artifactDir,
     AP06_R5_MEDIA_ORIGIN: origin, AP06_R5_FIXTURE_MANIFEST: manifestPath,
@@ -517,15 +530,17 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
   const output = `${artifactDir}/${mode}.raw.json`;
   const flush = () => writeJsonAtomic(output, raw);
   flush();
-  for (let repetition = 1; repetition <= (stage === 'triage' ? 1 : 3); repetition++) {
+  const count = repetitions ?? (stage === 'triage' ? 1 : 3);
+  if (![1,3].includes(count) || runLabel && count !== 1) throw new Error('INVALID_INDEPENDENT_RUN_COUNT');
+  for (let repetition = 1; repetition <= count; repetition++) {
     if (beforeRun) await beforeRun(raw, output);
-    const runId = `${stage}-${process.env.AP06_R6_CONDITION || mode}-r${repetition}`;
+    const runId = runLabel ?? `${stage}-${process.env.AP06_R6_CONDITION || mode}-r${repetition}`;
     const run = { runId, mode, functionalStatus: 'FAIL', cleanupStatus: 'FAIL', browserVersion: null,
       playbackSessions: 0, extendedForPlateau: false, samples: [] };
     raw.runs.push(run); raw.launchAttempts++; flush();
     let browser = null, page = null, pageInitialized = false, closeObservation = null;
     try {
-      browser = await chromium.launch(launchOptions); raw.browserLaunches++; flush();
+      browser = await launchAttestedBrowser(browserType,launchOptions,run,()=>{raw.browserLaunches++;flush();},identityResolver);
       run.browserVersion = browser.version();
       if (run.browserVersion !== expectedChromiumVersion) throw new Error('CHROMIUM_VERSION_MISMATCH');
       const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block' });
@@ -545,16 +560,18 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
       const browserCdp = await browser.newBrowserCDPSession();
       const capture = async (phase, cycle, gc = 'natural') => {
         if (gc === 'forced-diagnostic') await cdp.send('HeapProfiler.collectGarbage');
+        const auxiliary = auxiliaryMetrics ? await auxiliaryMetrics(cdp,{phase,cycle,gc,browser,page}) : null;
+        let registrationFailure;
         const sample = await collectRawMetrics(cdp, { runId, scenarioId: mode, fixtureId: 'ABC-classic-MP4-corpus',
           mode, cycle, fixture: 'ABC-classic-MP4-corpus', phase, gc, browserVersion: run.browserVersion,
           sourceHash: process.env.AP06_R5_SOURCE_HASH, fixtureHash: manifestHash, harnessHash: process.env.AP06_R5_HARNESS_HASH,
           orchestratorHash: process.env.AP06_R5_RUNNER_SHA256, workerBundleHash: transpHash,
           cryptoWorkerBundleHash: cryptoWorkerHash, functionalStatus: 'PENDING' }, async () => {
-          const { processInfo } = await browserCdp.send('SystemInfo.getProcessInfo'); raw.processSampleCalls++;
-          const { stdout } = await exec(process.env.WAVE1_PYTHON,
-            [process.env.WAVE1_RUNNER, '--process-sample', processInfo.map(process => process.id).join(',')], { windowsHide: true });
-          return groupProcessMetrics(JSON.parse(stdout), processInfo);
-        });
+          raw.processSampleCalls++;
+          try{return await sampleOwnedProcesses(browserCdp,undefined,processes=>registerBrowserProcesses(browser,processes));}
+          catch(error){if(String(error?.message).startsWith('AP06_BROWSER_'))registrationFailure=error;throw error;}
+        }, auxiliary);
+        if(registrationFailure)throw registrationFailure;
         const state = await page.evaluate(() => ({ counters: { ...window.r5Counters }, mediaNodes: document.querySelectorAll('video,audio').length }));
         sample.counters = state.counters; sample.mediaNodes = state.mediaNodes;
         sample.ownership = snapshot(state.counters);
@@ -568,12 +585,17 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
           await page.evaluate(({ fixture, mode }) => window.r5RunFixture(fixture, mode), { fixture, mode });
           run.playbackSessions++;
         }
-        await page.waitForTimeout(1000); await capture(`cycle-${cycle}-close`, cycle);
+        if (naturalCloseDelayMs) await page.waitForTimeout(naturalCloseDelayMs);
+        await capture(`cycle-${cycle}-close`, cycle);
+      }
+      if (idleAfterTeardownMs) {
+        await captureNaturalIdle(page,capture,idleAfterTeardownMs);
       }
       await capture('forced-GC-final', 6, 'forced-diagnostic');
       run.functionalStatus = 'PASS'; run.cleanupStatus = 'PASS';
     } catch (error) {
       run.failureClass = error?.message?.match(/^[A-Z0-9_]+$/) ? error.message : error?.name || 'UNKNOWN_ERROR';
+      run.failureStage ??= run.browserIdentity?.failureStage;
       process.exitCode = 1;
     } finally {
       let cleanupOk = true;
@@ -587,17 +609,19 @@ export async function runTransmuxProbe({ pageScript = transmuxPageScript(), coun
         try { await closeObservation(); } catch { cleanupOk = false; }
       }
       if (browser) {
-        try {
-          await browser.close();
-          if (process.env.AP06_R8_PID_AUDITOR && run.samples.length) {
+        const lifecycle=await closeBrowserWithIdentity(browser,run);cleanupOk&&=lifecycle.status==='PASS';
+        if (!usesRetainedProcessAudit()&&process.env.AP06_R8_PID_AUDITOR && run.samples.length) {
+          try {
             const pids = [...new Set(run.samples.flatMap(sample => sample.processMemory.processes.map(row => row.pid)))];
             const { stdout } = await exec(process.env.WAVE1_PYTHON,
               [process.env.AP06_R8_PID_AUDITOR, '--closed-pids', pids.join(',')], { windowsHide: true });
             run.processExitAudit = JSON.parse(stdout);
             if (run.processExitAudit.status !== 'PASS') cleanupOk = false;
-          }
+          } catch { cleanupOk = false; }
         }
-        catch { cleanupOk = false; }
+      } else if (run.browserIdentity?.browserLaunchSucceeded) {
+        run.processExitAudit??=run.browserIdentity.processExitAudit??run.browserIdentity.failureCleanupAudit;
+        cleanupOk=run.browserIdentity.browserClosed===true&&run.browserIdentity.cleanupStatus==='PASS';
       }
       run.cleanupStatus = cleanupOk ? 'PASS' : 'FAIL';
       for (const sample of run.samples) {

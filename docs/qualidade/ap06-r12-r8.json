@@ -1,0 +1,157 @@
+{
+  "campaign": "AP-06-R12-R8-factorial",
+  "status": "R12R8_STOP",
+  "baseBranch": "investigation/ap06-r12-r7",
+  "basePr": 34,
+  "implementationHeadAtPreflight": "67b577ecf7ecd50db8b0aa3eba2c211db6380ac4",
+  "postStopCorrectionHead": "752ecbb9c39f8441fb804e62f2cbc171a86b1824",
+  "authority": {
+    "trackedTask": "quality/ap06-r12-r8.md",
+    "originalPromptSha256": "07572844a0ff7231c7d55cd2f2e760a51414151d9780541d304fb799c72e8c3e",
+    "originalPromptBytes": 16321,
+    "materializedTaskSha256": "a72e0dadb273695ba5c2108e759745540fe3c275cffbe285eabf53f1fa5cbf59",
+    "materializedTaskBytes": 16333,
+    "normalization": "Four trailing-space Markdown hard breaks represented as <br>"
+  },
+  "budget": {
+    "approvedMaximumChromium": 14,
+    "retries": 0,
+    "reservationCreated": false,
+    "launchAttempts": 0,
+    "browserLaunches": 0,
+    "remainingChromium": 14
+  },
+  "preflight": {
+    "status": "STOP",
+    "failureStage": "offline-environment",
+    "failureClass": "R12R8_PREFLIGHT_NOT_READY",
+    "primaryCause": "The offline check required a literal PE ProductVersion although the verified Chromium headless shell has no PE VERSIONINFO; frozen chromiumVersion 151.0.7922.34 matched.",
+    "postStopCorrection": "Accept absent PE ProductVersion only when verify_identity passes and the frozen chromiumVersion matches; unit tested, not rerun in this authority.",
+    "additionalCustodyFinding": "Read-only diagnosis found DPAPI protected-blob SHA-256 does not match its custody receipt; DPAPI readback and unseal passed; keys were not printed or persisted.",
+    "mediaServerStarted": false,
+    "retryAllowedInThisAuthority": false,
+    "cleanupStatus": "NOT_REQUIRED"
+  },
+  "build": {
+    "status": "PASS",
+    "angularProject": "ap06-r7",
+    "output": ".quality/readiness-wave12-r8-factorial/tooling/app",
+    "products": 5,
+    "workers": {
+      "crypto": "ea645aefd0a14148aeaa7e95a672b446745f4a2436ae5c018549efd1fd94273b",
+      "transmux": "aadbab5d9bf4357ff7a7cdf92d81b53d62d25d4fa61e2480b85bd1d456de9dc6"
+    }
+  },
+  "corpus": {
+    "status": "PASS",
+    "manifestSha256": "d7fd432cefac1fa57a03d67dbda980799e6905e04a9ca0e2ed9b3b9d45bdae0b",
+    "sourceCampaign": "AP-06-R12-R7-factorial",
+    "r6OriginalMp4sAvailable": false,
+    "equivalenceToOriginalR6Mp4sClaimed": false,
+    "resolution": "640x360",
+    "bitrateKbps": 2400,
+    "chunkCount": 3
+  },
+  "tests": {
+    "r8Targeted": {
+      "passed": 18,
+      "failed": 0
+    },
+    "ap06Python": {
+      "passed": 199,
+      "failed": 0
+    },
+    "ap06Node": {
+      "passed": 132,
+      "failed": 0
+    },
+    "globalPython": {
+      "tests": 536,
+      "failures": 4,
+      "errors": 0,
+      "status": "DOCUMENTED_EXCEPTION",
+      "failureDocuments": [
+        "docs/arquitetura/visao-geral.md",
+        "docs/arquitetura/frontend.md",
+        "docs/arquitetura/backend.md",
+        "docs/arquitetura/deployment.md"
+      ]
+    },
+    "nativeProduction": {
+      "status": "PASS",
+      "cases": 320,
+      "assertions": 14330,
+      "reusedR7Binaries": true
+    },
+    "nativeExperimental": {
+      "status": "PASS",
+      "cases": 17,
+      "assertions": 26021,
+      "reusedR7Binaries": true
+    }
+  },
+  "dependencies": {
+    "total": 30,
+    "moderate": 7,
+    "high": 20,
+    "critical": 3,
+    "runtimeApplicable": {
+      "package": "@angular/router",
+      "severity": "high",
+      "count": 1
+    },
+    "upgradesPerformed": false
+  },
+  "secretScan": {
+    "scanner": "gitleaks",
+    "version": "v8.30.1",
+    "initialImplementation": {
+      "findings": 0,
+      "stagedFiles": 10
+    },
+    "postStopCorrection": {
+      "findings": 0,
+      "stagedFiles": 2
+    }
+  },
+  "ci": {
+    "preflightHead": {
+      "headSha": "67b577ecf7ecd50db8b0aa3eba2c211db6380ac4",
+      "backendRun": 39057428836,
+      "backendConclusion": "success",
+      "qualityBaselineRun": 39057429210,
+      "qualityBaselineConclusion": "success"
+    },
+    "postStopCorrectionHead": {
+      "headSha": "752ecbb9c39f8441fb804e62f2cbc171a86b1824",
+      "backendRun": 39059600579,
+      "backendConclusion": "success",
+      "qualityBaselineRun": 39059600275,
+      "qualityBaselineConclusion": "success"
+    }
+  },
+  "factorial": {
+    "status": "NOT_RUN",
+    "triageBrowsers": 0,
+    "formalBrowsers": 0,
+    "nativeCapabilityBrowsers": 0,
+    "nativeProfilingBrowsers": 0,
+    "reason": "Preflight STOP occurred before reservation."
+  },
+  "cleanup": {
+    "status": "PASS",
+    "ownedBackendStopped": true,
+    "ownedPostgresStopped": true,
+    "backendPortClosed": true,
+    "personalServicesTouched": false
+  },
+  "draftPr": {
+    "title": "investigation(ap06): R12-R8 offline preflight readiness and factorial recovery",
+    "base": "investigation/ap06-r12-r7",
+    "status": "DRAFT",
+    "merge": false,
+    "number": 35,
+    "url": "https://github.com/LViniciusk/SaveBox2/pull/35"
+  },
+  "productionApplicationChanged": false
+}

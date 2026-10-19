@@ -1,5 +1,19 @@
 # Arquitetura do Backend
 
+## Status documental
+
+Esta página descreve as responsabilidades do backend presentes no repositório. Os contratos executáveis de autorização, persistência e rede permanecem nos respectivos handlers e testes.
+
+## Fontes de autoridade no repositório
+
+- `backend/CMakeLists.txt`: composição dos targets de produção e de teste.
+- `backend/src/main.cpp`: inicialização do servidor.
+- `backend/src/controllers/ApiRouter.cpp`: registro das rotas HTTP.
+
+## Fora do escopo
+
+Credenciais, estado de bancos de dados e resultados dos targets experimentais AP-06 não fazem parte desta descrição arquitetural de produção.
+
 O backend do Nanika é uma aplicação **C++17** baseada em **Crow**. Ele expõe a API HTTP, autentica e autoriza operações, mantém o estado persistente da aplicação e coordena os storages utilizados pelo sistema.
 
 A criptografia dos arquivos do Vault permanece no cliente. O backend trabalha principalmente com identidade, metadados, ciphertext e estado operacional.

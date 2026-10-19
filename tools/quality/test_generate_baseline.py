@@ -481,7 +481,11 @@ class EvidenceTests(unittest.TestCase):
             self.assertFalse(generate_baseline.b50_final_freeze_ready(mutation=mutation, **kwargs))
 
     def test_b50_final_freeze_render_contains_ratification_status(self) -> None:
-        payload = json.loads((Path(__file__).resolve().parents[2] / "docs" / "quality-baseline.json").read_text(encoding="utf-8"))
+        subprocess.run([sys.executable, str(Path(generate_baseline.__file__).resolve()),
+            "--root", str(self.root), "--frontend-tests", "0", "--backend-cases", "0",
+            "--backend-assertions", "0", "--fixture-cases", "0", "--fixture-assertions", "0"],
+            check=True, capture_output=True, text=True)
+        payload = json.loads((self.root / "docs" / "quality-baseline.json").read_text(encoding="utf-8"))
         payload["b50_final_micro_freeze_changes"] = [
             "B.50 FROZEN FINAL / RATIFIED",
             "B.31–B.50 are FROZEN FINAL / RATIFIED",
