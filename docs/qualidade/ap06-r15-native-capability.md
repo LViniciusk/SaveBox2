@@ -1,73 +1,92 @@
-# AP-06 R15 — recuperação da capability de profiling nativo
+﻿# AP-06 R15 — native capability engineering recovery
 
-**Classificação de engenharia:** `ENGINEERING_READY_FOR_CONTROLLED_CAPABILITY` — prontidão documental para revisão humana; não é PASS científico.
+**Classificação:** ENGINEERING_READY_FOR_CONTROLLED_CAPABILITY — engenharia revisada para futura revisão humana; não é aprovação científica nem PASS de profiling.
 
-**Escopo:** correção offline do receipt e diagnóstico da captura. Nenhum A/B, benchmark ou capture nativo de capability foi executado.
+**Branch/PR:** investigation/ap06-r15-native-capability-recovery / [PR #42](https://github.com/LViniciusk/SaveBox2/pull/42), base frontend.
 
-## Diagnóstico
+## Escopo e limites
 
-O pós-mortem R14 já registrado descreve quatro requests explícitos, três dumps correlacionados do renderer, 11.008 registros de allocator stats e zero estruturas `heaps_v2`. Também registra ausência de `rendererIdentityProof` e `creationTimeExact` no receipt histórico. Esses fatos não foram reclassificados.
+Esta rodada corrige identidade/correlação de traces, restringe os diagnósticos de heaps_v2 ao processo renderer esperado, isola estado de testes e registra a triagem de desempenho e dependências.
 
-A nova instalação local resolve para Playwright `1.62.1`, `chromium-headless-shell`, Chromium `151.0.7922.34`, x64, revisão `1234`. A identidade e o launch protocol foram resolvidos sem iniciar o browser. A versão veio do registro instalado; `productVersion` do PE não está disponível. A resolução identifica qual binário seria usado, mas não demonstra que seu serviço de profiling funcione.
+Nenhuma capability R15, campanha, medição XHR/Fetch, comparação A/B ou profiling científico foi executado. Os traces de desempenho abaixo são JSON sintéticos, escritos e lidos incrementalmente; não representam Chrome ou hardware. Os testes Node usam CDP simulado. A suíte Python global inclui o teste existente de identidade R12-R7, que pode iniciar um headless-shell descartável com CDP simulado; ele não coleta trace nem executa workload de profiling.
 
-| Hipótese | Estado | Evidência e limite |
-|---|---|---|
-| A — flags e inicialização | **Parcialmente confirmada; ativação não verificável** | O contrato fixa quatro flags e o auditor Win32 compara os argumentos observados do processo browser. Isso prova os argumentos atestados, não a inicialização do serviço nem o profiling do renderer. O Chromium documenta que `--memlog-in-process` apenas move o serviço para o processo browser; por padrão ele roda em processo dedicado. Nenhuma flag nova foi acrescentada. |
-| B — CDP/MemoryInfra | **Configuração de request confirmada; causa de `heaps_v2` ausente não verificável** | O tracing começa antes do workload com backend `chrome` e categoria MemoryInfra. O CDP `Tracing.requestMemoryDump` solicita um dump global explicitamente; a resposta `success` não comprova que o renderer emitiu `heaps_v2`. `memoryDumpConfig.triggers: []` deixa sem triggers automáticos e não remove as chamadas explícitas. |
-| C — executável | **Compatibilidade funcional não verificável** | O executável e protocolo Playwright estão fixados e identificados, e o pós-mortem registra a mesma versão Chromium na R14. A documentação upstream descreve heap profiling em Windows, mas não atesta especificamente esse `headless-shell`. Não há evidência suficiente para declarar incompatibilidade nem trocar o binário. |
-| D — controle de workload | **Alocação nativa confirmada; controle positivo do profiler não verificável** | O `Uint8Array` de 8 MiB tem backing store nativo: a implementação Chromium de `gin::ArrayBufferAllocator` aloca por PartitionAlloc. Isso não prova que este build inclua o processo no profiler nem que registre a alocação em `heaps_v2`. Nenhum workload alternativo foi executado. |
+## Correções e findings
 
-Fontes upstream: [heap profiling com MemoryInfra](https://chromium.googlesource.com/chromium/src/+/HEAD/docs/memory-infra/heap_profiler.md), [debugging de memória e flags `memlog`](https://chromium.googlesource.com/chromium/src/+/HEAD/docs/memory/debugging_memory_issues.md), [handler CDP de `Tracing.requestMemoryDump`](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/devtools/protocol/tracing_handler.cc), [protocolo CDP](https://chromium.googlesource.com/chromium/src/+/HEAD/third_party/blink/renderer/core/inspector/browser_protocol.pdl) e [alocador de backing store de `ArrayBuffer`](https://chromium.googlesource.com/chromium/chromium/+/refs/heads/trunk/gin/array_buffer.cc).
+| Finding | Correção |
+|---|---|
+| A comparação de GUIDs no Node só ignorava caixa; 0x01 e 1 podiam ser tratados como IDs distintos. | Uma chave canônica remove prefixo 0x, zeros iniciais e diferenças de caixa, igualando o comportamento inteiro do Python. Captura e gate final do receipt rejeitam duplicatas e GUIDs inválidos. |
+| Três requests/dumps podiam ser apresentados como correlação completa. Contagens agregadas não provavam request válido nem vínculo temporal. | COMPLETE exige quatro fases ordenadas, receipts válidos e GUIDs únicos, quatro requests GlobalMemoryDump de sucesso e dumps do renderer dentro da janela de cada request. correlatedRendererDumps agora conta correlações efetivas; rendererDumpGuidMatches preserva a contagem bruta para diagnóstico. PARTIAL, MISSING e UNVERIFIED continuam distintos. |
+| Qualquer heaps_v2 de browser/GPU/utility podia sugerir profiling do renderer. | A evidência agora distingue estrutura v1 válida no renderer esperado, somente em outros processos, sem estruturas válidas e processo indeterminado. PID precisa ser inteiro exato; true não pode corresponder a PID 1. Essa leitura é diagnóstica e não altera a aceitação. |
+| A inspeção mantinha cardinalidade crescente por PID e chaves arbitrárias de dump_type. | PID distinto é limitado a 1.024 com indicador de truncamento; os mapas de contagem por PID foram removidos; tipos desconhecidos entram no bucket other. Só quatro checkpoints são inspecionados. |
+| Os testes R12-R2/R3 dependiam de globais da campanha, alteradas por testes R12-R14. | Cada classe configura seu estado esperado em setUp e restaura OUTPUT, PUBLISHER e CAMPAIGN em tearDown. A reprodução anterior falhava com os mesmos quatro erros na base frontend e no HEAD antigo; a sequência R12-R14 → R2 → R3 passou após o isolamento. Produção não foi alterada por essa correção. |
 
-## Matriz de compatibilidade observada
+O diagnóstico de correlação verifica o marcador de início/fim, o GUID local e o dump_guid, categoria MemoryInfra, dump_type, sucesso, detalhe, PID da janela e timestamp do dump renderer. GUIDs ou receipts inválidos continuam fail-closed. Os caminhos de aceitação científica em aggregate_trace permanecem a autoridade; inspect_trace nunca cria PASS.
 
-| Camada | Estado atual | Conclusão |
-|---|---|---|
-| Playwright e identidade | `1.62.1`, `chromium-headless-shell`, `151.0.7922.34`, x64; executável e arquivos da instalação entram no manifesto por hash | Identidade verificável; capacidade nativa não inferida da versão ou do hash. |
-| Flags | Lista canônica atestada no processo browser; `--memlog=all`, stack nativa, amostragem `16384` e pequenas alocações preservados | Args observados não equivalem a profiler ativo. |
-| MemoryInfra/CDP | Categoria consultada, tracing iniciado antes do workload e requests explícitos detalhados | Solicitar e receber uma resposta CDP não substitui evidência `heaps_v2` por GUID/PID. |
-| Dump nativo | Histórico R14 sem `heaps_v2`; artifacts privados não disponíveis para replay nesta tarefa | Causa raiz entre serviço, build e coleta do renderer segue desconhecida. |
-| Alternativa | Nenhum binário alternativo fixado ou testado | Se necessário, escolher build desktop com suporte documentado e criar nova identidade, versão, hash, protocolo de launch e freeze. Sem fallback silencioso. |
+## Auditorias
 
-## Implementação e contratos
+### 1. Correção e segurança
 
-Arquivos alterados:
+- Conferidos todos os chamadores alterados, os testes Node/Python, o consumidor do diagnóstico e o runner R12-R13.
+- Confirmado que só o parser estrito agrega/aceita dados; requests aceitos não são confundidos com dumps emitidos.
+- Revistos sessão CDP, timeout, bloqueio de retry, EOF, limite de bytes, hash incremental, arquivo temporário e publicação por hard link sem sobrescrita. Falhas de leitura/fechamento removem publicação parcial e encerram a sessão.
+- Revistos identidade do executável, PID/FILETIME, handles retidos, ACL, caminhos relativos, rejeição de reparse point e publicação imutável. Nenhum bypass foi encontrado nem alterado nesta rodada.
+- A auditoria encontrou uma ambiguidade diagnóstica: uma estrutura inválida sem PID podia receber PROCESS_UNDETERMINED. A classificação foi corrigida para usar esse rótulo só quando há estrutura v1 válida de processo desconhecido, com regressão específica.
+- O inventário aceita apenas formato v1 com arrays e números em limites. Ele é evidência de forma/estrutura, não prova de lifetimes, leaks ou retenção de alocação individual.
+- Nenhum freeze, trace, decisão ou STOP histórico foi regravado.
 
-- `frontend/tools/ap06-native-trace.mjs`: registra tentativas de request, impede repetir um checkpoint depois de request sem receipt válido e só marca `complete` se houver exatamente as quatro fases ordenadas, quatro receipts de sucesso, GUIDs válidos e únicos, JSON sem perda e stream com EOF.
-- `frontend/tools/ap06-native-trace.test.mjs`: mocks CDP verificam ordem/payloads, falha de categoria, cleanup da sessão, os quatro checkpoints e falha intermediária sem retry ou receipt completo.
-- `frontend/tools/ap06-native-integration.test.mjs`: cobre trace válido, ausência de `heaps_v2`, terceiro dump ausente e schema `heaps_v2` incompatível pelo caminho Node → stream → parser Python → classificação.
-- `tools/quality/run_ap06_r12_r13_native.py`: reutiliza `inspect_trace()` numa segunda leitura incremental depois da aceitação; publica contagens sanitizadas de categoria, flags atestadas, requests, correlação renderer, prova de identidade e estado de `heaps_v2`. O CLI inclui esse diagnóstico. Trace inválido ou diagnóstico impossível vira `UNVERIFIED`.
+### 2. Desempenho e manutenção
 
-| Contrato | Antes | Depois |
-|---|---|---|
-| `trace.complete` | Tracing iniciado, JSON, sem data loss e EOF | Mantém essas condições e exige quatro checkpoints completos, ordenados, bem-sucedidos, com GUID válido/único e sem retry após request incompleto. |
-| Request CDP vs. dump emitido | Receipt de request e validação científica em etapas distintas | Continua distinto; `requestAttempts` e receipts são comparados ao inventário real dos dumps renderer. |
-| Diagnóstico | `inspect_trace()` era usado em replay/preparação, não no resultado de `validate_trace()` | Contagens sanitizadas adicionadas ao resultado; leitura é incremental e não altera a decisão de aceitação. |
-| Aceitação | Gates de `GlobalMemoryDump`, PID, GUID, FILETIME, quatro fases e `heaps_v2` | Inalterados. `inspect_trace()` não pode produzir PASS; somente `aggregate_trace()` pode classificar `NATIVE_CAPABILITY_PASS`. |
-| Memória e publicação | Streaming limitado, SHA-256, arquivo temporário e publicação atômica | Preservados; nenhum trace inteiro é carregado em memória. |
+A leitura incremental extra de inspect_trace foi mantida: ela mantém a aceitação isolada e o custo observado foi limitado. O teste escreveu uma fixture sintética por linha, sem guardar o trace completo na memória. Python 3.12.0, cinco execuções por caso, mediana de tempo e maior pico Python medido por tracemalloc:
 
-Não houve refatoração ampla: os helpers existentes cobriam as demais validações, e nenhuma remoção adicional tinha evidência de estar sem consumidores.
+| Trace sintético | aggregate_trace | inspect_trace (custo da leitura diagnóstica) |
+|---:|---:|---:|
+| 101.740 bytes | 4,31 ms; 269,3 KiB | 3,16 ms; 269,5 KiB |
+| 2.096.460 bytes | 57,50 ms; 271,2 KiB | 93,74 ms; 272,0 KiB |
+| 8.388.459 bytes | 256,67 ms; 271,0 KiB | 191,09 ms; 271,8 KiB |
 
-## Validação
+O pico permaneceu próximo de 272 KiB nos três tamanhos, além dos buffers e do estado agregado já existentes. A segunda leitura aumenta tempo de I/O/parsing linearmente, mas não a memória proporcional ao trace. Não foi feita otimização especulativa nem benchmark científico.
+
+## Testes e recuperação
 
 | Verificação | Resultado |
 |---|---|
-| RED antes da correção | O teste de falha no segundo checkpoint observou `complete: true`; o teste Node → Python não recebeu `diagnostic`. |
-| Node AP-06 identidade/trace/integração | 24 testes passaram; produtor e parser exercitados com fixtures válidas e inválidas. |
-| Node global compatível | 300 testes: 299 passaram, 1 skip; excluídos dois arquivos de suíte que podem iniciar shell. |
-| Python AP-06 parser/identidade/R13/R14/freeze | 84 testes passaram. |
-| Python global | 626 testes: 4 erros de ordem nos módulos antigos R12-R2/R3 e 4 skips. Os mesmos quatro testes passaram quando executados isoladamente; os arquivos afetados não fazem parte deste diff. |
-| TypeScript / Angular | `tsc --noEmit` passou; build passou com avisos de budget já existentes. |
-| Documentação / sintaxe / diff | 7 checks documentais passaram; `py_compile` e `git diff --check` passaram. |
-| Gitleaks | Zero achados nos cinco arquivos alterados. |
-| C++ local | Não executado: o diff só altera JavaScript/Python e não muda backend C++; Backend CI cobre essa verificação. |
+| RED → GREEN dos findings | Antes da correção, a regressão de alias numérico não rejeitava duplicata; diagnóstico aceitava 3 correlações como completas e usava qualquer processo para heaps_v2. Após as correções, os testes correspondentes passaram. |
+| Node trace + integração sintética Node → parser Python | 10 passaram, 0 falharam. Inclui alias/GUID inválido, falha no segundo/terceiro/quarto request, timeout sem sleep, retry proibido, stream inválida, cleanup e classificações com 4/3/0 correlações. |
+| Parser/diagnósticos AP-06 (test_ap06_native) | 17 passaram. |
+| Regressão de ordem R12-R14 → R2 → R3 | 50 passaram, incluindo os 41 testes R12-R14 e os testes R2/R3 afetados. |
+| Suíte Python global | 629 testes executados, 4 skips, resultado OK. Discovery foi executado da raiz do worktree. |
+| Invocação de discovery recuperada | A primeira chamada foi iniciada dentro de tools/quality e falhou ao importar tools; a execução da suíte passou ao iniciar da raiz SaveBox2-ap06-r15-native-capability. |
+| Sintaxe e diff | py_compile e git diff --check passaram. |
+| TSC, build, Gitleaks e workflows | A validar no SHA publicado; nenhum resultado será marcado como PASS antes do término dos jobs. |
 
-O teste de identidade R12-R7 mencionado abaixo foi executado separadamente e abriu um processo `headless-shell` com CDP simulado. Não houve coleta de trace. As suítes Angular/browser não foram iniciadas localmente; Frontend CI é executado no HEAD final. `npm ci` reportou 30 advisories de dependências (7 moderados, 20 altos, 3 críticos); nenhuma dependência ou lockfile foi alterado ou triado nesta tarefa.
+## Segurança de dependências
 
-## Integridade histórica e limites
+Leitura somente de npm audit e árvore instalada em 2026-10-18: 30 findings/grupos (7 moderados, 20 altos, 3 críticos); npm audit --omit=dev encontrou um finding alto e nenhum crítico/moderado. Não houve edição de package.json ou lockfile.
 
-Os arquivos privados correspondentes ao freeze R14 (`0297ac698a7583b2d6f6d031e7438ee24af97948`), trace (`aefcdf7073eb9137b3c53959af4c93668a03ac19c3903d2901a9bbbde8f66086`), decisão (`d078c297e752f6e39757dc3bb9c59cd7eb0d9d35acbade3fbf3e3b38c069aa81`) e STOP R13 (`97081f17bc48ba55914f61d4a8ce98b7040a58dad1421caae11f0b524ffd04d5`) não estavam disponíveis no workspace. Seus hashes não foram recriados nem os arquivos históricos modificados. O relatório pós-mortem versionado permanece intacto.
+| Pacote instalado | Superfície e triagem |
+|---|---|
+| @angular/router@20.3.31 (runtime, direto) | GHSA-ff3f-86qr-9cv3, DoS quando SSR Node está habilitado; corrigido em 20.3.32. Este frontend não tem @angular/ssr e é SPA client-side; o advisory informa que SPAs sem SSR não são afetadas. Ainda é recomendável atualizar a família Angular em patch coordenado. |
+| piscina@5.2.0 via @angular/build@20.3.32 (dev) | GHSA-67c8-pqhq-4rmx, RCE via gadget se Object.prototype já estiver poluído; correção 5.3.2. Não está no grafo de runtime. |
+| proxy-addr@2.0.7 via Express → MCP SDK → @angular/cli@20.3.32 (dev) | GHSA-jqcg-44mw-7w3h permite spoofing de IP se trust subnet IPv4-mapped IPv6 for configurada com prefixo curto; correção 2.0.8. A cadeia está em tooling de desenvolvimento, não no frontend publicado. |
+| undici@6.27.0, fast-uri@3.1.3, ip-address@10.2.0, postcss@8.5.16, tar@7.5.19 | Achados transitivos de ferramentas CLI/build. Ex.: GHSA-8xcm-r25x-g524 afeta o retry interceptor do undici ao combinar upstream parcial malformado com encaminhamento sem recalcular Content-Length; GHSA-v2hh-gcrm-f6hx afeta comparação de host no fast-uri. Uso alcançável depende da API e do input de cada ferramenta; os pacotes não são runtime direto do frontend. |
+| Outras entradas de tooling (@angular/cli, @modelcontextprotocol/sdk, brace-expansion, postcss e transitivos listados pelo audit) | Permanecem registradas pelo audit e requerem atualização validada. A presença como devDependency reduz exposição em produção, mas não elimina risco durante instalação/build/servidor de desenvolvimento. |
 
-Uma execução de suíte incluiu um teste existente de identidade R12-R7 que abriu um `chromium-headless-shell` descartável com CDP simulado. Esse teste não coletou trace, não executou workload de profiling e não realizou medição AP-06. Nenhuma capability R15 ou A/B foi executada.
+Recomendação: PR separado com atualização focada de dependências transitivas e Angular, lockfile revisado, npm audit repetido e build/testes completos. Não se declara segurança global com base nesta triagem, Gitleaks ou CI.
 
-Uma futura capability exige autorização e freeze próprios, orçamento sem retries, identidade e hash do executável escolhido, atestação de flags/processos, cleanup PASS, trace íntegro e quatro dumps do renderer ligados a GUIDs e janelas `GlobalMemoryDump`, cada um com `heaps_v2` v1 estruturalmente válido e dados utilizáveis. Somente depois desse PASS científico pode ser considerada uma decisão separada sobre A/B. Os workflows CI e seus resultados para o HEAD final serão referenciados na descrição do PR.
+Fontes dos advisories: [Angular router SSR DoS](https://github.com/advisories/GHSA-ff3f-86qr-9cv3), [Piscina prototype-pollution gadget](https://github.com/advisories/GHSA-67c8-pqhq-4rmx), [proxy-addr trust-subnet spoofing](https://github.com/advisories/GHSA-jqcg-44mw-7w3h), [undici retry interceptor](https://github.com/advisories/GHSA-8xcm-r25x-g524), [fast-uri host confusion](https://github.com/advisories/GHSA-v2hh-gcrm-f6hx).
+
+## Integridade histórica, ciência e pendências
+
+Freeze R14 0297ac698a7583b2d6f6d031e7438ee24af97948, trace SHA-256 aefcdf7073eb9137b3c53959af4c93668a03ac19c3903d2901a9bbbde8f66086, decisão SHA-256 d078c297e752f6e39757dc3bb9c59cd7eb0d9d35acbade3fbf3e3b38c069aa81 e STOP R13 SHA-256 97081f17bc48ba55914f61d4a8ce98b7040a58dad1421caae11f0b524ffd04d5 permanecem imutáveis. AP06_AUTHORITY_ROOT não está configurado e os arquivos privados não estavam disponíveis neste workspace; não foram recriados nem publicados. Nenhum resultado de STOP histórico foi reclassificado.
+
+**Zero novas execuções científicas.** Permanece pendente a validação real da capability, que exige autorização e seus próprios freeze, identidade, budget, cleanup e evidência de quatro dumps do renderer com heaps_v2 válido. Também permanece pendente a atualização direcionada das dependências.
+
+## CI no HEAD de entrega
+
+| Workflow | Resultado | Run | SHA |
+|---|---|---|---|
+| Backend CI | Pendente | — | — |
+| Frontend CI | Pendente | — | — |
+| Quality Baseline | Pendente | — | — |
+
+Nenhum merge foi executado; o PR permanece direcionado a frontend.
