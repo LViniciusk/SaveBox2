@@ -202,19 +202,19 @@ O parser de streaming `ap06_native.py` não foi modificado nesta rodada, preserv
 
 ---
 
-## 9. Evidências de Validação Contratual e CI no HEAD Final (`17860c98`)
+## 9. Evidências de Validação Contratual e CI no HEAD Final (`ac5a0cfc`)
 
 | Workflow | Job | Status | Duração | URL |
 |---|---|---|---|---|
-| **Backend CI** | Linux GCC | **PASS** | 4m56s | [Job 118198085118](https://github.com/LViniciusk/SaveBox2/actions/runs/39292967840/job/118198085118) |
-| **Backend CI** | Linux Coverage | **PASS** | 7m28s | [Job 118198085689](https://github.com/LViniciusk/SaveBox2/actions/runs/39292967840/job/118198085689) |
-| **Backend CI** | Windows MSVC | **PASS** | 6m29s | [Job 118198085801](https://github.com/LViniciusk/SaveBox2/actions/runs/39292967840/job/118198085801) |
-| **Quality Baseline** | quality-report | **PASS** | 2m00s | [Job 118201022090](https://github.com/LViniciusk/SaveBox2/actions/runs/39292967894/job/118201022090) |
-| **Quality Baseline** | e2e | **PASS** | 3m01s | [Job 118201018870](https://github.com/LViniciusk/SaveBox2/actions/runs/39292967894/job/118201018870) |
+| **Backend CI** | Linux GCC | **PASS** | 4m43s | [Job 118227597067](https://github.com/LViniciusk/SaveBox2/actions/runs/39301505453/job/118227597067) |
+| **Backend CI** | Linux Coverage | **PASS** | 7m25s | [Job 118227597355](https://github.com/LViniciusk/SaveBox2/actions/runs/39301505453/job/118227597355) |
+| **Backend CI** | Windows MSVC | **PASS** | 5m10s | [Job 118227597331](https://github.com/LViniciusk/SaveBox2/actions/runs/39301505453/job/118227597331) |
+| **Quality Baseline** | quality-report | **PASS** | 1m56s | [Job 118227597142](https://github.com/LViniciusk/SaveBox2/actions/runs/39301505421/job/118227597142) |
+| **Quality Baseline** | e2e | **PASS** | 2m58s | [Job 118227596605](https://github.com/LViniciusk/SaveBox2/actions/runs/39301505421/job/118227596605) |
 
-- **Suíte Python Completa (112 testes):** `Ran 112 tests in 86.341s — OK`
-- **Produtor Node (`NativeTrace`):** `10/10 PASS (4.3s)`
-- **TypeScript:** `tsc --noEmit -p frontend/tsconfig.app.json` — 0 erros.
+- **Suíte Python Completa (112 testes):** `Ran 112 tests in 119.931s — OK`
+- **Produtor Node (`NativeTrace`):** `10/10 PASS (8.9s)`
+- **TypeScript:** `node frontend/node_modules/typescript/bin/tsc --noEmit -p frontend/tsconfig.app.json` — 0 erros.
 - **Segurança e Segredos:** `gitleaks protect --staged` — 0 leaks detectados.
 - **Formatação Git:** `git diff --check` — 0 erros.
 
