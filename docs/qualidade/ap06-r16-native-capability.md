@@ -218,3 +218,15 @@ Quando houver emissão formal de aprovação pelo Diretor Científico, o operado
 4. **Verificar a Publicação e Encerramento:**
    O runner validará os 4 checkpoints, auditará o renderer, encerrará o browser, executará o cleanup do backend e publicará `final/decision.json` (`R12R16_NATIVE_CAPABILITY_PASS` ou `R12R16_NATIVE_CAPABILITY_INCONCLUSIVE`).
    Em nenhuma circunstância haverá disparos adicionais de Chromium ou tentativas de A/B.
+
+---
+
+## 12. CI no HEAD de Entrega
+
+| Workflow | Resultado | Run | SHA |
+|---|---|---|---|
+| **Quality Baseline** (quality-report, e2e) | **Sucesso** (2m18s) | [39231317047](https://github.com/LViniciusk/SaveBox2/actions/runs/39231317047) | `e6cefd70b2d2c61e00a07cde308bec26717e478c` |
+| **Frontend CI** (Linux, Windows) | **Sucesso** (2m05s) | [39231477233](https://github.com/LViniciusk/SaveBox2/actions/runs/39231477233) | `e6cefd70b2d2c61e00a07cde308bec26717e478c` |
+| **Backend CI** (Linux GCC, Linux Coverage, Windows MSVC) | **Sucesso** (7m10s) | [39231317073](https://github.com/LViniciusk/SaveBox2/actions/runs/39231317073) | `e6cefd70b2d2c61e00a07cde308bec26717e478c` |
+
+**Pull Request:** [PR #43](https://github.com/LViniciusk/SaveBox2/pull/43) direcionado à base `frontend`. Nenhum merge automático foi executado.
