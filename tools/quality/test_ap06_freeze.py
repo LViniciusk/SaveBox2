@@ -244,7 +244,7 @@ class FreezePipelineTests(unittest.TestCase):
         from ap06_freeze import strict_freeze_namespace, validate_test_receipt
         self.assertTrue(strict_freeze_namespace('.quality/readiness-wave12-r16-native'))
         self.assertTrue(strict_freeze_namespace(self.root / '.quality/readiness-wave12-r16-native'))
-        # R16 does not require 'global' test key in validate_test_receipt, matching R13/R14 native protocol
+        # R16 strictly requires 'global' test key with status 'PASS' in validate_test_receipt
         tests_without_global = {
             'status': 'PASS',
             'python': {'status': 'PASS'},
@@ -253,11 +253,15 @@ class FreezePipelineTests(unittest.TestCase):
             'angularBuild': {'status': 'PASS'},
             'native': {'status': 'PASS'},
         }
-        # Does not raise ValueError
-        validate_test_receipt('.quality/readiness-wave12-r16-native', tests_without_global)
+        # In R16, missing global raises ValueError
+        with self.assertRaisesRegex(ValueError, 'AP06_FREEZE_TEST_AUTHORITY_INVALID'):
+            validate_test_receipt('.quality/readiness-wave12-r16-native', tests_without_global)
+        # Passing global gate succeeds
+        tests_with_global = {**tests_without_global, 'global': {'status': 'PASS'}}
+        validate_test_receipt('.quality/readiness-wave12-r16-native', tests_with_global)
         # But failing sub-test does raise
         with self.assertRaisesRegex(ValueError, 'AP06_FREEZE_TEST_AUTHORITY_INVALID'):
-            validate_test_receipt('.quality/readiness-wave12-r16-native', {**tests_without_global, 'python': {'status': 'FAIL'}})
+            validate_test_receipt('.quality/readiness-wave12-r16-native', {**tests_with_global, 'python': {'status': 'FAIL'}})
 
 
 if __name__ == '__main__': unittest.main()

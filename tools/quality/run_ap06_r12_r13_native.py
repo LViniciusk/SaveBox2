@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from contextlib import contextmanager
 from ap06_authorities import checked_path, private_permissions, sha256, verify_publication
 from ap06_native import PHASES, aggregate_trace, guid, inspect_trace, trace_events, _proof_matches
 from prepare_ap06_r12_r13 import NATIVE_BUDGET, OUTPUT, CAMPAIGN, prepare, verify_historical_factorial
@@ -286,7 +288,7 @@ def validate_scientific_authorization(wave, authorization_path=None, trust_ancho
 
     if proc.returncode != 0 or verifier_res.get('status') != 'VALID':
         reason = verifier_res.get('reason')
-        if reason in ('R16_AUTHORIZATION_TRUST_ANCHOR_MISSING', 'R16_AUTHORIZATION_SIGNATURE_INVALID'):
+        if reason and reason.startswith('R16_AUTHORIZATION_'):
             raise NativeContractFailure(reason)
         raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
 
@@ -426,21 +428,80 @@ def publish_capability_pass_decision(wave, capability):
     return decision
 
 
+@contextmanager
+def execution_lock(wave):
+    lock_file = wave.output / 'pipeline/.execution.lock'
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    my_pid = os.getpid()
+    acquired = False
+    try:
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        fd = os.open(str(lock_file), flags)
+        try:
+            with open(fd, 'w', encoding='utf-8') as f:
+                f.write(json.dumps({'pid': my_pid, 'timestamp': time.time()}))
+            acquired = True
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+    except FileExistsError:
+        is_alive = False
+        try:
+            content = json.loads(lock_file.read_text(encoding='utf-8'))
+            lock_pid = content.get('pid')
+            if lock_pid and isinstance(lock_pid, int):
+                if sys.platform == 'win32':
+                    import ctypes
+                    h = ctypes.windll.kernel32.OpenProcess(0x1000, False, lock_pid)
+                    if h:
+                        ctypes.windll.kernel32.CloseHandle(h)
+                        is_alive = True
+                else:
+                    os.kill(lock_pid, 0)
+                    is_alive = True
+        except Exception:
+            is_alive = False
+        if is_alive:
+            raise NativeContractFailure('R16_CONCURRENT_INVOCATION_REJECTED')
+        try:
+            lock_file.unlink()
+        except OSError:
+            pass
+        fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with open(fd, 'w', encoding='utf-8') as f:
+            f.write(json.dumps({'pid': my_pid, 'timestamp': time.time()}))
+        acquired = True
+
+    try:
+        yield
+    finally:
+        if acquired:
+            try:
+                if lock_file.exists():
+                    lock_file.unlink()
+            except OSError:
+                pass
+
+
 def run_capability(wave, source, authorization_path=None, trust_anchor_path=None):
     tag = campaign_tag()
-    if tag == 'R16':
-        validate_scientific_authorization(wave, authorization_path=authorization_path, trust_anchor_path=trust_anchor_path)
-    capability, frozen, native = capture_capability_once(wave, source)
-    status = capability.get('status')
-    if status == 'NATIVE_CAPABILITY_PASS':
+    with execution_lock(wave):
         if tag == 'R16':
-            return publish_capability_pass_decision(wave, capability)
-        return run_profiled_pair(wave, source, frozen, native)
-    if status == 'NATIVE_INCONCLUSIVE':
-        return publish_inconclusive_decision(wave, capability)
-    if status == 'NATIVE_STOP':
-        raise NativeContractFailure(capability.get('reason', 'NATIVE_TRACE_CONTRACT_INVALID'))
-    raise ValueError('NATIVE_CAPABILITY_STATUS_INVALID')
+            validate_scientific_authorization(wave, authorization_path=authorization_path, trust_anchor_path=trust_anchor_path)
+        capability, frozen, native = capture_capability_once(wave, source)
+        status = capability.get('status')
+        if status == 'NATIVE_CAPABILITY_PASS':
+            if tag == 'R16':
+                return publish_capability_pass_decision(wave, capability)
+            return run_profiled_pair(wave, source, frozen, native)
+        if status == 'NATIVE_INCONCLUSIVE':
+            return publish_inconclusive_decision(wave, capability)
+        if status == 'NATIVE_STOP':
+            raise NativeContractFailure(capability.get('reason', 'NATIVE_TRACE_CONTRACT_INVALID'))
+        raise ValueError('NATIVE_CAPABILITY_STATUS_INVALID')
 
 
 def classify_native_aggregate(aggregate):
@@ -1513,24 +1574,38 @@ def main(wave_root=None):
             return 0
         return 1
     except (WaveFailure, OSError, ValueError, KeyError, TypeError) as error:
-        is_prelaunch = False
         if tag_str == 'R16':
-            reservation_file = wave.output / 'pipeline/capability-reservation.json'
-            if not reservation_file.exists() or not (args.run_capability or args.run) or reservation_already_existed:
-                is_prelaunch = True
+            if reservation_already_existed:
+                state = execution_state(wave.output)
+                reason = str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+', str(error)) else 'R16_EXISTING_SCIENTIFIC_STATE'
+                report = {
+                    'status': 'ERROR',
+                    'reason': reason,
+                    'stage': 'prelaunch',
+                    'classification': 'R16_EXISTING_SCIENTIFIC_STATE',
+                    'reservationCreated': True,
+                    'newLaunchAuthorized': False,
+                    'newLaunchPerformed': False,
+                    'scientificChromium': state['browserLaunches'] if not state['unverifiedConsumption'] else 'UNVERIFIED',
+                }
+                print(json.dumps(report))
+                return 1
 
-        if is_prelaunch:
-            reason = str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+', str(error)) else 'R16_ENGINEERING_PRELAUNCH_BLOCKED'
-            report = {
-                'status': 'ERROR',
-                'reason': reason,
-                'stage': 'prelaunch',
-                'classification': 'R16_ENGINEERING_PRELAUNCH_BLOCKED',
-                'reservationCreated': False,
-                'scientificChromium': 0,
-            }
-            print(json.dumps(report))
-            return 1
+            reservation_file = wave.output / 'pipeline/capability-reservation.json'
+            if not reservation_file.exists() or not (args.run_capability or args.run):
+                reason = str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+', str(error)) else 'R16_ENGINEERING_PRELAUNCH_BLOCKED'
+                report = {
+                    'status': 'ERROR',
+                    'reason': reason,
+                    'stage': 'prelaunch',
+                    'classification': 'R16_ENGINEERING_PRELAUNCH_BLOCKED',
+                    'reservationCreated': False,
+                    'newLaunchAuthorized': False,
+                    'newLaunchPerformed': False,
+                    'scientificChromium': 0,
+                }
+                print(json.dumps(report))
+                return 1
 
         reason = str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+', str(error)) else f'R12{tag_str}_NATIVE_EXECUTION_FAILED'
         stop_record = record_durable_stop(wave, reason, error=error)

@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -239,14 +240,23 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
         valid_doc = json.loads(auth_file.read_text())
         valid_payload = valid_doc['payload']
 
-        # 2.1 Tampered signature (fails crypto verification)
+        # 2.1 Tampered signature bytes (fails crypto verification with exact 64 bytes)
         tampered_sig = copy.deepcopy(valid_doc)
-        tampered_sig['signature'] = 'A' * len(tampered_sig['signature'])
+        import base64
+        tampered_sig['signature'] = base64.b64encode(b'X' * 64).decode('ascii')
         auth_file.write_text(json.dumps(tampered_sig), encoding='utf-8')
         with self.assertRaises(runner.NativeContractFailure) as cm:
             r16.run_capability(self.wave, self.base / 'source')
         self.assertIn('R16_AUTHORIZATION_SIGNATURE_INVALID', cm.exception.reason)
         self.assertFalse((self.output / 'pipeline/capability-reservation.json').exists())
+
+        # 2.1b Non-canonical or invalid length Base64 signature
+        invalid_encoding = copy.deepcopy(valid_doc)
+        invalid_encoding['signature'] = 'invalid_base64_not_64_bytes'
+        auth_file.write_text(json.dumps(invalid_encoding), encoding='utf-8')
+        with self.assertRaises(runner.NativeContractFailure) as cm:
+            r16.run_capability(self.wave, self.base / 'source')
+        self.assertIn('R16_AUTHORIZATION_SIGNATURE_ENCODING_INVALID', cm.exception.reason)
 
         # 2.2 Missing trust anchor file
         anchor_file.unlink()
@@ -268,7 +278,7 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
         auth_file.write_text(json.dumps(alt_signed), encoding='utf-8')
         with self.assertRaises(runner.NativeContractFailure) as cm:
             r16.run_capability(self.wave, self.base / 'source')
-        self.assertIn('SCIENTIFIC_AUTHORIZATION_INVALID', cm.exception.reason)
+        self.assertIn('R16_AUTHORIZATION_KEY_NOT_FOUND', cm.exception.reason)
 
         # 2.4 Duplicate JSON keys (rejected by strict parser)
         dup_json = '{"schema": 1, "schema": 1, "keyId": "test-scientific-director", "signature": "' + valid_doc['signature'] + '", "payload": ' + json.dumps(valid_payload) + '}'
@@ -699,8 +709,10 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
             'angularBuild': {'status': 'PASS'},
             'native': {'status': 'PASS'},
         }
-        # Valid base tests
-        validate_test_receipt(r16_out, valid_tests)
+        # In R16, missing global gate MUST BE REJECTED
+        with self.assertRaises(ValueError) as cm:
+            validate_test_receipt(r16_out, valid_tests)
+        self.assertIn('AP06_FREEZE_TEST_AUTHORITY_INVALID', str(cm.exception))
 
         # If global is present with PASS -> accepted
         tests_with_global_pass = copy.deepcopy(valid_tests)
@@ -764,6 +776,144 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
             self.assertEqual(entry['sha256'], sha256(self.output / 'final/decision.json'))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # Caso 22: Múltiplos cenários de integração real Node (Mock CDP -> NativeTrace -> Trace stream -> Python)
+    def test_case_22_real_node_producer_integration_scenarios(self):
+        temp_dir = Path(tempfile.mkdtemp(prefix='ap06-node-prod-'))
+        try:
+            producer_script = Path(__file__).resolve().parent / 'produce_synthetic_native_trace.mjs'
+            node_exe = getattr(self.wave, 'node', 'node')
+
+            # 22.1 Scenario: valid (4 dumps with heaps_v2) -> PASS
+            t1 = temp_dir / 'valid.trace.json'
+            r1 = temp_dir / 'valid.receipt.json'
+            res = subprocess.run([str(node_exe), str(producer_script), str(t1), str(r1), 'valid'],
+                                 capture_output=True, text=True, check=True)
+            self.assertIn('"status":"PRODUCED"', res.stdout)
+            cap1 = runner.validate_trace(t1, r1, synthetic=True)
+            self.assertEqual(cap1['status'], 'NATIVE_CAPABILITY_PASS')
+            self.assertTrue(cap1['heapProfilingEffective'])
+
+            # 22.2 Scenario: missing-dump-4 -> INCONCLUSIVE
+            t2 = temp_dir / 'missing4.trace.json'
+            r2 = temp_dir / 'missing4.receipt.json'
+            subprocess.run([str(node_exe), str(producer_script), str(t2), str(r2), 'missing-dump-4'],
+                           capture_output=True, text=True, check=True)
+            cap2 = runner.validate_trace(t2, r2, synthetic=True)
+            self.assertEqual(cap2['status'], 'NATIVE_INCONCLUSIVE')
+            self.assertEqual(cap2.get('reason'), 'NATIVE_HEAPS_V2_INCOMPLETE')
+
+            # 22.3 Scenario: other-process-heaps -> INCONCLUSIVE (does not prove renderer)
+            t3 = temp_dir / 'otherproc.trace.json'
+            r3 = temp_dir / 'otherproc.receipt.json'
+            subprocess.run([str(node_exe), str(producer_script), str(t3), str(r3), 'other-process-heaps'],
+                           capture_output=True, text=True, check=True)
+            cap3 = runner.validate_trace(t3, r3, synthetic=True)
+            self.assertEqual(cap3['status'], 'NATIVE_INCONCLUSIVE')
+
+            # 22.4 Scenario: divergent-filetime -> STOP
+            t4 = temp_dir / 'divergent.trace.json'
+            r4 = temp_dir / 'divergent.receipt.json'
+            subprocess.run([str(node_exe), str(producer_script), str(t4), str(r4), 'divergent-filetime'],
+                           capture_output=True, text=True, check=True)
+            cap4 = runner.validate_trace(t4, r4, synthetic=True)
+            self.assertEqual(cap4['status'], 'NATIVE_INCONCLUSIVE')
+            self.assertEqual(cap4.get('reason'), 'NATIVE_RENDERER_METADATA_MISSING')
+
+            # 22.5 Scenario: stream-interrupted -> producer fails and cleans up partial trace
+            t5 = temp_dir / 'interrupted.trace.json'
+            r5 = temp_dir / 'interrupted.receipt.json'
+            res5 = subprocess.run([str(node_exe), str(producer_script), str(t5), str(r5), 'stream-interrupted'],
+                                  capture_output=True, text=True)
+            self.assertNotEqual(res5.returncode, 0)
+            self.assertFalse(t5.exists())
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # Caso 23: Proteção contra invocações concorrentes (execution_lock)
+    def test_case_23_concurrent_invocation_protection(self):
+        create_valid_authorization(self.output, self.base)
+        lock_file = self.output / 'pipeline/.execution.lock'
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        # Create simulated active lock holding our own PID
+        lock_file.write_text(json.dumps({'pid': os.getpid(), 'timestamp': time.time()}))
+
+        try:
+            with self.assertRaises(runner.NativeContractFailure) as cm:
+                r16.run_capability(self.wave, self.base / 'source')
+            self.assertEqual(cm.exception.reason, 'R16_CONCURRENT_INVOCATION_REJECTED')
+        finally:
+            if lock_file.exists():
+                lock_file.unlink()
+
+    # Caso 24: Estado científico existente distinguido de erro de pré-lançamento
+    def test_case_24_existing_scientific_state_distinguished_from_prelaunch(self):
+        create_valid_authorization(self.output, self.base)
+        # Pre-create a durable reservation from a previous attempt
+        (self.output / 'pipeline/capability-reservation.json').write_text(json.dumps({
+            'campaign': CAMPAIGN, 'maximum': 1, 'retries': 0, 'implementationHead': 'a' * 40
+        }))
+        # Also create a simulated receipt with 1 launch attempt
+        (self.output / 'pipeline/native-receipt.json').write_text(json.dumps({
+            'launchAttempts': 1, 'browserLaunches': 1, 'unverifiedConsumption': True
+        }))
+
+        with patch.object(runner, 'OUTPUT', str(self.output.relative_to(self.base))), \
+             patch.object(runner, 'CAMPAIGN', CAMPAIGN), \
+             patch('sys.argv', ['run_ap06_r12_r16_native.py', '--run-capability', '--source-output', str(self.base / 'source')]), \
+             patch('builtins.print') as mock_print:
+            ret = runner.main(wave_root=self.base)
+            self.assertEqual(ret, 1)
+
+        # Confirm output reports existing scientific state without presuming zero consumption
+        printed_reports = [json.loads(call.args[0]) for call in mock_print.call_args_list if call.args]
+        self.assertTrue(len(printed_reports) >= 1)
+        rep = printed_reports[-1]
+        self.assertEqual(rep['classification'], 'R16_EXISTING_SCIENTIFIC_STATE')
+        self.assertTrue(rep['reservationCreated'])
+        self.assertFalse(rep['newLaunchAuthorized'])
+        self.assertFalse(rep['newLaunchPerformed'])
+        self.assertEqual(rep['scientificChromium'], 'UNVERIFIED')
+
+    # Caso 25: Casos extremos do parser JSON estrito e SPKI DER Fingerprint
+    def test_case_25_strict_json_parser_and_spki_fingerprint_edge_cases(self):
+        verifier_script = Path(__file__).resolve().parent / 'verify_scientific_authorization.mjs'
+        node_exe = getattr(self.wave, 'node', 'node')
+
+        # 25.1 Leading zeros in budget -> REJECTED
+        bad_json = '{"schema": 1, "keyId": "k", "signature": "A", "payload": {"budget": {"capability": 01}}}'
+        temp_file = self.output / 'bad_num.json'
+        temp_file.write_text(bad_json, encoding='utf-8')
+        anchor_file = self.output / 'anchor.json'
+        anchor_file.write_text('{"schema": 1, "keys": {}}', encoding='utf-8')
+        proc = subprocess.run([str(node_exe), str(verifier_script), str(temp_file), str(anchor_file)],
+                              capture_output=True, text=True)
+        self.assertIn('LEADING_ZERO_FORBIDDEN', proc.stdout)
+
+        # 25.2 Unpaired surrogate -> REJECTED
+        bad_surrogate = '{"schema": 1, "keyId": "k", "signature": "A", "payload": {"name": "\\uD83D"}}'
+        temp_file.write_text(bad_surrogate, encoding='utf-8')
+        proc = subprocess.run([str(node_exe), str(verifier_script), str(temp_file), str(anchor_file)],
+                              capture_output=True, text=True)
+        self.assertIn('UNPAIRED_HIGH_SURROGATE', proc.stdout)
+
+        # 25.3 Untrusted location rejection when AP06_TEST_HARNESS is not set
+        auth_file, anchor_file_valid, task_sha, kp = create_valid_authorization(self.output, self.base)
+        env_no_test = dict(os.environ)
+        env_no_test.pop('AP06_TEST_HARNESS', None)
+        proc_untrusted = subprocess.run([str(node_exe), str(verifier_script), str(auth_file), str(anchor_file_valid)],
+                                        capture_output=True, text=True, env=env_no_test)
+        self.assertIn('R16_AUTHORIZATION_TRUST_ANCHOR_UNTRUSTED_LOCATION', proc_untrusted.stdout)
+
+        # 25.4 Fingerprint mismatch on SPKI DER
+        tampered_anchor = copy.deepcopy(kp['trustAnchor'])
+        tampered_anchor['keys']['test-scientific-director']['spkiFingerprint'] = '0' * 64
+        tampered_anchor['keys']['test-scientific-director']['fingerprint'] = '0' * 64
+        bad_anchor_file = self.output / 'tampered_anchor.json'
+        bad_anchor_file.write_text(json.dumps(tampered_anchor), encoding='utf-8')
+        proc_mismatch = subprocess.run([str(node_exe), str(verifier_script), str(auth_file), str(bad_anchor_file)],
+                                       capture_output=True, text=True, env=dict(os.environ, AP06_TEST_HARNESS='1'))
+        self.assertIn('R16_AUTHORIZATION_TRUST_ANCHOR_FINGERPRINT_MISMATCH', proc_mismatch.stdout)
 
 
 if __name__ == '__main__':

@@ -145,9 +145,7 @@ def validate_compile_scope(commands):
 def validate_test_receipt(output, tests):
     is_r16 = Path(output).name == 'readiness-wave12-r16-native'
     required = ['python', 'node', 'typescript', 'angularBuild', 'native']
-    if Path(output).name not in ('readiness-wave12-r13-native', 'readiness-wave12-r14-native', 'readiness-wave12-r16-native'):
-        required.append('global')
-    if is_r16 and 'global' in tests:
+    if Path(output).name not in ('readiness-wave12-r13-native', 'readiness-wave12-r14-native'):
         required.append('global')
     if tests.get('status') != 'PASS':
         raise ValueError('AP06_FREEZE_TEST_AUTHORITY_INVALID')

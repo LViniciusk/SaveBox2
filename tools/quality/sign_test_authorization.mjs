@@ -8,18 +8,20 @@ export function generateTestKeyPair(keyId = 'test-scientific-director') {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
   const pubPem = publicKey.export({ type: 'spki', format: 'pem' });
   const privPem = privateKey.export({ type: 'pkcs8', format: 'pem' });
-  const fingerprint = createHash('sha256').update(pubPem.trim()).digest('hex');
+  const der = publicKey.export({ type: 'spki', format: 'der' });
+  const fingerprint = createHash('sha256').update(der).digest('hex');
   const trustAnchor = {
     schema: 1,
     keys: {
       [keyId]: {
         algorithm: 'ed25519',
         publicKey: pubPem,
+        spkiFingerprint: fingerprint,
         fingerprint
       }
     }
   };
-  return { keyId, publicKey: pubPem, privateKey: privPem, trustAnchor };
+  return { keyId, publicKey: pubPem, privateKey: privPem, trustAnchor, fingerprint };
 }
 
 // Signs an authorization payload using a test private key
@@ -36,6 +38,10 @@ export function signTestPayload(payload, privateKeyPem, keyId = 'test-scientific
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  if (process.env.AP06_TEST_HARNESS !== '1') {
+    console.error('ERROR: sign_test_authorization.mjs is strictly restricted to offline test harness (AP06_TEST_HARNESS=1)');
+    process.exit(1);
+  }
   const mode = process.argv[2];
   if (mode === 'generate-keypair') {
     const keyId = process.argv[3] || 'test-scientific-director';
