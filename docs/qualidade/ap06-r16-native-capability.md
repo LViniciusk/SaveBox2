@@ -6,6 +6,7 @@
 - **Branch:** `investigation/ap06-r16-native-capability`
 - **Base:** `frontend`
 - **PR:** [#43](https://github.com/LViniciusk/SaveBox2/pull/43)
+- **HEAD:** `17860c98`
 - **Classificação Prévia:** `R16_ENGINEERING_READY_AWAITING_AUTHORIZATION` (obsoleta)
 - **Classificação Atual:** `R16_ENGINEERING_READY_FOR_CAPABILITY`
 
@@ -192,3 +193,22 @@ O parser de streaming `ap06_native.py` não foi modificado nesta rodada, preserv
 - **Zero Medição A/B:** O caminho de comparação de transporte permanece bloqueado contratual e programaticamente (`profiledA: 0, profiledB: 0`).
 - **Preservação Histórica:** As autoridades e evidências de R12-R12 (`R12R12_FACTORIAL_CONFIRMED`), R12-R13 STOP e R12-R14 freeze permanecem intocadas e imutáveis.
 - **Isolamento de Branches:** Todas as alterações pertencem exclusivamente ao branch `investigation/ap06-r16-native-capability` direcionadas ao PR #43 com base em `frontend`.
+
+---
+
+## 9. Evidências de Validação Contratual e CI no HEAD Final (`17860c98`)
+
+| Workflow | Job | Status | Duração | URL |
+|---|---|---|---|---|
+| **Backend CI** | Linux GCC | **PASS** | 4m56s | [Job 118198085118](https://github.com/LViniciusk/SaveBox2/actions/runs/39292967840/job/118198085118) |
+| **Backend CI** | Linux Coverage | **PASS** | 7m28s | [Job 118198085689](https://github.com/LViniciusk/SaveBox2/actions/runs/39292967840/job/118198085689) |
+| **Backend CI** | Windows MSVC | **PASS** | 6m29s | [Job 118198085801](https://github.com/LViniciusk/SaveBox2/actions/runs/39292967840/job/118198085801) |
+| **Quality Baseline** | quality-report | **PASS** | 2m00s | [Job 118201022090](https://github.com/LViniciusk/SaveBox2/actions/runs/39292967894/job/118201022090) |
+| **Quality Baseline** | e2e | **PASS** | 3m01s | [Job 118201018870](https://github.com/LViniciusk/SaveBox2/actions/runs/39292967894/job/118201018870) |
+
+- **Suíte Python Completa (112 testes):** `Ran 112 tests in 86.341s — OK`
+- **Produtor Node (`NativeTrace`):** `10/10 PASS (4.3s)`
+- **TypeScript:** `tsc --noEmit -p frontend/tsconfig.app.json` — 0 erros.
+- **Segurança e Segredos:** `gitleaks protect --staged` — 0 leaks detectados.
+- **Formatação Git:** `git diff --check` — 0 erros.
+
