@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 from ap06_authorities import checked_path, private_permissions, sha256, verify_publication
-from ap06_native import PHASES, aggregate_trace, inspect_trace, trace_events, _proof_matches
+from ap06_native import PHASES, aggregate_trace, guid, inspect_trace, trace_events, _proof_matches
 from prepare_ap06_r12_r13 import NATIVE_BUDGET, OUTPUT, CAMPAIGN, prepare, verify_historical_factorial
 from run_readiness_wave1 import Wave, WaveFailure
 from run_ap06_r9 import (freeze_implementation, publish, validate_freeze_readiness,
@@ -68,15 +68,35 @@ def diagnose_trace(path, receipt, acceptance):
     successful = sum(1 for item in checkpoints if isinstance(item, dict) and item.get('success') is True) \
         if isinstance(checkpoints, list) else 0
     attempts = receipt.get('requestAttempts')
-    if type(attempts) is not int or attempts < 0:
-        attempts = None
+    valid_receipts = isinstance(checkpoints, list) and len(checkpoints) <= len(PHASES) and \
+        type(attempts) is int and len(checkpoints) <= attempts <= len(PHASES)
+    receipt_guids = set()
+    if valid_receipts:
+        for index, item in enumerate(checkpoints):
+            if not isinstance(item, dict) or item.get('phase') != PHASES[index] or item.get('success') is not True:
+                valid_receipts = False
+                break
+            try:
+                value = guid(item.get('dumpGuid'))
+            except (TypeError, ValueError, OverflowError):
+                valid_receipts = False
+                break
+            if value in receipt_guids:
+                valid_receipts = False
+                break
+            receipt_guids.add(value)
+    if not valid_receipts:
+        attempts = attempts if type(attempts) is int and 0 <= attempts <= len(PHASES) else None
     pid = receipt.get('rendererPid')
-    renderer_matches = dumps['rendererCheckpointGuidsMatched']
+    renderer_dump_matches = dumps['rendererCheckpointGuidsMatched']
+    renderer_matches = dumps['validRequestCheckpointGuidsMatchedRenderer']
     if type(pid) is not int or pid <= 0:
         renderer_correlation = 'UNVERIFIED'
-    elif successful == 0:
-        renderer_correlation = 'NO_SUCCESSFUL_REQUEST_RECEIPTS'
-    elif renderer_matches >= successful:
+    elif not valid_receipts or dumps['invalidGuid']:
+        renderer_correlation = 'UNVERIFIED'
+    elif len(checkpoints) == len(PHASES) and attempts == len(PHASES) and successful == len(PHASES) and \
+        dumps['checkpointGuidsExpected'] == len(PHASES) and dumps['checkpointReceiptGuidsUnique'] and \
+        renderer_dump_matches == len(PHASES) and renderer_matches == len(PHASES):
         renderer_correlation = 'COMPLETE'
     elif renderer_matches:
         renderer_correlation = 'PARTIAL'
@@ -110,17 +130,27 @@ def diagnose_trace(path, receipt, acceptance):
     category = receipt.get('memoryInfraCategoryAvailable')
     if type(category) is not bool:
         category = 'UNVERIFIED'
+    valid_by_process = heaps['validStructuresByProcess']
+    if valid_by_process['renderer']:
+        profiler_evidence = 'OBSERVED_RENDERER_HEAPS_V2'
+    elif valid_by_process['undetermined']:
+        profiler_evidence = 'PROCESS_UNDETERMINED'
+    elif valid_by_process['other']:
+        profiler_evidence = 'OBSERVED_ONLY_OTHER_PROCESS_HEAPS_V2'
+    else:
+        profiler_evidence = 'NO_VALID_HEAPS_V2'
     return {'scope': 'sanitized_counts_only', 'status': 'OBSERVED',
         'acceptanceStatus': acceptance.get('status'), 'acceptanceReason': reason,
         'memoryInfraCategoryAvailable': category, 'browserProcessFlagsAttested': flags,
-        'profilerActivationEvidence': 'OBSERVED_HEAPS_V2' if heaps['eventsPresent'] else 'UNVERIFIED',
+        'profilerActivationEvidence': profiler_evidence,
         'requestAttempts': attempts, 'successfulCheckpointRequests': successful,
-        'correlatedRendererDumps': renderer_matches, 'rendererCorrelation': renderer_correlation,
+        'correlatedRendererDumps': renderer_matches, 'rendererDumpGuidMatches': renderer_dump_matches,
+        'rendererCorrelation': renderer_correlation,
         'rendererIdentityProof': identity,
         'heapsV2Status': heaps_status,
         'heapsV2': {key: heaps[key] for key in ('eventsPresent', 'rendererEvents', 'checkpointMatches',
             'checkpointMatchesMissing', 'schemaVersions', 'schemaVersion1WithAllocatorMap',
-            'validAllocatorArraySets', 'dumpEventsWithoutHeapsV2')}}
+            'validStructuresByProcess', 'validAllocatorArraySets', 'dumpEventsWithoutHeapsV2')}}
 
 
 def validate_trace(path, receipt_path, *, synthetic=False):

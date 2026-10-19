@@ -56,13 +56,14 @@ test('Node stream producer and Python strict consumer agree on valid and profile
     assert.deepEqual({status:validResult.status,heapProfilingEffective:validResult.heapProfilingEffective,
       traceSha256:validResult.traceSha256,traceBytes:validResult.traceBytes},
       {status:'NATIVE_CAPABILITY_PASS',heapProfilingEffective:true,traceSha256:valid.trace.sha256,traceBytes:valid.trace.bytes});
-    assert.equal(validResult.diagnostic.profilerActivationEvidence,'OBSERVED_HEAPS_V2');
+    assert.equal(validResult.diagnostic.profilerActivationEvidence,'OBSERVED_RENDERER_HEAPS_V2');
     assert.equal(validResult.diagnostic.heapsV2Status,'VALIDATED');
     assert.equal(validResult.diagnostic.browserProcessFlagsAttested,true);
     assert.equal(validResult.diagnostic.rendererIdentityProof,'MISSING');
     assert.equal(validResult.diagnostic.requestAttempts,4);
     assert.equal(validResult.diagnostic.successfulCheckpointRequests,4);
     assert.equal(validResult.diagnostic.correlatedRendererDumps,4);
+    assert.equal(validResult.diagnostic.rendererCorrelation,'COMPLETE');
     assert.equal(JSON.parse(await readFile(valid.receiptPath,'utf8')).heapProfilingEffective,null);
     const absent=await evaluateTrace(dir,fixture(false),'absent');
     assert.equal(absent.child.status,1,absent.child.stderr);
@@ -70,10 +71,11 @@ test('Node stream producer and Python strict consumer agree on valid and profile
     assert.deepEqual({status:absentResult.status,reason:absentResult.reason,traceSha256:absentResult.traceSha256,
       traceBytes:absentResult.traceBytes},{status:'NATIVE_INCONCLUSIVE',reason:'NATIVE_HEAPS_V2_NOT_EMITTED',
       traceSha256:absent.trace.sha256,traceBytes:absent.trace.bytes});
-    assert.equal(absentResult.diagnostic.profilerActivationEvidence,'UNVERIFIED');
+    assert.equal(absentResult.diagnostic.profilerActivationEvidence,'NO_VALID_HEAPS_V2');
     assert.equal(absentResult.diagnostic.heapsV2Status,'ABSENT');
     assert.equal(absentResult.diagnostic.successfulCheckpointRequests,4);
     assert.equal(absentResult.diagnostic.correlatedRendererDumps,4);
+    assert.equal(absentResult.diagnostic.rendererCorrelation,'COMPLETE');
     assert.equal(JSON.parse(await readFile(absent.receiptPath,'utf8')).heapProfilingEffective,null);
     const partial=await evaluateTrace(dir,fixture(true,3),'partial');
     assert.equal(partial.child.status,1,partial.child.stderr);
@@ -87,5 +89,6 @@ test('Node stream producer and Python strict consumer agree on valid and profile
     const malformedResult=JSON.parse(malformed.child.stdout);
     assert.equal(malformedResult.reason,'NATIVE_HEAPS_V2_SCHEMA_UNSUPPORTED');
     assert.equal(malformedResult.diagnostic.heapsV2Status,'STRUCTURALLY_REJECTED');
+    assert.equal(malformedResult.diagnostic.rendererCorrelation,'COMPLETE');
   }finally{await rm(dir,{recursive:true,force:true});}
 });

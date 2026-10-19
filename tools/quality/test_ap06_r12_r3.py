@@ -13,6 +13,14 @@ from test_ap06_r12_r2 import complete_raw
 
 
 class RecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.campaign_state=(factorial.OUTPUT,factorial.PUBLISHER,factorial.CAMPAIGN)
+        factorial.configure_campaign('.quality/readiness-wave12-r3-factorial',
+            Path(factorial.__file__).with_name('run_ap06_r12_r3.py'),'AP-06-R12-R3-factorial')
+
+    def tearDown(self):
+        factorial.OUTPUT,factorial.PUBLISHER,factorial.CAMPAIGN=self.campaign_state
+
     def receipt(self):
         identity=dict(executableSha256='a'*64,executablePath='C:/owned/shell.exe',chromiumVersion='151.0.7922.34',architecture='x64')
         before=dict(status='PASS',browserPid=123,processCreationTime=456,expectedSha256='a'*64,observedSha256='a'*64,

@@ -5,6 +5,7 @@ import {getAttestedBrowserProof,NATIVE_ARGS} from './ap06-browser-identity.mjs';
 export {NATIVE_ARGS};
 export const CHECKPOINTS=Object.freeze(['baseline','cycle-6-close','idle-120s','forced-GC-final']);
 const validGuid=value=>typeof value==='string'&&/^(?:0x)?[a-f\d]+$/i.test(value);
+const guidKey=value=>validGuid(value)?value.replace(/^0x/i,'').replace(/^0+/,'').toLowerCase()||'0':null;
 async function bounded(promise,ms=30000){
   let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('NATIVE_CDP_TIMEOUT')),ms);})]);}
   finally{clearTimeout(timer);}
@@ -64,8 +65,9 @@ export class NativeTrace {
     this.receipt.rendererPid=renderer[0].pid;
     const at=performance.now();this.receipt.requestAttempts++;
     const result=await bounded(this.cdp.send('Tracing.requestMemoryDump',{deterministic:false,levelOfDetail:'detailed'}));
-    if(result.success!==true||!validGuid(result.dumpGuid)||
-      this.receipt.checkpoints.some(item=>item.dumpGuid.toLowerCase()===result.dumpGuid.toLowerCase()))throw new Error('NATIVE_DUMP_RECEIPT_INVALID');
+    const key=guidKey(result.dumpGuid);
+    if(result.success!==true||key===null||this.receipt.checkpoints.some(item=>guidKey(item.dumpGuid)===key))
+      throw new Error('NATIVE_DUMP_RECEIPT_INVALID');
     this.receipt.checkpoints.push({phase,...result,timestamp:performance.now(),wallTime:new Date().toISOString(),dumpDurationMs:performance.now()-at,
       rendererPrivateBytes:renderer[0].privateBytes,totalPrivateBytes:processes.privateBytes});
   }
@@ -83,8 +85,9 @@ export class NativeTrace {
       const checkpointsComplete=this.receipt.requestAttempts===CHECKPOINTS.length&&Array.isArray(checkpoints)&&
         checkpoints.length===CHECKPOINTS.length&&CHECKPOINTS.every((phase,index)=>{
         const checkpoint=checkpoints[index];
-        if(checkpoint?.phase!==phase||checkpoint.success!==true||!validGuid(checkpoint.dumpGuid))return false;
-        const key=checkpoint.dumpGuid.toLowerCase();if(checkpointGuids.has(key))return false;checkpointGuids.add(key);return true;
+        const key=guidKey(checkpoint?.dumpGuid);
+        if(checkpoint?.phase!==phase||checkpoint.success!==true||key===null||checkpointGuids.has(key))return false;
+        checkpointGuids.add(key);return true;
       });
       this.receipt.complete=this.receipt.tracingStarted&&checkpointsComplete&&this.receipt.traceFormat==='json'&&
         this.receipt.dataLossOccurred===false&&this.receipt.streamEof===true;

@@ -4,7 +4,7 @@ import {EventEmitter} from 'node:events';
 import {mkdtemp,readFile,readdir,rm,realpath} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,sep} from 'node:path';
-import {NativeTrace,writeTraceStream} from './ap06-native-trace.mjs';
+import {CHECKPOINTS,NativeTrace,writeTraceStream} from './ap06-native-trace.mjs';
 import {AUTOPLAY_ARGS,launchWithIdentityLease} from './ap06-browser-identity.mjs';
 
 async function attestedBrowser(cdp){
@@ -77,13 +77,14 @@ test('MemoryInfra category failure is controlled and detaches the attested CDP s
 
 test('four explicit checkpoint requests follow MemoryInfra start and complete the receipt',async()=>{
   const calls=[];let detached=false,requests=0;
+  const guids=['0x01','2','0X0003','0004'];
   const cdp=new EventEmitter();
   cdp.send=async(method,params)=>{
     calls.push([method,params]);
     if(method==='SystemInfo.getProcessInfo')return{processInfo:[{type:'browser',id:42}]};
     if(method==='Browser.getVersion')return{product:'HeadlessShell/151.0.7922.34'};
     if(method==='Tracing.getCategories')return{categories:['disabled-by-default-memory-infra']};
-    if(method==='Tracing.requestMemoryDump')return{dumpGuid:`0x${++requests}`,success:true};
+    if(method==='Tracing.requestMemoryDump')return{dumpGuid:guids[requests++],success:true};
     if(method==='Tracing.end'){
       queueMicrotask(()=>cdp.emit('Tracing.tracingComplete',{dataLossOccurred:false,traceFormat:'json',stream:'trace'}));return{};
     }
@@ -104,6 +105,48 @@ test('four explicit checkpoint requests follow MemoryInfra start and complete th
     assert.equal(tracing[1][1].tracingBackend,'chrome');
     assert.ok(tracing.slice(2,6).every(([,payload])=>payload.deterministic===false&&payload.levelOfDetail==='detailed'));
     assert.equal(trace.receipt.requestAttempts,4);assert.equal(trace.receipt.complete,true);assert.equal(detached,true);
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('numeric GUID aliases are duplicates during capture and in the final receipt gate',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'ap06-native-guid-alias-'));
+  try{
+    let requests=0,detached=false;
+    const cdp=new EventEmitter();
+    cdp.send=async method=>{
+      if(method==='Tracing.requestMemoryDump')return{dumpGuid:['0x01','1'][requests++],success:true};
+      if(method==='Tracing.end'){
+        queueMicrotask(()=>cdp.emit('Tracing.tracingComplete',{dataLossOccurred:false,traceFormat:'json',stream:'trace'}));return{};
+      }
+      if(method==='IO.read')return{data:'{"traceEvents":[]}',eof:true};
+      return{};
+    };
+    cdp.detach=async()=>{detached=true;};
+    const trace=new NativeTrace(join(dir,'alias.json'));trace.cdp=cdp;trace.started=true;trace.receipt.tracingStarted=true;
+    const processes={processes:[{type:'renderer',pid:42,privateBytes:10}],privateBytes:10};
+    await trace.dump('baseline',processes);
+    await assert.rejects(trace.dump('cycle-6-close',processes),/NATIVE_DUMP_RECEIPT_INVALID/);
+    await trace.stop();
+    assert.equal(trace.receipt.complete,false);assert.equal(trace.receipt.requestAttempts,2);
+    assert.equal(trace.receipt.checkpoints.length,1);assert.equal(detached,true);
+
+    const invalid=new NativeTrace(join(dir,'invalid.json'));invalid.cdp={send:async method=>
+      method==='Tracing.requestMemoryDump'?{dumpGuid:'0x1g',success:true}:{}};invalid.started=true;
+    invalid.receipt.tracingStarted=true;
+    await assert.rejects(invalid.dump('baseline',processes),/NATIVE_DUMP_RECEIPT_INVALID/);
+
+    const finalCdp=new EventEmitter();finalCdp.send=async method=>{
+      if(method==='Tracing.end'){
+        queueMicrotask(()=>finalCdp.emit('Tracing.tracingComplete',{dataLossOccurred:false,traceFormat:'json',stream:'trace'}));return{};
+      }
+      if(method==='IO.read')return{data:'{"traceEvents":[]}',eof:true};
+      return{};
+    };finalCdp.detach=async()=>{};
+    const finalGate=new NativeTrace(join(dir,'tampered.json'));finalGate.cdp=finalCdp;finalGate.started=true;
+    finalGate.receipt.tracingStarted=true;finalGate.receipt.requestAttempts=4;
+    finalGate.receipt.checkpoints=['baseline','cycle-6-close','idle-120s','forced-GC-final'].map((phase,index)=>
+      ({phase,dumpGuid:['0x01','1','3','4'][index],success:true}));
+    await finalGate.stop();assert.equal(finalGate.receipt.complete,false);
   }finally{await rm(dir,{recursive:true,force:true});}
 });
 
@@ -134,4 +177,61 @@ test('failed checkpoint request cannot produce a complete trace receipt',async()
     assert.equal(detached,true);
     assert.deepEqual(await readdir(dir),['partial.json']);
   }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('third and fourth checkpoint failures remain incomplete and cannot retry',async()=>{
+  for(const failureAt of [3,4]){
+    const dir=await mkdtemp(join(tmpdir(),'ap06-native-late-failure-'));
+    try{
+      const cdp=new EventEmitter();let requests=0;
+      cdp.send=async method=>{
+        if(method==='Tracing.requestMemoryDump'){requests++;return{dumpGuid:`0x${requests}`,success:requests!==failureAt};}
+        if(method==='Tracing.end'){
+          queueMicrotask(()=>cdp.emit('Tracing.tracingComplete',{dataLossOccurred:false,traceFormat:'json',stream:'trace'}));return{};
+        }
+        if(method==='IO.read')return{data:'{"traceEvents":[]}',eof:true};
+        return{};
+      };
+      cdp.detach=async()=>{};
+      const trace=new NativeTrace(join(dir,'late-failure.json'));trace.cdp=cdp;trace.started=true;trace.receipt.tracingStarted=true;
+      const processes={processes:[{type:'renderer',pid:42,privateBytes:10}],privateBytes:10};
+      for(let index=0;index<failureAt-1;index++)await trace.dump(CHECKPOINTS[index],processes);
+      await assert.rejects(trace.dump(CHECKPOINTS[failureAt-1],processes),/NATIVE_DUMP_RECEIPT_INVALID/);
+      await assert.rejects(trace.dump(CHECKPOINTS[failureAt-1],processes),/NATIVE_CHECKPOINT_RETRY_FORBIDDEN/);
+      await trace.stop();
+      assert.equal(trace.receipt.complete,false);assert.equal(trace.receipt.requestAttempts,failureAt);
+      assert.equal(trace.receipt.checkpoints.length,failureAt-1);assert.equal(requests,failureAt);
+    }finally{await rm(dir,{recursive:true,force:true});}
+  }
+});
+
+test('checkpoint CDP timeout leaves the receipt incomplete without waiting',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'ap06-native-timeout-'));
+  const originalSetTimeout=globalThis.setTimeout,originalClearTimeout=globalThis.clearTimeout,token={};
+  try{
+    globalThis.setTimeout=(callback,delay,...args)=>{
+      if(delay===30000){queueMicrotask(()=>callback(...args));return token;}
+      return originalSetTimeout(callback,delay,...args);
+    };
+    globalThis.clearTimeout=handle=>handle===token?undefined:originalClearTimeout(handle);
+    const cdp=new EventEmitter();cdp.send=async method=>{
+      if(method==='Tracing.requestMemoryDump')return new Promise(()=>{});
+      if(method==='Tracing.end'){
+        queueMicrotask(()=>cdp.emit('Tracing.tracingComplete',{dataLossOccurred:false,traceFormat:'json',stream:'trace'}));return{};
+      }
+      if(method==='IO.read')return{data:'{"traceEvents":[]}',eof:true};
+      return{};
+    };cdp.detach=async()=>{};
+    const trace=new NativeTrace(join(dir,'timeout.json'));trace.cdp=cdp;trace.started=true;trace.receipt.tracingStarted=true;
+    const processes={processes:[{type:'renderer',pid:42,privateBytes:10}],privateBytes:10};
+    await assert.rejects(trace.dump(CHECKPOINTS[0],processes),/NATIVE_CDP_TIMEOUT/);
+    globalThis.setTimeout=originalSetTimeout;globalThis.clearTimeout=originalClearTimeout;
+    await trace.stop();
+    assert.equal(trace.receipt.complete,false);assert.equal(trace.receipt.requestAttempts,1);
+    assert.equal(trace.receipt.checkpoints.length,0);
+    await assert.rejects(trace.dump(CHECKPOINTS[0],processes),/NATIVE_CHECKPOINT_RETRY_FORBIDDEN/);
+  }finally{
+    globalThis.setTimeout=originalSetTimeout;globalThis.clearTimeout=originalClearTimeout;
+    await rm(dir,{recursive:true,force:true});
+  }
 });
