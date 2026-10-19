@@ -827,6 +827,30 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
                                   capture_output=True, text=True)
             self.assertNotEqual(res5.returncode, 0)
             self.assertFalse(t5.exists())
+
+            # 22.6 Scenario: duplicate-guids -> NativeTrace.dump rejects duplicate GUID in receipt
+            t6 = temp_dir / 'dup.trace.json'
+            r6 = temp_dir / 'dup.receipt.json'
+            res6 = subprocess.run([str(node_exe), str(producer_script), str(t6), str(r6), 'duplicate-guids'],
+                                  capture_output=True, text=True)
+            self.assertNotEqual(res6.returncode, 0)
+            self.assertIn('NATIVE_DUMP_RECEIPT_INVALID', res6.stderr)
+
+            # 22.7 Scenario: timeout-checkpoint-3 -> checkpoint timeout triggers controlled failure
+            t7 = temp_dir / 'timeout.trace.json'
+            r7 = temp_dir / 'timeout.receipt.json'
+            res7 = subprocess.run([str(node_exe), str(producer_script), str(t7), str(r7), 'timeout-checkpoint-3'],
+                                  capture_output=True, text=True)
+            self.assertNotEqual(res7.returncode, 0)
+            self.assertIn('NATIVE_CDP_TIMEOUT', res7.stderr)
+
+            # 22.8 Scenario: trace-size-limit -> chunk exceeds bounds, writeTraceStream aborts & unlinks partial
+            t8 = temp_dir / 'limit.trace.json'
+            r8 = temp_dir / 'limit.receipt.json'
+            res8 = subprocess.run([str(node_exe), str(producer_script), str(t8), str(r8), 'trace-size-limit'],
+                                  capture_output=True, text=True)
+            self.assertNotEqual(res8.returncode, 0)
+            self.assertFalse(t8.exists())
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

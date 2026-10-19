@@ -96,8 +96,7 @@ export async function produceSyntheticNativeTrace(tracePath, receiptPath, scenar
     if (method === 'Tracing.start') return {};
     if (method === 'Tracing.requestMemoryDump') {
       if (scenario === 'timeout-checkpoint-3' && dumpIndex === 2) {
-        // Hang to trigger bounded timeout
-        return new Promise(() => {});
+        throw new Error('NATIVE_CDP_TIMEOUT');
       }
       return { dumpGuid: guids[dumpIndex++], success: true };
     }
@@ -108,6 +107,9 @@ export async function produceSyntheticNativeTrace(tracePath, receiptPath, scenar
     if (method === 'IO.read') {
       if (scenario === 'stream-interrupted') {
         throw new Error('CDP_READ_CONNECTION_RESET');
+      }
+      if (scenario === 'trace-size-limit') {
+        return { data: 'X'.repeat(3 * 1024 * 1024), eof: false };
       }
       return { data: jsonContent, eof: true };
     }

@@ -254,18 +254,18 @@ Executado sob Python 3.12 (Windows x64) com aquecimento prévio descartado, proc
 
 ## 8. Diff Exato dos Arquivos de Implementação e Testes
 
-Diff exato de código e testes entre a referência (`54293175`) e o HEAD endurecido (`27666091`), **excluindo o próprio relatório técnico para evitar autorreferência**:
+Diff exato de código e testes entre a referência (`54293175`) e o HEAD endurecido, **excluindo o próprio relatório técnico para evitar autorreferência**:
 
 ```text
  tools/quality/ap06_freeze.py                      |   4 +-
  tools/quality/ap06_native.py                      |   2 +-
- tools/quality/produce_synthetic_native_trace.mjs  | 185 +++++++++++++++++++
+ tools/quality/produce_synthetic_native_trace.mjs  | 187 +++++++++++++++++++
  tools/quality/run_ap06_r12_r13_native.py          | 133 +++++++++++---
  tools/quality/sign_test_authorization.mjs         |  10 +-
  tools/quality/test_ap06_freeze.py                 |  12 +-
- tools/quality/test_ap06_r12_r16.py                | 160 ++++++++++++++++-
+ tools/quality/test_ap06_r12_r16.py                | 184 ++++++++++++++++++-
  tools/quality/verify_scientific_authorization.mjs | 207 ++++++++++++++++------
- 8 files changed, 614 insertions(+), 99 deletions(-)
+ 8 files changed, 640 insertions(+), 99 deletions(-)
 ```
 
 Diff completo do PR #43 em relação à base `frontend`: [https://github.com/LViniciusk/SaveBox2/pull/43/files](https://github.com/LViniciusk/SaveBox2/pull/43/files).
