@@ -1,8 +1,9 @@
 import copy,io,json,tempfile,unittest
 from pathlib import Path
-from ap06_native import (trace_events,aggregate_trace,inspect_trace,interpret,_proof_matches,
+from ap06_native import (MAX_DIAGNOSTIC_PIDS,trace_events,aggregate_trace,inspect_trace,interpret,_proof_matches,
     _legacy_proof_matches)
 import run_ap06_r12_r2_native as native
+import run_ap06_r12_r13_native as r13
 from ap06_authorities import initialize,verify_publication,sha256
 from types import SimpleNamespace
 
@@ -513,6 +514,108 @@ class NativeTests(unittest.TestCase):
             proof_legacy=123456, audit_legacy=123456)
         self.assertFalse(_proof_matches(legacy, 42))
         self.assertTrue(_legacy_proof_matches(legacy, 42))
+
+
+class NativeDiagnosticTests(unittest.TestCase):
+    def diagnose(self, rows, side=None, status='NATIVE_INCONCLUSIVE', reason=None):
+        receipt_data=receipt() if side is None else side
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'trace.json'
+            path.write_text(json.dumps({'traceEvents':rows}),encoding='utf-8')
+            return r13.diagnose_trace(path,receipt_data,{'status':status,'reason':reason})
+
+    def test_renderer_correlation_requires_four_valid_unique_checkpoints(self):
+        side=receipt();side['checkpoints']=side['checkpoints'][:3];side['requestAttempts']=3
+        partial=self.diagnose(events((100,200,300)),side)
+        self.assertEqual(partial['rendererCorrelation'],'PARTIAL')
+        self.assertEqual(partial['correlatedRendererDumps'],3)
+
+        side=receipt();side['requestAttempts']=4
+        partial=self.diagnose(events((100,200,300)),side)
+        self.assertEqual(partial['rendererCorrelation'],'PARTIAL')
+
+        side=receipt();side['requestAttempts']=4;rows=events()
+        next(row for row in rows if row.get('name')=='GlobalMemoryDump' and row.get('ph')=='b' and
+            row.get('args',{}).get('dump_guid')=='0x4')['args']['success']=False
+        invalid_request=self.diagnose(rows,side)
+        self.assertEqual(invalid_request['rendererCorrelation'],'PARTIAL')
+        self.assertEqual(invalid_request['correlatedRendererDumps'],3)
+        self.assertEqual(invalid_request['rendererDumpGuidMatches'],4)
+
+        side=receipt();side['requestAttempts']=4;rows=events()
+        next(row for row in rows if row.get('id')=='0x4')['id2']=42
+        invalid_guid=self.diagnose(rows,side)
+        self.assertEqual(invalid_guid['rendererCorrelation'],'UNVERIFIED')
+
+        side=receipt();side['requestAttempts']=4
+        rows=events()
+        for row in rows:
+            if row.get('pid')==42:row['pid']=77
+        missing=self.diagnose(rows,side)
+        self.assertEqual(missing['rendererCorrelation'],'MISSING')
+
+        side=receipt();side['requestAttempts']=4;side['checkpoints'][1]['dumpGuid']='0x01'
+        invalid=self.diagnose(events(),side)
+        self.assertEqual(invalid['rendererCorrelation'],'UNVERIFIED')
+
+        side=receipt();side['requestAttempts']=4
+        complete=self.diagnose(events(),side)
+        self.assertEqual(complete['rendererCorrelation'],'COMPLETE')
+        self.assertEqual(complete['correlatedRendererDumps'],4)
+
+    def test_heaps_v2_evidence_is_scoped_to_renderer_and_valid_structure(self):
+        side=receipt();side['requestAttempts']=4
+        renderer_rows=events()
+        observed=self.diagnose(renderer_rows,side,'NATIVE_CAPABILITY_PASS')
+        self.assertEqual(observed['profilerActivationEvidence'],'OBSERVED_RENDERER_HEAPS_V2')
+
+        other_rows=events()
+        for row in other_rows:
+            if row.get('pid')==42 and isinstance(row.get('args'),dict) and isinstance(row['args'].get('dumps'),dict):
+                row['args']['dumps'].pop('heaps_v2',None)
+        other_rows.insert(2,{'ph':'v','pid':77,'ts':2,'id':'0x1','name':'periodic_interval',
+            'cat':['disabled-by-default-memory-infra'],'args':{'dumps':{
+                'heaps_v2':{'version':1,'allocators':{'malloc':{'sizes':[1],'counts':[1]}}}}}})
+        other=self.diagnose(other_rows,side,reason='NATIVE_HEAPS_V2_NOT_EMITTED')
+        self.assertEqual(other['profilerActivationEvidence'],'OBSERVED_ONLY_OTHER_PROCESS_HEAPS_V2')
+
+        invalid_rows=events()
+        for row in invalid_rows:
+            dumps=row.get('args',{}).get('dumps') if isinstance(row.get('args'),dict) else None
+            if isinstance(dumps,dict) and 'heaps_v2' in dumps:dumps['heaps_v2']['version']=2
+        invalid=self.diagnose(invalid_rows,side,'NATIVE_STOP','NATIVE_HEAPS_V2_SCHEMA_UNSUPPORTED')
+        self.assertEqual(invalid['profilerActivationEvidence'],'NO_VALID_HEAPS_V2')
+
+        unknown_rows=events()
+        for row in unknown_rows:
+            if row.get('pid')==42 and isinstance(row.get('args'),dict) and isinstance(row['args'].get('dumps'),dict):
+                del row['pid']
+        unknown=self.diagnose(unknown_rows,side,reason='NATIVE_RENDERER_PID_MISSING')
+        self.assertEqual(unknown['profilerActivationEvidence'],'PROCESS_UNDETERMINED')
+
+        unknown_invalid_rows=events()
+        for row in unknown_invalid_rows:
+            dumps=row.get('args',{}).get('dumps') if isinstance(row.get('args'),dict) else None
+            if isinstance(dumps,dict) and 'heaps_v2' in dumps:
+                del row['pid'];dumps['heaps_v2']['version']=2
+        unknown_invalid=self.diagnose(unknown_invalid_rows,side,reason='NATIVE_RENDERER_PID_MISSING')
+        self.assertEqual(unknown_invalid['profilerActivationEvidence'],'NO_VALID_HEAPS_V2')
+
+    def test_diagnostic_cardinality_is_bounded_and_untrusted_labels_are_bucketed(self):
+        rows=({'ph':'i','pid':index+1,'name':'GlobalMemoryDump','args':{'dump_type':f'untrusted-{index}'}}
+            for index in range(MAX_DIAGNOSTIC_PIDS+32))
+        inventory=inspect_trace(rows,MAX_DIAGNOSTIC_PIDS+100,[])
+        self.assertEqual(inventory['distinctPidCount'],MAX_DIAGNOSTIC_PIDS)
+        self.assertTrue(inventory['distinctPidCountCapped'])
+        self.assertEqual(inventory['dumpTriggerTypes'],{'other':MAX_DIAGNOSTIC_PIDS+32})
+        self.assertNotIn('otherPidEventCounts',inventory['eventsByProcess'])
+
+    def test_boolean_pid_cannot_match_renderer_pid(self):
+        row={'ph':'v','pid':True,'ts':1,'id':'0x1','args':{'dumps':{
+            'heaps_v2':{'version':1,'allocators':{'malloc':{'sizes':[1],'counts':[1]}}}}}}
+        inventory=inspect_trace([row],1,[])
+        self.assertEqual(inventory['eventsByProcess']['renderer'],0)
+        self.assertEqual(inventory['heapsV2']['validStructuresByProcess']['undetermined'],1)
 
 if __name__=='__main__':unittest.main()
 

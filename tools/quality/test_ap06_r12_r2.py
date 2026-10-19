@@ -20,6 +20,15 @@ def complete_raw(condition='r12r2.3'):
     return raw,freeze,fixtures
 
 class FactorialTests(unittest.TestCase):
+    def setUp(self):
+        self.campaign_state=(r2.OUTPUT,r2.PUBLISHER,r2.CAMPAIGN)
+        r2.OUTPUT='.quality/readiness-wave12-r2-factorial'
+        r2.PUBLISHER=Path(r2.__file__).resolve()
+        r2.CAMPAIGN='AP-06-R12-R2-factorial'
+
+    def tearDown(self):
+        r2.OUTPUT,r2.PUBLISHER,r2.CAMPAIGN=self.campaign_state
+
     def test_factorial_namespace_publication_readback_freeze_and_stop(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);authority=root/'authority';identity='b'*64;initialize(authority,identity,campaign='AP-06-R10')

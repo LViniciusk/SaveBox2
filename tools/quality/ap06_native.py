@@ -1,6 +1,8 @@
 """Bounded JSON event reader and pure MemoryInfra heaps_v2 aggregates. No raw stacks are public."""
 import hashlib,json,math,re
 
+MAX_DIAGNOSTIC_PIDS=1024
+
 class JsonStream:
     def __init__(self,stream,chunk_size,max_value):
         self.stream,self.chunk_size,self.max_value=stream,chunk_size,max_value;self.buffer='';self.eof=False
@@ -60,6 +62,31 @@ def number(value):
     if type(value) not in (int,float) or not math.isfinite(value) or value<0:raise ValueError('NATIVE_NUMBER_INVALID')
     return value
 
+def _heaps_v2_shape_valid(heaps):
+    if not isinstance(heaps,dict) or type(heaps.get('version')) is not int or heaps['version']!=1:return False
+    maps=heaps.get('maps',{})
+    if not isinstance(maps,dict) or not isinstance(maps.get('strings',[]),list) or not isinstance(maps.get('nodes',[]),list):return False
+    strings,nodes=maps.get('strings',[]),maps.get('nodes',[])
+    if len(strings)>100000 or len(nodes)>100000:return False
+    if any(not isinstance(row,dict) or type(row.get('id')) is not int or row['id']<0 or not isinstance(row.get('string'),str)
+        for row in strings):return False
+    if any(not isinstance(row,dict) or type(row.get('id')) is not int or row['id']<0 or type(row.get('name_sid')) is not int or
+        ('parent' in row and type(row['parent']) is not int) for row in nodes):return False
+    allocators=heaps.get('allocators')
+    if not isinstance(allocators,dict):return False
+    for name,allocator in allocators.items():
+        if not isinstance(name,str) or not name or not isinstance(allocator,dict):return False
+        sizes,counts=allocator.get('sizes'),allocator.get('counts')
+        if not isinstance(sizes,list) or not sizes or len(sizes)>100000 or not isinstance(counts,list):return False
+        paths,types=allocator.get('nodes',[-1]*len(sizes)),allocator.get('types',[-1]*len(sizes))
+        if not isinstance(paths,list) or not isinstance(types,list) or len({len(sizes),len(counts),len(paths),len(types)})!=1:return False
+        try:
+            for size,count in zip(sizes,counts):number(size);number(count)
+        except ValueError:return False
+        if any(type(value) is not int or value < -1 for value in paths) or any(
+            type(value) is not int or value < -1 for value in types):return False
+    return bool(allocators)
+
 def guid(value):
     if not isinstance(value,str) or not re.fullmatch(r'(?:0x)?[a-fA-F0-9]+',value):raise ValueError('NATIVE_GUID_INVALID')
     return int(value,16)
@@ -69,9 +96,10 @@ def label(value):
 
 def inspect_trace(events,renderer_pid,checkpoints):
     """Return bounded, sanitized trace structure counts. This is diagnostic, never acceptance."""
-    phases={};names={};categories={};roles={};pids=set();pid_counts={};expected={};checkpoint_guids=[]
+    phases={};names={};categories={};roles={};pids=set();pid_count_capped=False;expected={};checkpoint_guids=[]
     if type(renderer_pid) is not int or renderer_pid<=0:renderer_pid=None
-    for checkpoint in checkpoints if isinstance(checkpoints,list) else ():
+    checkpoint_count=len(checkpoints) if isinstance(checkpoints,list) else 0
+    for checkpoint in checkpoints[:4] if isinstance(checkpoints,list) else ():
         try:
             value=guid(checkpoint.get('dumpGuid'))
             checkpoint_guids.append(value)
@@ -81,9 +109,10 @@ def inspect_trace(events,renderer_pid,checkpoints):
     role_names={'Renderer':'renderer','Renderer process':'renderer','Browser':'browser','GPU Process':'gpu','Utility':'utility'}
     dump_renderer=dump_other=0;guid_forms={'id':0,'id2.global':0,'both':0,'missing':0}
     guid_types={'string':0,'number':0,'other':0};matched=set();duplicate_matches=0;unmatched=0
-    renderer_matched=set();other_matched=set();matched_events=0
+    renderer_matched=set();other_matched=set();matched_events=0;request_rows={};renderer_dump_timestamps={}
     dump_without_schema=0;dump_bad_guid=0;dump_timestamps=0;last_dump_ts=None;dump_order_valid=True;dump_triggers={}
     heaps_present=heaps_renderer=heaps_matched=heaps_matched_missing=0
+    heaps_valid_renderer=heaps_valid_other=heaps_valid_unknown=0
     heaps_versions={};heaps_valid=0;heap_allocators=0;heap_arrays_valid=0;allocator_stats=0;discarded=0
     def bucket(table,key):table[key]=table.get(key,0)+1
     def guid_value(value):
@@ -93,14 +122,19 @@ def inspect_trace(events,renderer_pid,checkpoints):
         bucket(guid_types,kind)
         try:return guid(value)
         except (TypeError,ValueError,OverflowError):return None
+    def raw_guid(value):
+        try:return guid(value)
+        except (TypeError,ValueError,OverflowError):return None
     for event in events:
         total+=1
         if not isinstance(event,dict):continue
         pid=event.get('pid')
         if type(pid) is int and pid>0:
-            pids.add(pid);pid_counts[pid]=pid_counts.get(pid,0)+1
+            if pid not in pids:
+                if len(pids)<MAX_DIAGNOSTIC_PIDS:pids.add(pid)
+                else:pid_count_capped=True
         else:missing_pid+=1
-        is_renderer=renderer_pid is not None and pid==renderer_pid
+        is_renderer=renderer_pid is not None and type(pid) is int and pid==renderer_pid
         if is_renderer:renderer_events+=1
         else:other_events+=1
         phase=event.get('ph');phase=phase if isinstance(phase,str) and len(phase)==1 and phase.isalnum() else 'other'
@@ -117,7 +151,32 @@ def inspect_trace(events,renderer_pid,checkpoints):
             bucket(categories,category)
         args=event.get('args');args=args if isinstance(args,dict) else {}
         if event.get('name')=='GlobalMemoryDump' and isinstance(args.get('dump_type'),str):
-            bucket(dump_triggers,args['dump_type'])
+            trigger=args['dump_type']
+            bucket(dump_triggers,trigger if trigger in ('explicitly_triggered','periodic_interval','global_dump','memory_dump') else 'other')
+        if event.get('name')=='GlobalMemoryDump' and phase in ('b','e'):
+            id2=event.get('id2');local=raw_guid(id2.get('local')) if isinstance(id2,dict) and 'local' in id2 else None
+            requested=raw_guid(args.get('dump_guid')) if 'dump_guid' in args else None
+            candidates={value for value in (local,requested) if value in expected}
+            if len(candidates)>1:
+                for value in candidates:request_rows[value]={'valid':False}
+            elif candidates:
+                value=next(iter(candidates));category_values=event.get('cat')
+                category_values=category_values if isinstance(category_values,list) else [category_values]
+                timestamp=event.get('ts');timestamp_valid=type(timestamp) in (int,float) and math.isfinite(timestamp) and timestamp>=0
+                pid=event.get('pid');pid_valid=type(pid) is int and pid>0
+                if phase=='b':
+                    valid=local==requested==value and len(candidates)==1 and pid_valid and timestamp_valid and \
+                        'disabled-by-default-memory-infra' in category_values and args.get('dump_type')=='explicitly_triggered' and \
+                        args.get('success') is True and args.get('level_of_detail')=='detailed'
+                    if value in request_rows:request_rows[value]['valid']=False
+                    else:request_rows[value]={'pid':pid,'start':timestamp if timestamp_valid else None,'end':None,'valid':valid}
+                else:
+                    request=request_rows.get(value);valid=request is not None and request.get('valid') is True and \
+                        request.get('pid')==pid and timestamp_valid and 'disabled-by-default-memory-infra' in category_values and \
+                        request.get('start') is not None and timestamp>request['start'] and request.get('end') is None
+                    if request is None:request_rows[value]={'valid':False}
+                    elif not valid:request['valid']=False
+                    else:request['end']=timestamp
         if phase=='M' and event.get('name')=='process_name':
             metadata+=1
             if is_renderer:
@@ -134,11 +193,12 @@ def inspect_trace(events,renderer_pid,checkpoints):
         has_id='id' in event;id2=event.get('id2');has_global=isinstance(id2,dict) and 'global' in id2
         form='both' if has_id and has_global else 'id' if has_id else 'id2.global' if has_global else 'missing'
         bucket(guid_forms,form)
+        if 'id2' in event and not isinstance(id2,dict):dump_bad_guid+=1
         values=[]
         if has_id:values.append(guid_value(event.get('id')))
         if has_global:values.append(guid_value(id2.get('global')))
         valid_values=[value for value in values if value is not None]
-        if values and not valid_values:dump_bad_guid+=1
+        if values and len(valid_values)!=len(values):dump_bad_guid+=1
         if has_id and has_global and len(valid_values)==2 and valid_values[0]!=valid_values[1]:dump_bad_guid+=1
         current=set(valid_values).intersection(expected)
         if len(current)>1:dump_bad_guid+=1
@@ -146,6 +206,11 @@ def inspect_trace(events,renderer_pid,checkpoints):
             if value in matched:duplicate_matches+=1
             matched.add(value)
             (renderer_matched if is_renderer else other_matched).add(value)
+            if is_renderer:
+                ts=event.get('ts')
+                valid_ts=type(ts) in (int,float) and math.isfinite(ts) and ts>=0
+                if value not in renderer_dump_timestamps:renderer_dump_timestamps[value]=ts if valid_ts else None
+                elif not valid_ts or renderer_dump_timestamps[value]!=ts:renderer_dump_timestamps[value]=None
         if current:matched_events+=1
         if not current:unmatched+=1
         ts=event.get('ts')
@@ -158,6 +223,10 @@ def inspect_trace(events,renderer_pid,checkpoints):
         if isinstance(heaps,dict):
             heaps_present+=1
             if is_renderer:heaps_renderer+=1
+            if _heaps_v2_shape_valid(heaps):
+                if renderer_pid is None or type(pid) is not int or pid<=0:heaps_valid_unknown+=1
+                elif is_renderer:heaps_valid_renderer+=1
+                else:heaps_valid_other+=1
             if current:heaps_matched+=1
             version=heaps.get('version');version=str(version) if type(version) in (int,str) else 'other'
             if version not in ('1','2'):version='other'
@@ -179,21 +248,25 @@ def inspect_trace(events,renderer_pid,checkpoints):
         allocators=dumps.get('allocators')
         if isinstance(allocators,dict):allocator_stats+=len(allocators)
     expected_count=len(set(checkpoint_guids))
-    return {'scope':'sanitized_counts_only','events':total,'distinctPidCount':len(pids),
-        'eventsByProcess':{'renderer':renderer_events,'other':other_events,'missingPid':missing_pid,
-            'otherPidEventCounts':sorted((count for pid,count in pid_counts.items() if pid!=renderer_pid),reverse=True)},
+    valid_request_matches=sum(1 for value,request in request_rows.items() if request.get('valid') is True and
+        request.get('end') is not None and renderer_dump_timestamps.get(value) is not None and
+        request['start']<=renderer_dump_timestamps[value]<=request['end'])
+    return {'scope':'sanitized_counts_only','events':total,'distinctPidCount':len(pids),'distinctPidCountCapped':pid_count_capped,
+        'eventsByProcess':{'renderer':renderer_events,'other':other_events,'missingPid':missing_pid},
         'eventsByPhase':dict(sorted(phases.items())),'eventsByName':dict(sorted(names.items())),
         'eventsByCategory':dict(sorted(categories.items())),'dumpTriggerTypes':dict(sorted(dump_triggers.items())),
         'processNameMetadata':{'all':metadata,'renderer':renderer_metadata,'roles':dict(sorted(roles.items()))},
         'dumpEvents':{'renderer':dump_renderer,'otherProcess':dump_other,'guidForms':guid_forms,'guidValueTypes':guid_types,
             'checkpointGuidsExpected':expected_count,'checkpointGuidsMatched':len(matched),
             'rendererCheckpointGuidsMatched':len(renderer_matched),'otherProcessCheckpointGuidsMatched':len(other_matched),
+            'validRequestCheckpointGuidsMatchedRenderer':valid_request_matches,
             'checkpointMatchEvents':matched_events,'repeatedGuidEventReferences':duplicate_matches,
-            'checkpointReceiptGuidsUnique':len(set(checkpoint_guids))==len(checkpoint_guids),
+            'checkpointReceiptGuidsUnique':checkpoint_count==len(checkpoint_guids) and len(set(checkpoint_guids))==len(checkpoint_guids),
             'unmatched':unmatched,'invalidGuid':dump_bad_guid,'discardedByStrictShape':discarded,
             'timestampsValid':dump_timestamps,'timestampsMonotonicInStream':dump_order_valid},
         'heapsV2':{'eventsPresent':heaps_present,'rendererEvents':heaps_renderer,'checkpointMatches':heaps_matched,
             'checkpointMatchesMissing':heaps_matched_missing,'schemaVersions':dict(sorted(heaps_versions.items())),
+            'validStructuresByProcess':{'renderer':heaps_valid_renderer,'other':heaps_valid_other,'undetermined':heaps_valid_unknown},
             'schemaVersion1WithAllocatorMap':heaps_valid,'allocatorBins':heap_allocators,'validAllocatorArraySets':heap_arrays_valid,
             'dumpAllocatorStats':allocator_stats,
             'dumpEventsWithoutHeapsV2':dump_without_schema}}
