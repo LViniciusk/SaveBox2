@@ -654,6 +654,17 @@ def offline_preflight(wave, source_output):
         '--output-path=../' + OUTPUT + '/tooling/app'], wave.root / 'frontend')
     tests = {'status': 'PASS', 'python': {'status': 'PASS'}, 'node': {'status': 'PASS'},
         'typescript': {'status': 'PASS'}, 'angularBuild': {'status': 'PASS'}, 'native': {'status': 'PASS'}}
+    if tag == 'R16':
+        global_name = f'r12-{tag.lower()}-global-suite'
+        wave.command(global_name, [sys.executable, '-m', 'unittest', 'discover', '-s', 'tools/quality', '-p', 'test_*.py'], wave.root)
+        global_receipt = wave.output / f'pipeline/commands/{global_name}.json'
+        require(global_receipt.is_file(), 'R16_GLOBAL_TESTS_RECEIPT_MISSING')
+        cmd_data = json.loads(global_receipt.read_text(encoding='utf-8'))
+        require(cmd_data.get('exitCode') == 0 and cmd_data.get('status') == 'PASS', 'R16_GLOBAL_TESTS_FAILED')
+        tests['global'] = {
+            'status': 'PASS',
+            'receiptSha256': sha256(global_receipt),
+        }
     wave.save('baseline/tests.json', tests)
     wave.save('baseline/custody-readback.json', readback(Path(json.loads((wave.output / 'baseline/authority-config.local.json').read_text())[
         'AP06_AUTHORITY_ROOT']), json.loads((wave.output / 'baseline/authority-config.local.json').read_text())['identity'], campaign=CAMPAIGN))
@@ -675,6 +686,8 @@ def scan_staged_changes(wave, executable=None):
     require(re.search(r'(?m)^\s*mod\s+github\.com/zricethezav/gitleaks/v8\s+v8\.30\.1\s', version),
         'R12R13_GITLEAKS_VERSION_INVALID')
     changed = wave.git('diff', '--cached', '--name-only', '--diff-filter=ACMRTUXB').splitlines()
+    if not changed:
+        changed = wave.git('diff', 'HEAD^1', 'HEAD', '--name-only', '--diff-filter=ACMRTUXB').splitlines()
     require(bool(changed), 'R12R13_GITLEAKS_EMPTY_DIFF')
     target = wave.output / 'pipeline/secret-scan-target'
     if target.exists():

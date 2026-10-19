@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / os.environ.get('AP06_EXPERIMENT_ROOT', '.quality/readiness-wave8')
 EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3','readiness-wave11-r3':'r10_r3','readiness-wave12':'r10_r3','readiness-wave12-r2-factorial':'r10_r3','readiness-wave12-r2-native':'r10_r3','readiness-wave12-r3-factorial':'r10_r3','readiness-wave12-r3-native':'r10_r3','readiness-wave12-r4-factorial':'r10_r3','readiness-wave12-r4-native':'r10_r3','readiness-wave12-r5-factorial':'r10_r3','readiness-wave12-r5-native':'r10_r3','readiness-wave12-r6-factorial':'r10_r3','readiness-wave12-r6-native':'r10_r3','readiness-wave12-r7-factorial':'r10_r3','readiness-wave12-r7-native':'r10_r3','readiness-wave12-r8-factorial':'r10_r3','readiness-wave12-r9-factorial':'r10_r3','readiness-wave12-r9-native':'r10_r3','readiness-wave12-r10-factorial':'r10_r3','readiness-wave12-r10-native':'r10_r3','readiness-wave12-r11-factorial':'r10_r3','readiness-wave12-r11-native':'r10_r3',
     'readiness-wave12-r8-native':'r10_r3','readiness-wave12-r12-factorial':'r10_r3','readiness-wave12-r12-native':'r10_r3',
-    'readiness-wave12-r13-native':'r10_r3','readiness-wave12-r14-native':'r10_r3'}.get(OUTPUT.name,'r8')
+    'readiness-wave12-r13-native':'r10_r3','readiness-wave12-r14-native':'r10_r3',
+    'readiness-wave12-r16-native':'r10_r3'}.get(OUTPUT.name,'r8')
 R3 = EXPERIMENT_ID == 'r10_r3'
 BACKEND_PORT, APP_PORT = 42187, 42088
 SPOOF_CLIENTS = ('127.0.0.2','127.0.0.3')
@@ -249,7 +250,7 @@ def serve():
         free_port(port)
     else:
         runtime, storage, identity, env, port, database, password = create_runtime()
-        if OUTPUT.name.startswith(('readiness-wave12-r5-','readiness-wave12-r6-','readiness-wave12-r7-','readiness-wave12-r8-','readiness-wave12-r9-','readiness-wave12-r13-','readiness-wave12-r14-')):
+        if OUTPUT.name.startswith(('readiness-wave12-r5-','readiness-wave12-r6-','readiness-wave12-r7-','readiness-wave12-r8-','readiness-wave12-r9-','readiness-wave12-r13-','readiness-wave12-r14-','readiness-wave12-r16-')):
             save(OUTPUT/'pipeline/fixture-account-cleanup.json',{'status':'NOT_RUN','accountsRequested':0,'accountsCleaned':0,
                 'removedFiles':0,'failureClass':None})
     pgdata = runtime/'pg'; pwfile = runtime/'pg-password'
@@ -322,7 +323,7 @@ def serve():
             'postgresPid':int((pgdata/'postmaster.pid').read_text().splitlines()[0]), 'database':database,
             'backendOrigin':config['backendOrigin'],'appOrigin':f'http://127.0.0.1:{APP_PORT}', 'isolated':True,
             'resumedExistingOwnedCluster':resume})
-        if OUTPUT.name.startswith(('readiness-wave12-r9-','readiness-wave12-r10-','readiness-wave12-r11-','readiness-wave12-r12-','readiness-wave12-r13-','readiness-wave12-r14-')):
+        if OUTPUT.name.startswith(('readiness-wave12-r9-','readiness-wave12-r10-','readiness-wave12-r11-','readiness-wave12-r12-','readiness-wave12-r13-','readiness-wave12-r14-','readiness-wave12-r16-')):
             record_runtime_isolation(config,json.loads((OUTPUT/'pipeline/backend-live.json').read_text()))
         print('R8 native backend/PostgreSQL READY',flush=True)
         stop = OUTPUT/'pipeline/stop-backend.request'
