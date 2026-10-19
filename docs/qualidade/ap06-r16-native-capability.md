@@ -36,8 +36,7 @@ Esse mecanismo revelou-se sobre-engenharia desnecessária para conduzir um exper
 | **Scripts Node Exclusivos** | `verify_scientific_authorization.mjs` (384 linhas) e `sign_test_authorization.mjs` (57 linhas). | **Excluídos do repositório** via `git rm` (0 arquivos, 0 linhas). |
 | **Parâmetros da CLI** | `--authorization <path>` e `--trust-anchor <path>` obrigatórios. | **Removidos.** Apenas `--run-capability --source-output <path>`. |
 | **Classificação de Preflight** | `R16_ENGINEERING_READY_AWAITING_AUTHORIZATION` | `R16_ENGINEERING_READY_FOR_CAPABILITY` |
-| **Campos de Inspeção** | `scientificAuthorizationPresent`, `authorizationVerified` | **Removidos.** Preflight verifica exclusivamente sanidade ambiental e binários. |
-| **Lock de Concorrência** | Verificação em Node acoplada com lock atômico em Python. | Lock nativo exclusivo e atômico da plataforma (`execution_lock`) em Python. |
+| **Lock de Concorrência** | Verificação com JSON, PID e exclusão de arquivo (`unlink`). | Lock nativo não bloqueante gerenciado pelo kernel do SO (`msvcrt.locking` / `fcntl.flock`) sem `unlink()` nem verificação de PID. |
 | **Orçamento Científico** | Orçamento validado em dois parsers (Python e Node). | Orçamento estrito verificado no runner Python (`R16_BUDGET`). |
 
 ---
@@ -134,6 +133,13 @@ A simplificação radical removeu exclusivamente o arcabouço criptográfico, ma
 6. **Cleanup de Processos e Serviços:**
    - Parada forçada e verificação de encerramento de servidores backend e processos órfãos (`stop_and_verify_backend_cleanup`).
    - Cleanup não comprovado impede a emissão de decisão `PASS`.
+7. **Lock de Execução Gerenciado pelo Sistema Operacional (`execution_lock`):**
+   - Exclusão mútua não bloqueante gerida pelo kernel do sistema operacional:
+     - **Windows:** `msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)` e liberação via `msvcrt.LK_UNLCK`.
+     - **Linux/POSIX:** `fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)` e liberação via `fcntl.LOCK_UN`.
+   - Eliminação integral de arquivos de estado em JSON, verificações de PID via `OpenProcess`/`os.kill()`, e chamadas a `unlink()`.
+   - A permanência de `pipeline/.execution.lock` em disco é o comportamento esperado; a autoridade de exclusão pertence ao kernel.
+   - Liberação automática pelo kernel em caso de encerramento abrupto (crash ou `proc.kill()`), permitindo aquisição imediata por invocações subsequentes sem intervenção manual.
 
 ---
 
@@ -165,9 +171,9 @@ A suíte `tools/quality/test_ap06_r12_r16.py` foi reorganizada para eliminar os 
 | **Caso 20** | Freeze estrito | Gate `global: PASS` obrigatório na R16 (rejeita `DOCUMENTED_EXCEPTION`) | **PASS** |
 | **Caso 21** | Integração sintética E2E | Mock CDP → trace → validate → decision → readback com integridade | **PASS** |
 | **Caso 22** | 8 Cenários do Produtor Node | Integração de `NativeTrace` real com CDP mock em 8 fluxos contratuais | **PASS** |
-| **Caso 23** | Concorrência com lock ativo | Rejeição de invocação concorrente via `R16_CONCURRENT_INVOCATION_REJECTED` | **PASS** |
+| **Caso 23** | Exclusão mútua e liberação normal | Subprocessos reais (`subprocess.Popen`) comprovam mútua exclusão (`R16_CONCURRENT_INVOCATION_REJECTED`), liberação normal, persistência do lock em disco e tratamento seguro de erros de IO | **PASS** |
 | **Caso 24** | Estado científico preexistente | Distinção entre preflight bloqueado e consumo científico não verificado | **PASS** |
-| **Caso 25** | Mútua exclusão concorrente | Dois fluxos simultâneos competindo pelo lock atômico respeitam exclusão mútua | **PASS** |
+| **Caso 25** | Recuperação de crash e disputa simultânea | Encerramento abrupto de subprocesso com `proc.kill()` libera o lock automaticamente no SO; disputa entre 3 subprocessos com barreira admite exatamente um vencedor; reserva persistida impede reexecução científica | **PASS** |
 
 ---
 

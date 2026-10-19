@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from types import SimpleNamespace
@@ -139,6 +140,60 @@ def synthetic_receipt(checkpoint_count=4, renderer_pid=42):
                             for i, p in enumerate(phases)]
         }
     }
+
+
+_LOCK_WORKER_CODE = """
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+import run_ap06_r12_r13_native as runner
+
+output_dir = Path(sys.argv[1])
+cmd = sys.argv[2]
+wave = SimpleNamespace(output=output_dir)
+
+if cmd == 'hold':
+    try:
+        with runner.execution_lock(wave):
+            print("ACQUIRED", flush=True)
+            line = sys.stdin.readline()
+            if line.strip() == "RELEASE":
+                sys.exit(0)
+            sys.exit(1)
+    except runner.NativeContractFailure as e:
+        print(f"REJECTED:{e.reason}", flush=True)
+        sys.exit(42)
+    except Exception as e:
+        print(f"ERROR:{type(e).__name__}", flush=True)
+        sys.exit(99)
+
+elif cmd == 'try':
+    try:
+        with runner.execution_lock(wave):
+            print("ACQUIRED", flush=True)
+            sys.exit(0)
+    except runner.NativeContractFailure as e:
+        print(f"REJECTED:{e.reason}", flush=True)
+        sys.exit(42)
+    except Exception as e:
+        print(f"ERROR:{type(e).__name__}", flush=True)
+        sys.exit(99)
+
+elif cmd == 'barrier':
+    sys.stdin.readline()
+    try:
+        with runner.execution_lock(wave):
+            print("ACQUIRED", flush=True)
+            import time
+            time.sleep(0.3)
+            sys.exit(0)
+    except runner.NativeContractFailure as e:
+        print(f"REJECTED:{e.reason}", flush=True)
+        sys.exit(42)
+    except Exception as e:
+        print(f"ERROR:{type(e).__name__}", flush=True)
+        sys.exit(99)
+"""
 
 
 class TestAp06R16ControlledCapability(unittest.TestCase):
@@ -791,20 +846,114 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    # Caso 23: Proteção contra invocações concorrentes (execution_lock)
-    def test_case_23_concurrent_invocation_protection(self):
+    # Caso 23: Exclusão mútua entre processos, liberação normal e segurança de erros (Cenários A, B, E)
+    def test_case_23_process_mutual_exclusion_and_normal_release(self):
+        tools_dir = Path(__file__).resolve().parent
+        env = os.environ.copy()
+        env['PYTHONPATH'] = str(tools_dir) + os.pathsep + env.get('PYTHONPATH', '')
+        env['PYTHONUNBUFFERED'] = '1'
+
         lock_file = self.output / 'pipeline/.execution.lock'
-        lock_file.parent.mkdir(parents=True, exist_ok=True)
-        # Create simulated active lock holding our own PID
-        lock_file.write_text(json.dumps({'pid': os.getpid(), 'timestamp': time.time()}))
+        self.assertFalse(lock_file.exists())
+        procs_to_cleanup = []
 
         try:
-            with self.assertRaises(runner.NativeContractFailure) as cm:
-                r16.run_capability(self.wave, self.base / 'source')
-            self.assertEqual(cm.exception.reason, 'R16_CONCURRENT_INVOCATION_REJECTED')
+            # --- Cenário A: Exclusão entre processos ---
+            # 1. Processo A abre e adquire o lock
+            proc_a = subprocess.Popen(
+                [sys.executable, '-c', _LOCK_WORKER_CODE, str(self.output), 'hold'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, env=env
+            )
+            procs_to_cleanup.append(proc_a)
+
+            # 2. A confirma a aquisição por um sinal observável
+            line = proc_a.stdout.readline().strip()
+            self.assertEqual(line, 'ACQUIRED')
+            self.assertTrue(lock_file.exists())
+
+            # 3. Processo B tenta adquirir o mesmo lock
+            proc_b = subprocess.Popen(
+                [sys.executable, '-c', _LOCK_WORKER_CODE, str(self.output), 'try'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, env=env
+            )
+            procs_to_cleanup.append(proc_b)
+            out_b, _ = proc_b.communicate(timeout=10)
+
+            # 4. B recebe R16_CONCURRENT_INVOCATION_REJECTED
+            self.assertEqual(proc_b.returncode, 42)
+            self.assertIn('REJECTED:R16_CONCURRENT_INVOCATION_REJECTED', out_b)
+
+            # 5. B não entra na seção crítica
+            self.assertNotIn('ACQUIRED', out_b)
+
+            # 6. A permanece com a posse até ser liberado
+            self.assertIsNone(proc_a.poll())
+
+            # --- Cenário B: Liberação normal ---
+            # 1. A libera o lock e encerra
+            proc_a.stdin.write('RELEASE\n')
+            proc_a.stdin.flush()
+            proc_a.communicate(timeout=10)
+            self.assertEqual(proc_a.returncode, 0)
+
+            # 2. Outro processo adquire o mesmo arquivo com sucesso
+            proc_c = subprocess.Popen(
+                [sys.executable, '-c', _LOCK_WORKER_CODE, str(self.output), 'try'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, env=env
+            )
+            procs_to_cleanup.append(proc_c)
+            out_c, _ = proc_c.communicate(timeout=10)
+            self.assertEqual(proc_c.returncode, 0)
+            self.assertIn('ACQUIRED', out_c)
+
+            # 3. Confirmar que .execution.lock continua existindo
+            self.assertTrue(lock_file.exists())
+
+            # 4. Confirmar ausência de processos remanescentes
+            for p in (proc_a, proc_b, proc_c):
+                self.assertIsNotNone(p.poll())
+
+            # --- Cenário E: Erros e recuperação ---
+            # Erro dentro do bloco protegido deve liberar o lock
+            try:
+                with runner.execution_lock(self.wave):
+                    raise RuntimeError("simulated_protected_failure")
+            except RuntimeError as exc:
+                self.assertEqual(str(exc), "simulated_protected_failure")
+
+            # Tentativa posterior válida adquire e libera com sucesso
+            with runner.execution_lock(self.wave):
+                pass
+            self.assertTrue(lock_file.exists())
+
+            # Falha de abertura (ex: lock_file como diretório) não relata sucesso
+            # e levanta OSError em vez de NativeContractFailure
+            sub_td = tempfile.mkdtemp(dir=str(self.base))
+            err_output = Path(sub_td)
+            fake_lock_dir = err_output / 'pipeline/.execution.lock'
+            fake_lock_dir.mkdir(parents=True, exist_ok=True)
+            err_wave = SimpleNamespace(output=err_output)
+            with self.assertRaises(OSError) as ctx:
+                with runner.execution_lock(err_wave):
+                    pass
+            self.assertNotIsInstance(ctx.exception, runner.NativeContractFailure)
         finally:
-            if lock_file.exists():
-                lock_file.unlink()
+            for p in procs_to_cleanup:
+                for pipe in (p.stdin, p.stdout, p.stderr):
+                    if pipe and not pipe.closed:
+                        try:
+                            pipe.close()
+                        except Exception:
+                            pass
+                if p.poll() is None:
+                    try:
+                        p.kill()
+                        p.wait(timeout=5)
+                    except Exception:
+                        pass
 
     # Caso 24: Estado científico existente distinguido de erro de pré-lançamento
     def test_case_24_existing_scientific_state_distinguished_from_prelaunch(self):
@@ -834,39 +983,120 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
         self.assertFalse(rep['newLaunchPerformed'])
         self.assertEqual(rep['scientificChromium'], 'UNVERIFIED')
 
-    # Caso 25: Concorrência mútua entre dois fluxos reais (execution_lock)
-    def test_case_25_concurrency_two_flows_mutual_exclusion(self):
-        import queue
-        import threading
+    # Caso 25: Recuperação de crash, disputa simultânea e irreversibilidade científica (Cenários C, D, F)
+    def test_case_25_crash_recovery_and_simultaneous_contention(self):
+        tools_dir = Path(__file__).resolve().parent
+        env = os.environ.copy()
+        env['PYTHONPATH'] = str(tools_dir) + os.pathsep + env.get('PYTHONPATH', '')
+        env['PYTHONUNBUFFERED'] = '1'
+
         lock_file = self.output / 'pipeline/.execution.lock'
-        self.assertFalse(lock_file.exists())
+        procs_to_cleanup = []
 
-        started_evt = threading.Event()
-        stop_evt = threading.Event()
-        res_queue = queue.Queue()
+        try:
+            # --- Cenário C: Recuperação após crash ---
+            # 1. A adquire o lock
+            proc_a = subprocess.Popen(
+                [sys.executable, '-c', _LOCK_WORKER_CODE, str(self.output), 'hold'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, env=env
+            )
+            procs_to_cleanup.append(proc_a)
+            line = proc_a.stdout.readline().strip()
+            self.assertEqual(line, 'ACQUIRED')
+            self.assertTrue(lock_file.exists())
 
-        def lock_holder():
-            try:
-                with runner.execution_lock(self.wave):
-                    started_evt.set()
-                    stop_evt.wait(timeout=5)
-                res_queue.put(('success', None))
-            except Exception as e:
-                res_queue.put(('error', str(e)))
+            # 2. O processo pai encerra A abruptamente com kill()
+            proc_a.kill()
+            # 3. Após wait(), B tenta adquirir o lock
+            proc_a.wait(timeout=5)
+            self.assertIsNotNone(proc_a.poll())
+            for pipe in (proc_a.stdin, proc_a.stdout, proc_a.stderr):
+                if pipe and not pipe.closed:
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
 
-        t = threading.Thread(target=lock_holder)
-        t.start()
-        self.assertTrue(started_evt.wait(timeout=5))
+            # 4. B obtém posse sem excluir, substituir ou recriar o arquivo
+            proc_b = subprocess.Popen(
+                [sys.executable, '-c', _LOCK_WORKER_CODE, str(self.output), 'try'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, env=env
+            )
+            procs_to_cleanup.append(proc_b)
+            out_b, _ = proc_b.communicate(timeout=10)
+            self.assertEqual(proc_b.returncode, 0)
+            self.assertIn('ACQUIRED', out_b)
 
-        # While first thread holds execution_lock, second invocation must be rejected
-        with self.assertRaises(runner.NativeContractFailure) as cm:
+            # 5. Nenhum PID é consultado, arquivo permanece no disco
+            self.assertTrue(lock_file.exists())
+
+            # --- Cenário D: Disputa simultânea ---
+            # Iniciar 3 subprocessos competindo pelo mesmo caminho, liberados por uma barreira
+            sim_procs = [
+                subprocess.Popen(
+                    [sys.executable, '-c', _LOCK_WORKER_CODE, str(self.output), 'barrier'],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    text=True, env=env
+                )
+                for _ in range(3)
+            ]
+            procs_to_cleanup.extend(sim_procs)
+
+            for p in sim_procs:
+                p.stdin.write('GO\n')
+                p.stdin.flush()
+
+            results = []
+            for p in sim_procs:
+                out, _ = p.communicate(timeout=15)
+                results.append((p.returncode, out.strip()))
+
+            acquired_count = sum(1 for code, out in results if code == 0 and 'ACQUIRED' in out)
+            rejected_count = sum(1 for code, out in results if code == 42 and 'REJECTED:R16_CONCURRENT_INVOCATION_REJECTED' in out)
+
+            # Exatamente um entra na seção crítica por vez; os demais são rejeitados
+            self.assertEqual(acquired_count, 1)
+            self.assertEqual(rejected_count, 2)
+            self.assertTrue(lock_file.exists())
+
+            # --- Cenário F: Irreversibilidade científica ---
+            # Criar uma reserva científica sintética já persistida em disco
+            reservation_file = self.output / 'pipeline/capability-reservation.json'
+            reservation_file.parent.mkdir(parents=True, exist_ok=True)
+            reservation_file.write_text(json.dumps({
+                'campaign': CAMPAIGN,
+                'maximum': 1,
+                'retries': 0,
+                'implementationHead': 'a' * 40,
+            }), encoding='utf-8')
+
+            # Demonstrar que mesmo com o lock completamente livre, a reserva durável impede repetir a capability
+            with self.assertRaises(ValueError) as cm:
+                r16.run_capability(self.wave, self.base / 'source')
+            self.assertIn('NATIVE_NO_RETRY_OR_RESUME', str(cm.exception))
+
+            # Confirmar que o lock foi adquirido e liberado normalmente sem travar o arquivo
             with runner.execution_lock(self.wave):
                 pass
-        self.assertEqual(cm.exception.reason, 'R16_CONCURRENT_INVOCATION_REJECTED')
+            self.assertTrue(lock_file.exists())
 
-        stop_evt.set()
-        t.join(timeout=5)
-        self.assertFalse(lock_file.exists())
+        finally:
+            for p in procs_to_cleanup:
+                for pipe in (p.stdin, p.stdout, p.stderr):
+                    if pipe and not pipe.closed:
+                        try:
+                            pipe.close()
+                        except Exception:
+                            pass
+                if p.poll() is None:
+                    try:
+                        p.kill()
+                        p.wait(timeout=5)
+                    except Exception:
+                        pass
+
 
 
 if __name__ == '__main__':
