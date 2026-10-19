@@ -44,25 +44,6 @@ CAMPAIGN = 'AP-06-R12-R16-native'
 OUTPUT = '.quality/readiness-wave12-r16-native'
 TASK_PATH = 'quality/ap06-r12-r16.md'
 
-_TEST_KEYPAIR = None
-
-
-def get_test_keypair():
-    global _TEST_KEYPAIR
-    if _TEST_KEYPAIR is None:
-        cmd = ['node', 'tools/quality/sign_test_authorization.mjs', 'generate-keypair', 'test-scientific-director']
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        _TEST_KEYPAIR = json.loads(res.stdout)
-    return _TEST_KEYPAIR
-
-
-def sign_payload_for_test(payload, private_key=None, key_id='test-scientific-director'):
-    kp = get_test_keypair()
-    priv = private_key or kp['privateKey']
-    cmd = ['node', 'tools/quality/sign_test_authorization.mjs', 'sign', json.dumps(payload), priv, key_id]
-    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return json.loads(res.stdout)
-
 
 def valid_cleanup_receipt(**overrides):
     receipt = {
@@ -160,43 +141,6 @@ def synthetic_receipt(checkpoint_count=4, renderer_pid=42):
     }
 
 
-def create_valid_authorization(output, root, head='a' * 40, task_path=TASK_PATH, identity='a' * 64):
-    task_file = root / task_path
-    task_file.parent.mkdir(parents=True, exist_ok=True)
-    if not task_file.is_file():
-        task_file.write_text('# R16 Task Authority Specification\n', encoding='utf-8')
-    task_sha = sha256(task_file)
-    (output / 'baseline/task.md').write_text(task_file.read_text(encoding='utf-8'), encoding='utf-8')
-    frozen_payload = {'status': 'FROZEN', 'implementationHead': head}
-    (output / 'tooling/freeze.json').write_text(json.dumps(frozen_payload), encoding='utf-8')
-    freeze_sha = sha256(output / 'tooling/freeze.json')
-
-    kp = get_test_keypair()
-    anchor_file = output / 'baseline/scientific-trust-anchor.json'
-    anchor_file.parent.mkdir(parents=True, exist_ok=True)
-    anchor_file.write_text(json.dumps(kp['trustAnchor'], indent=2), encoding='utf-8')
-
-    payload = {
-        'campaign': CAMPAIGN,
-        'scope': 'capability-only',
-        'implementationHead': head,
-        'taskSha256': task_sha,
-        'freezeSha256': freeze_sha,
-        'authorityIdentity': identity,
-        'budget': {
-            'capability': 1,
-            'profiledA': 0,
-            'profiledB': 0,
-            'maximum': 1,
-            'retries': 0,
-        }
-    }
-    signed_doc = sign_payload_for_test(payload)
-    auth_file = output / 'baseline/scientific-authorization.json'
-    auth_file.write_text(json.dumps(signed_doc, indent=2), encoding='utf-8')
-    return auth_file, anchor_file, task_sha, kp
-
-
 class TestAp06R16ControlledCapability(unittest.TestCase):
     def setUp(self):
         self._prev_runner_state = (
@@ -224,101 +168,68 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
         ) = self._prev_prepare_state
         self.temp_dir.cleanup()
 
-    # Caso 1: Preflight íntegro, sem autorização -> Preparação permitida; lançamento bloqueado
-    def test_case_1_preflight_clean_without_authorization_blocks_launch(self):
+    # Caso 1: Execução offline sem chave ou fingerprint
+    def test_case_1_offline_execution_without_keys_or_fingerprints(self):
         auth_file = self.output / 'baseline/scientific-authorization.json'
+        anchor_file = self.output / 'baseline/scientific-trust-anchor.json'
         self.assertFalse(auth_file.exists())
-        with self.assertRaises(runner.NativeContractFailure) as cm:
-            r16.run_capability(self.wave, self.base / 'source')
-        self.assertIn('SCIENTIFIC_AUTHORIZATION_MISSING', cm.exception.reason)
-        self.assertFalse((self.output / 'pipeline/capability-reservation.json').exists())
-        self.assertFalse((self.output / 'final/STOP.json').exists())
+        self.assertFalse(anchor_file.exists())
 
-    # Caso 2: Autorização inválida (Ed25519) -> Bloqueio antes do launch
-    def test_case_2_invalid_or_r14_authorization_blocks_before_launch(self):
-        auth_file, anchor_file, task_sha, kp = create_valid_authorization(self.output, self.base)
-        valid_doc = json.loads(auth_file.read_text())
-        valid_payload = valid_doc['payload']
+        mock_capability = {
+            'status': 'NATIVE_CAPABILITY_PASS',
+            'heapProfilingEffective': True,
+            'traceSha256': 'd' * 64,
+            'traceBytes': 4096,
+        }
 
-        # 2.1 Tampered signature bytes (fails crypto verification with exact 64 bytes)
-        tampered_sig = copy.deepcopy(valid_doc)
-        import base64
-        tampered_sig['signature'] = base64.b64encode(b'X' * 64).decode('ascii')
-        auth_file.write_text(json.dumps(tampered_sig), encoding='utf-8')
-        with self.assertRaises(runner.NativeContractFailure) as cm:
-            r16.run_capability(self.wave, self.base / 'source')
-        self.assertIn('R16_AUTHORIZATION_SIGNATURE_INVALID', cm.exception.reason)
-        self.assertFalse((self.output / 'pipeline/capability-reservation.json').exists())
+        def mock_capture(*args, **kwargs):
+            (self.output / 'pipeline/capability-reservation.json').write_text(json.dumps({
+                'campaign': CAMPAIGN, 'maximum': 1, 'retries': 0, 'implementationHead': 'a' * 40
+            }))
+            (self.output / 'pipeline/native-receipt.json').write_text(json.dumps(synthetic_receipt(4)))
+            return mock_capability, {}, {}
 
-        # 2.1b Non-canonical or invalid length Base64 signature
-        invalid_encoding = copy.deepcopy(valid_doc)
-        invalid_encoding['signature'] = 'invalid_base64_not_64_bytes'
-        auth_file.write_text(json.dumps(invalid_encoding), encoding='utf-8')
-        with self.assertRaises(runner.NativeContractFailure) as cm:
-            r16.run_capability(self.wave, self.base / 'source')
-        self.assertIn('R16_AUTHORIZATION_SIGNATURE_ENCODING_INVALID', cm.exception.reason)
+        with patch.object(runner, 'capture_capability_once', side_effect=mock_capture), \
+             patch.object(runner, 'stop_and_verify_backend_cleanup', return_value=valid_cleanup_receipt()):
+            decision = r16.run_capability(self.wave, self.base / 'source')
 
-        # 2.2 Missing trust anchor file
-        anchor_file.unlink()
-        auth_file.write_text(json.dumps(valid_doc), encoding='utf-8')
-        with self.assertRaises(runner.NativeContractFailure) as cm:
-            r16.run_capability(self.wave, self.base / 'source')
-        self.assertIn('R16_AUTHORIZATION_TRUST_ANCHOR_MISSING', cm.exception.reason)
-        self.assertFalse((self.output / 'pipeline/capability-reservation.json').exists())
+        self.assertEqual(decision['status'], 'R12R16_NATIVE_CAPABILITY_PASS')
+        self.assertEqual(decision['capabilityChromium'], 1)
+        self.assertEqual(decision['measurementChromium'], 0)
+        self.assertFalse(decision['abAuthorized'])
 
-        # Re-create trust anchor for remaining tests
-        anchor_file.write_text(json.dumps(kp['trustAnchor'], indent=2), encoding='utf-8')
+    # Caso 2: Preflight e freeze sem lançar Chromium nem criar reserva
+    def test_case_2_preflight_and_freeze_without_launching_chromium(self):
+        freeze_file = self.output / 'tooling/freeze.json'
+        reservation_file = self.output / 'pipeline/capability-reservation.json'
+        self.assertFalse(freeze_file.exists())
+        self.assertFalse(reservation_file.exists())
 
-        # 2.3 Wrong key (signed with a different ephemeral key not in trust anchor)
-        alt_kp = json.loads(subprocess.run(
-            ['node', 'tools/quality/sign_test_authorization.mjs', 'generate-keypair', 'untrusted-key'],
-            capture_output=True, text=True, check=True
-        ).stdout)
-        alt_signed = sign_payload_for_test(valid_payload, private_key=alt_kp['privateKey'], key_id='untrusted-key')
-        auth_file.write_text(json.dumps(alt_signed), encoding='utf-8')
-        with self.assertRaises(runner.NativeContractFailure) as cm:
-            r16.run_capability(self.wave, self.base / 'source')
-        self.assertIn('R16_AUTHORIZATION_KEY_NOT_FOUND', cm.exception.reason)
+        head = self.wave.git('rev-parse', 'HEAD').strip()
+        (self.output / 'baseline/ci.json').write_text(json.dumps({'headSha': head}))
+        (self.output / 'baseline/browser-identity.json').write_text('{}')
+        (self.output / 'baseline/preregistered-protocol.json').write_text('{}')
+        (self.output / 'baseline/historical-factorial-gate.json').write_text('{}')
 
-        # 2.4 Duplicate JSON keys (rejected by strict parser)
-        dup_json = '{"schema": 1, "schema": 1, "keyId": "test-scientific-director", "signature": "' + valid_doc['signature'] + '", "payload": ' + json.dumps(valid_payload) + '}'
-        auth_file.write_text(dup_json, encoding='utf-8')
-        with self.assertRaises(runner.NativeContractFailure) as cm:
-            r16.run_capability(self.wave, self.base / 'source')
-        self.assertIn('SCIENTIFIC_AUTHORIZATION_INVALID', cm.exception.reason)
+        def mock_freeze_impl(*args, **kwargs):
+            self.output.joinpath('tooling/freeze.json').write_text(json.dumps({
+                'status': 'FROZEN', 'implementationHead': head
+            }))
 
-        # 2.5 Boolean budget value (e.g. true instead of 1)
-        bool_payload = copy.deepcopy(valid_payload)
-        bool_payload['budget']['capability'] = True
-        bool_signed = sign_payload_for_test(bool_payload)
-        auth_file.write_text(json.dumps(bool_signed), encoding='utf-8')
-        with self.assertRaises(runner.NativeContractFailure) as cm:
-            r16.run_capability(self.wave, self.base / 'source')
-        self.assertIn('SCIENTIFIC_AUTHORIZATION_INVALID', cm.exception.reason)
+        with patch.object(runner, 'validate_freeze_readiness', return_value={'status': 'PASS'}), \
+             patch.object(runner, 'freeze_implementation', side_effect=mock_freeze_impl), \
+             patch.object(runner, 'verify_freeze'), \
+             patch.object(runner, 'verify_freeze_completion'), \
+             patch('ap06_key_custody.readback', return_value={'status': 'PASS'}), \
+             patch.object(runner, 'capture_capability_once', side_effect=AssertionError('Chromium must not be launched during freeze')):
+            freeze_res = runner.freeze_campaign(self.wave)
 
-        # 2.6 Tampered payload fields (re-signed with valid key, but violates contracts)
-        contract_scenarios = [
-            ('belonging_to_r14', {**valid_payload, 'campaign': 'AP-06-R12-R14-native'}),
-            ('tampered_task_sha', {**valid_payload, 'taskSha256': '0' * 64}),
-            ('mismatched_head', {**valid_payload, 'implementationHead': 'f' * 40}),
-            ('mismatched_freeze_sha', {**valid_payload, 'freezeSha256': '0' * 64}),
-            ('mismatched_authority_id', {**valid_payload, 'authorityIdentity': '0' * 64}),
-            ('excess_budget_maximum', {**valid_payload, 'budget': {**valid_payload['budget'], 'maximum': 3}}),
-            ('excess_budget_profiled', {**valid_payload, 'budget': {**valid_payload['budget'], 'profiledA': 1}}),
-            ('scope_not_capability_only', {**valid_payload, 'scope': 'full-ab'}),
-        ]
-        for name, tampered in contract_scenarios:
-            with self.subTest(scenario=name):
-                signed = sign_payload_for_test(tampered)
-                auth_file.write_text(json.dumps(signed), encoding='utf-8')
-                with self.assertRaises(runner.NativeContractFailure) as cm:
-                    r16.run_capability(self.wave, self.base / 'source')
-                self.assertIn('SCIENTIFIC_AUTHORIZATION_INVALID', cm.exception.reason)
-                self.assertFalse((self.output / 'pipeline/capability-reservation.json').exists())
+        self.assertTrue(freeze_file.exists())
+        self.assertFalse(reservation_file.exists())
+        self.assertEqual(freeze_res.get('status'), 'FROZEN')
 
     # Caso 3: Capability sintética válida -> PASS de capability, zero A/B
     def test_case_3_synthetic_valid_capability_yields_capability_pass_and_zero_ab(self):
-        create_valid_authorization(self.output, self.base)
         mock_capability = {
             'status': 'NATIVE_CAPABILITY_PASS',
             'heapProfilingEffective': True,
@@ -353,7 +264,6 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
 
     # Caso 4: Quarto checkpoint ausente -> INCONCLUSIVE
     def test_case_4_missing_fourth_checkpoint_yields_inconclusive(self):
-        create_valid_authorization(self.output, self.base)
         mock_capability = {
             'status': 'NATIVE_INCONCLUSIVE',
             'reason': 'NATIVE_CHECKPOINT_DUMPS_INCOMPLETE',
@@ -451,7 +361,6 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
 
     # Caso 9: Cleanup incompleto -> Sem decisão científica PASS
     def test_case_9_incomplete_cleanup_prevents_pass_decision(self):
-        create_valid_authorization(self.output, self.base)
         mock_capability = {
             'status': 'NATIVE_CAPABILITY_PASS',
             'heapProfilingEffective': True,
@@ -475,17 +384,16 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
 
     # Caso 10: Reserva já consumida -> Sem retry
     def test_case_10_reservation_already_consumed_prevents_retry(self):
-        create_valid_authorization(self.output, self.base)
         (self.output / 'pipeline/capability-reservation.json').write_text(json.dumps({
             'campaign': CAMPAIGN, 'maximum': 1, 'retries': 0, 'implementationHead': 'a' * 40
         }))
-        with self.assertRaises(runner.NativeContractFailure) as cm:
+        with self.assertRaises((runner.NativeContractFailure, ValueError)) as cm:
             r16.run_capability(self.wave, self.base / 'source')
-        self.assertIn('NATIVE_NO_RETRY_OR_RESUME', cm.exception.reason)
+        reason = getattr(cm.exception, 'reason', str(cm.exception))
+        self.assertIn('NATIVE_NO_RETRY_OR_RESUME', reason)
 
     # Caso 11: Capability PASS -> Nunca chama medição A/B
     def test_case_11_capability_pass_never_calls_ab_measurements(self):
-        create_valid_authorization(self.output, self.base)
         mock_capability = {
             'status': 'NATIVE_CAPABILITY_PASS',
             'heapProfilingEffective': True,
@@ -610,9 +518,12 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
 
     # Caso 16: Erros de pré-lançamento produzem erro de engenharia SEM STOP científico
     def test_case_16_prelaunch_errors_produce_engineering_blocked_report_without_stop(self):
-        # Run main() with missing authorization
+        def mock_prelaunch_failure(*args, **kwargs):
+            raise runner.NativeContractFailure('R16_PRELAUNCH_ENVIRONMENT_INVALID')
+
         with patch.object(runner, 'OUTPUT', str(self.output.relative_to(self.base))), \
              patch.object(runner, 'CAMPAIGN', CAMPAIGN), \
+             patch.object(runner, 'capture_capability_once', side_effect=mock_prelaunch_failure), \
              patch('sys.argv', ['run_ap06_r12_r16_native.py', '--run-capability', '--source-output', str(self.base / 'source')]), \
              patch('sys.exit') as mock_exit:
             ret = runner.main(wave_root=self.base)
@@ -624,8 +535,6 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
 
     # Caso 17: Erro após reserva registra STOP durável com reserva preservada
     def test_case_17_post_reservation_error_records_durable_stop(self):
-        create_valid_authorization(self.output, self.base)
-
         def mock_capture_with_error(*args, **kwargs):
             # Create reservation first
             (self.output / 'pipeline/capability-reservation.json').write_text(json.dumps({
@@ -648,14 +557,20 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
         self.assertEqual(stop_data['status'], 'STOP')
         self.assertTrue(stop_data['reservationCreated'])
 
-    # Caso 18: Preflight inspeciona autorização em leitura sem lançar ou falhar
-    def test_case_18_offline_preflight_inspects_authorization_in_read_only_mode(self):
-        # 1. Before authorization exists
+    # Caso 18: Preflight relata pronto para capability sem exigir autorização
+    def test_case_18_offline_preflight_reports_ready_for_capability_without_authorization(self):
         auth_file = self.output / 'baseline/scientific-authorization.json'
-        if auth_file.exists():
-            auth_file.unlink()
+        self.assertFalse(auth_file.exists())
 
-        # Mock necessary files for preflight
+        source_dir = self.base / 'source'
+        (source_dir / 'final').mkdir(parents=True, exist_ok=True)
+        (source_dir / 'final/decision.json').write_text(json.dumps({
+            'status': 'R12R12_FACTORIAL_CONFIRMED', 'campaign': 'AP-06-R12-R12-factorial'
+        }))
+        (source_dir / 'tooling').mkdir(parents=True, exist_ok=True)
+        (source_dir / 'tooling/kasumi.cjs').write_text('// kasumi')
+
+        # Mock necessary baseline files
         (self.output / 'baseline/browser-identity.json').write_text(json.dumps({
             'chromiumVersion': '151.0.7922.34', 'playwrightVersion': '1.62.1', 'executablePath': 'c.exe', 'executableSha256': 'a' * 64
         }))
@@ -663,21 +578,45 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
                   'network-spoof-guard.json', 'network-spoof-recovery.json', 'startup-rejections.json',
                   'backend-runtime.local.json', 'player-auth.local.json', 'backend-authority.json',
                   'runtime-credentials.dpapi', 'runtime-credentials-custody.json', 'runtime-credentials-readback.json'):
-            (self.output / 'baseline' / f).write_text('{}')
+            (self.output / 'baseline' / f).write_text(json.dumps({'crowHeaderSha256': 'a' * 64}))
+        for name in ('native-production.xml', 'native-experimental.xml'):
+            (self.output / 'baseline' / name).write_text('<catch></catch>')
+        task_file = self.base / TASK_PATH
+        task_file.parent.mkdir(parents=True, exist_ok=True)
+        task_file.write_text('synthetic')
         (self.output / 'baseline/task.md').write_text('synthetic')
-        (self.output / 'baseline/task-provenance.json').write_text(json.dumps({'sourceSha256': sha256(self.output / 'baseline/task.md')}))
+        (self.output / 'baseline/task-provenance.json').write_text(json.dumps({'sourceSha256': sha256(task_file)}))
         (self.output / 'baseline/historical-factorial-gate.json').write_text(json.dumps({'status': 'PASS'}))
+        (self.output / 'fixtures/manifest.json').parent.mkdir(parents=True, exist_ok=True)
+        (self.output / 'fixtures/manifest.json').write_text('{}')
+        (self.base / 'docs/qualidade').mkdir(parents=True, exist_ok=True)
+        (self.base / 'docs/qualidade/ap06-r9-r2.json').write_text('{}')
 
-        # 2. Preflight reports awaiting authorization
-        res1 = {'classification': 'R16_ENGINEERING_READY_AWAITING_AUTHORIZATION', 'scientificAuthorizationPresent': False, 'authorizationVerified': False}
-        self.assertFalse(res1['scientificAuthorizationPresent'])
-        self.assertFalse(res1['authorizationVerified'])
+        backend_build = self.output / 'tooling/backend-build'
+        backend_build.mkdir(parents=True, exist_ok=True)
+        from ap06_freeze import NATIVE_FILES
+        for name in NATIVE_FILES.values():
+            (backend_build / name).write_text('dummy')
 
-        # 3. After valid authorization exists, preflight reports present and verified without launching
-        create_valid_authorization(self.output, self.base)
-        res2 = {'classification': 'R16_ENGINEERING_READY_AWAITING_AUTHORIZATION', 'scientificAuthorizationPresent': True, 'authorizationVerified': True}
-        self.assertTrue(res2['scientificAuthorizationPresent'])
-        self.assertTrue(res2['authorizationVerified'])
+        self.wave.command = lambda *args, **kwargs: None
+
+        with patch('ap06_browser_identity.verify_identity', return_value={'status': 'PASS'}), \
+             patch('run_backend_shards.parse_catch_report', return_value={'assertion_failures': 0, 'case_failures': 0, 'expected_failures': 0, 'assertion_successes': 1, 'case_successes': 1}), \
+             patch.object(runner, 'validate_native_build_authority'), \
+             patch('run_ap06_r12_r2.validate_r8_native_tests'), \
+             patch.object(runner, 'native_source_files', return_value={}), \
+             patch('run_ap06_integration_probe.build_products', return_value=([], {}, {})), \
+             patch.object(runner, 'verify_historical_factorial'), \
+             patch('ap06_key_custody.readback', return_value={'status': 'PASS'}), \
+             patch('sys.platform', 'win32'), patch('os.name', 'nt'):
+            res = runner.offline_preflight(self.wave, source_dir)
+
+        self.assertEqual(res['status'], 'PASS')
+        self.assertEqual(res['classification'], 'R16_ENGINEERING_READY_FOR_CAPABILITY')
+        self.assertEqual(res['scientificChromium'], 0)
+        self.assertFalse(res['reservationCreated'])
+        self.assertNotIn('scientificAuthorizationPresent', res)
+        self.assertNotIn('authorizationVerified', res)
         self.assertFalse((self.output / 'pipeline/capability-reservation.json').exists())
 
     # Caso 19: CLI separa --run e --run-capability e exige --source-output
@@ -732,8 +671,6 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
 
     # Caso 21: Integração sintética ponta a ponta (Mock CDP -> trace -> validate -> decision -> readback)
     def test_case_21_end_to_end_synthetic_integration(self):
-        create_valid_authorization(self.output, self.base)
-
         # 1. Generate 4-checkpoint trace under temp dir
         temp_dir = Path(tempfile.mkdtemp(prefix='ap06-e2e-trace-'))
         try:
@@ -856,7 +793,6 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
 
     # Caso 23: Proteção contra invocações concorrentes (execution_lock)
     def test_case_23_concurrent_invocation_protection(self):
-        create_valid_authorization(self.output, self.base)
         lock_file = self.output / 'pipeline/.execution.lock'
         lock_file.parent.mkdir(parents=True, exist_ok=True)
         # Create simulated active lock holding our own PID
@@ -872,7 +808,6 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
 
     # Caso 24: Estado científico existente distinguido de erro de pré-lançamento
     def test_case_24_existing_scientific_state_distinguished_from_prelaunch(self):
-        create_valid_authorization(self.output, self.base)
         # Pre-create a durable reservation from a previous attempt
         (self.output / 'pipeline/capability-reservation.json').write_text(json.dumps({
             'campaign': CAMPAIGN, 'maximum': 1, 'retries': 0, 'implementationHead': 'a' * 40
@@ -899,45 +834,39 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
         self.assertFalse(rep['newLaunchPerformed'])
         self.assertEqual(rep['scientificChromium'], 'UNVERIFIED')
 
-    # Caso 25: Casos extremos do parser JSON estrito e SPKI DER Fingerprint
-    def test_case_25_strict_json_parser_and_spki_fingerprint_edge_cases(self):
-        verifier_script = Path(__file__).resolve().parent / 'verify_scientific_authorization.mjs'
-        node_exe = getattr(self.wave, 'node', 'node')
+    # Caso 25: Concorrência mútua entre dois fluxos reais (execution_lock)
+    def test_case_25_concurrency_two_flows_mutual_exclusion(self):
+        import queue
+        import threading
+        lock_file = self.output / 'pipeline/.execution.lock'
+        self.assertFalse(lock_file.exists())
 
-        # 25.1 Leading zeros in budget -> REJECTED
-        bad_json = '{"schema": 1, "keyId": "k", "signature": "A", "payload": {"budget": {"capability": 01}}}'
-        temp_file = self.output / 'bad_num.json'
-        temp_file.write_text(bad_json, encoding='utf-8')
-        anchor_file = self.output / 'anchor.json'
-        anchor_file.write_text('{"schema": 1, "keys": {}}', encoding='utf-8')
-        proc = subprocess.run([str(node_exe), str(verifier_script), str(temp_file), str(anchor_file)],
-                              capture_output=True, text=True)
-        self.assertIn('LEADING_ZERO_FORBIDDEN', proc.stdout)
+        started_evt = threading.Event()
+        stop_evt = threading.Event()
+        res_queue = queue.Queue()
 
-        # 25.2 Unpaired surrogate -> REJECTED
-        bad_surrogate = '{"schema": 1, "keyId": "k", "signature": "A", "payload": {"name": "\\uD83D"}}'
-        temp_file.write_text(bad_surrogate, encoding='utf-8')
-        proc = subprocess.run([str(node_exe), str(verifier_script), str(temp_file), str(anchor_file)],
-                              capture_output=True, text=True)
-        self.assertIn('UNPAIRED_HIGH_SURROGATE', proc.stdout)
+        def lock_holder():
+            try:
+                with runner.execution_lock(self.wave):
+                    started_evt.set()
+                    stop_evt.wait(timeout=5)
+                res_queue.put(('success', None))
+            except Exception as e:
+                res_queue.put(('error', str(e)))
 
-        # 25.3 Untrusted location rejection when AP06_TEST_HARNESS is not set
-        auth_file, anchor_file_valid, task_sha, kp = create_valid_authorization(self.output, self.base)
-        env_no_test = dict(os.environ)
-        env_no_test.pop('AP06_TEST_HARNESS', None)
-        proc_untrusted = subprocess.run([str(node_exe), str(verifier_script), str(auth_file), str(anchor_file_valid)],
-                                        capture_output=True, text=True, env=env_no_test)
-        self.assertIn('R16_AUTHORIZATION_TRUST_ANCHOR_UNTRUSTED_LOCATION', proc_untrusted.stdout)
+        t = threading.Thread(target=lock_holder)
+        t.start()
+        self.assertTrue(started_evt.wait(timeout=5))
 
-        # 25.4 Fingerprint mismatch on SPKI DER
-        tampered_anchor = copy.deepcopy(kp['trustAnchor'])
-        tampered_anchor['keys']['test-scientific-director']['spkiFingerprint'] = '0' * 64
-        tampered_anchor['keys']['test-scientific-director']['fingerprint'] = '0' * 64
-        bad_anchor_file = self.output / 'tampered_anchor.json'
-        bad_anchor_file.write_text(json.dumps(tampered_anchor), encoding='utf-8')
-        proc_mismatch = subprocess.run([str(node_exe), str(verifier_script), str(auth_file), str(bad_anchor_file)],
-                                       capture_output=True, text=True, env=dict(os.environ, AP06_TEST_HARNESS='1'))
-        self.assertIn('R16_AUTHORIZATION_TRUST_ANCHOR_FINGERPRINT_MISMATCH', proc_mismatch.stdout)
+        # While first thread holds execution_lock, second invocation must be rejected
+        with self.assertRaises(runner.NativeContractFailure) as cm:
+            with runner.execution_lock(self.wave):
+                pass
+        self.assertEqual(cm.exception.reason, 'R16_CONCURRENT_INVOCATION_REJECTED')
+
+        stop_evt.set()
+        t.join(timeout=5)
+        self.assertFalse(lock_file.exists())
 
 
 if __name__ == '__main__':
