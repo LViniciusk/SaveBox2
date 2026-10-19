@@ -284,6 +284,94 @@ export async function closeBrowserIdentity(browser){
   }finally{leases.delete(browser);proofs.delete(browser);}
 }
 
+export function parseExactFiletime(value){
+  if(typeof value!=='string'||! /^[1-9][0-9]*$/.test(value)){
+    throw new Error('NATIVE_FILETIME_INVALID');
+  }
+  const parsed=BigInt(value);
+  if(parsed>((1n<<64n)-1n)){
+    throw new Error('NATIVE_FILETIME_INVALID');
+  }
+  return parsed;
+}
+
+export function createRendererIdentityProof(record,campaign='AP-06-R12-R14-native'){
+  if(!record||typeof record!=='object')return null;
+  const audit=record.processExitAudit;
+  if(!audit||audit.status!=='PASS'||audit.method!=='retained-win32-process-handles')return null;
+  const processes=audit.processes;
+  if(!Array.isArray(processes))return null;
+  const phases=['baseline','cycle-6-close','idle-120s','forced-GC-final'];
+  const samples=record.processSamples;
+  if(!Array.isArray(samples))return null;
+  const observedPhases=samples.map(s=>s?.phase);
+  if(observedPhases.length<4||!phases.every(p=>observedPhases.includes(p)))return null;
+  let sampledRendererPid=null;
+  for(const p of phases){
+    const sample=samples.find(s=>s?.phase===p);
+    if(!sample||!Array.isArray(sample.processes))return null;
+    const renderers=sample.processes.filter(proc=>proc?.type==='renderer');
+    if(renderers.length!==1||!Number.isSafeInteger(renderers[0].pid)||renderers[0].pid<=0)return null;
+    if(sampledRendererPid===null)sampledRendererPid=renderers[0].pid;
+    else if(sampledRendererPid!==renderers[0].pid)return null;
+  }
+  if(record.trace&&typeof record.trace==='object'){
+    if(record.trace.rendererPid&&record.trace.rendererPid!==sampledRendererPid)return null;
+    if(Array.isArray(record.trace.checkpoints)){
+      const tracePhases=record.trace.checkpoints.map(c=>c?.phase);
+      if(!phases.every(p=>tracePhases.includes(p)))return null;
+    }
+  }
+  const rendererAudits=processes.filter(p=>Array.isArray(p?.roles)&&p.roles.includes('renderer'));
+  if(rendererAudits.length!==1)return null;
+  const auditedRenderer=rendererAudits[0];
+  if(auditedRenderer.pid!==sampledRendererPid)return null;
+  if(typeof auditedRenderer.creationTimeExact!=='string')return null;
+  let parsedExact;
+  try{
+    parsedExact=parseExactFiletime(auditedRenderer.creationTimeExact);
+  }catch{
+    return null;
+  }
+  let safeLegacy;
+  if(auditedRenderer.creationTime!==undefined){
+    if(typeof auditedRenderer.creationTime==='number'){
+      if(!Number.isFinite(auditedRenderer.creationTime)||auditedRenderer.creationTime<=0)return null;
+      if(Number.isSafeInteger(auditedRenderer.creationTime)){
+        if(BigInt(auditedRenderer.creationTime)!==parsedExact)return null;
+        safeLegacy=auditedRenderer.creationTime;
+      }
+    }else if(typeof auditedRenderer.creationTime==='bigint'){
+      if(auditedRenderer.creationTime!==parsedExact)return null;
+    }else if(typeof auditedRenderer.creationTime==='string'){
+      let parsedLegacy;
+      try{
+        parsedLegacy=parseExactFiletime(auditedRenderer.creationTime);
+      }catch{
+        return null;
+      }
+      if(parsedLegacy!==parsedExact)return null;
+    }else{
+      return null;
+    }
+  }
+  if(record.handleRelease&&record.handleRelease.status!=='PASS')return null;
+  const proof={
+    status:'PASS',
+    campaign,
+    preRegistered:true,
+    rendererPid:sampledRendererPid,
+    creationTimeExact:auditedRenderer.creationTimeExact,
+    roles:['renderer'],
+    attestationMethod:'retained-win32-process-handles',
+    linkedToProfiledProcess:true,
+    processIdentityCount:1,
+    checkpointPhases:[...phases]
+  };
+  if(safeLegacy!==undefined)proof.creationTime=safeLegacy;
+  return proof;
+}
+
 export async function closeBrowserWithIdentity(browser,record){
   let cleanupFailure;
   try{await finishBrowserIdentity(browser);}catch(error){
@@ -297,8 +385,14 @@ export async function closeBrowserWithIdentity(browser,record){
   if(cleanupFailure)record.cleanupFailureClass??=cleanupFailure;
   record.browserIdentity.cleanupStatus=record.cleanupStatus;
   if(record.cleanupFailureClass)record.browserIdentity.cleanupFailureClass??=record.cleanupFailureClass;
+  const campaign=process.env.AP06_SCIENTIFIC_CAMPAIGN||process.env.AP06_CAMPAIGN||'AP-06-R12-R14-native';
+  const proof=createRendererIdentityProof(record,campaign);
+  if(proof&&proof.status==='PASS'){
+    record.rendererIdentityProof=proof;
+    if(record.trace)record.trace.rendererIdentityProof=proof;
+  }
   return {status:record.cleanupStatus,failureClass:record.cleanupFailureClass,processExitAudit:record.processExitAudit,
-    handleRelease:record.handleRelease};
+    handleRelease:record.handleRelease,rendererIdentityProof:record.rendererIdentityProof};
 }
 
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){

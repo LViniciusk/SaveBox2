@@ -14,6 +14,7 @@ from run_ap06_transport_probe import media_server
 from run_test_matrix import npm_command
 from ap06_authorities import checked_path,private_permissions,sha256
 from ap06_freeze import FreezeFailure
+from ap06_native import validate_canonical_filetime
 
 OUTPUT='.quality/readiness-wave12-r2-factorial'
 CAMPAIGN='AP-06-R12-R2-factorial'
@@ -805,12 +806,17 @@ def validate_process_audit_receipt(receipt,process_samples=()):
         campaign_prefix()+'PROCESS_AUDIT_RECEIPT_INVALID')
     require(isinstance(process_samples,(list,tuple)) and len(process_samples)>0,campaign_prefix()+'PROCESS_AUDIT_RAW_SAMPLES_MISSING')
     identities=set();observed=set()
+    base_keys={'pid','creationTime','roles'}
     for row in receipt['processes']:
-        require(isinstance(row,dict) and set(row)=={'pid','creationTime','roles'} and type(row['pid']) is int and row['pid']>0 and
+        require(isinstance(row,dict) and set(row) in (base_keys,base_keys|{'creationTimeExact'}) and
+            type(row['pid']) is int and row['pid']>0 and
             type(row['creationTime']) is int and row['creationTime']>0 and isinstance(row['roles'],list) and row['roles'] and
             all(isinstance(role,str) and role and role.replace('_','').replace('-','').replace('.','').isalnum() for role in row['roles']) and
             row['roles']==sorted(set(row['roles'])),
             campaign_prefix()+'PROCESS_AUDIT_RECEIPT_INVALID')
+        if 'creationTimeExact' in row:
+            require(validate_canonical_filetime(row['creationTimeExact'])==row['creationTime'],
+                campaign_prefix()+'PROCESS_AUDIT_CREATION_TIME_INVALID')
         identity=(row['pid'],row['creationTime']);require(identity not in identities,campaign_prefix()+'PROCESS_AUDIT_RECEIPT_INVALID')
         identities.add(identity);observed.add((row['pid'],frozenset(row['roles'])))
     for sample in process_samples:

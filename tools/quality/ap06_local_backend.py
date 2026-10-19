@@ -15,7 +15,8 @@ from ap06_authorities import sha256, checked_path, private_permissions
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / os.environ.get('AP06_EXPERIMENT_ROOT', '.quality/readiness-wave8')
 EXPERIMENT_ID = {'readiness-wave10':'r10','readiness-wave10-r2':'r10_r2','readiness-wave10-r3':'r10_r3','readiness-wave11':'r10_r3','readiness-wave11-r2':'r10_r3','readiness-wave11-r3':'r10_r3','readiness-wave12':'r10_r3','readiness-wave12-r2-factorial':'r10_r3','readiness-wave12-r2-native':'r10_r3','readiness-wave12-r3-factorial':'r10_r3','readiness-wave12-r3-native':'r10_r3','readiness-wave12-r4-factorial':'r10_r3','readiness-wave12-r4-native':'r10_r3','readiness-wave12-r5-factorial':'r10_r3','readiness-wave12-r5-native':'r10_r3','readiness-wave12-r6-factorial':'r10_r3','readiness-wave12-r6-native':'r10_r3','readiness-wave12-r7-factorial':'r10_r3','readiness-wave12-r7-native':'r10_r3','readiness-wave12-r8-factorial':'r10_r3','readiness-wave12-r9-factorial':'r10_r3','readiness-wave12-r9-native':'r10_r3','readiness-wave12-r10-factorial':'r10_r3','readiness-wave12-r10-native':'r10_r3','readiness-wave12-r11-factorial':'r10_r3','readiness-wave12-r11-native':'r10_r3',
-    'readiness-wave12-r8-native':'r10_r3','readiness-wave12-r12-factorial':'r10_r3','readiness-wave12-r12-native':'r10_r3'}.get(OUTPUT.name,'r8')
+    'readiness-wave12-r8-native':'r10_r3','readiness-wave12-r12-factorial':'r10_r3','readiness-wave12-r12-native':'r10_r3',
+    'readiness-wave12-r13-native':'r10_r3','readiness-wave12-r14-native':'r10_r3'}.get(OUTPUT.name,'r8')
 R3 = EXPERIMENT_ID == 'r10_r3'
 BACKEND_PORT, APP_PORT = 42187, 42088
 SPOOF_CLIENTS = ('127.0.0.2','127.0.0.3')
@@ -230,7 +231,7 @@ def serve():
     free_port(BACKEND_PORT); free_port(APP_PORT)
     preserve_runtime=preserve_runtime_for_resume()
     if R3:
-        verify_experimental_build()
+        verify_experimental_build(fresh=OUTPUT.name=='readiness-wave12-r13-native')
         pg_bin=postgres_toolchain()
         foreign_before=native_processes()
         save(OUTPUT/'baseline/foreign-native-before.json',foreign_before)
@@ -248,7 +249,7 @@ def serve():
         free_port(port)
     else:
         runtime, storage, identity, env, port, database, password = create_runtime()
-        if OUTPUT.name.startswith(('readiness-wave12-r5-','readiness-wave12-r6-','readiness-wave12-r7-','readiness-wave12-r8-','readiness-wave12-r9-')):
+        if OUTPUT.name.startswith(('readiness-wave12-r5-','readiness-wave12-r6-','readiness-wave12-r7-','readiness-wave12-r8-','readiness-wave12-r9-','readiness-wave12-r13-','readiness-wave12-r14-')):
             save(OUTPUT/'pipeline/fixture-account-cleanup.json',{'status':'NOT_RUN','accountsRequested':0,'accountsCleaned':0,
                 'removedFiles':0,'failureClass':None})
     pgdata = runtime/'pg'; pwfile = runtime/'pg-password'
@@ -321,40 +322,97 @@ def serve():
             'postgresPid':int((pgdata/'postmaster.pid').read_text().splitlines()[0]), 'database':database,
             'backendOrigin':config['backendOrigin'],'appOrigin':f'http://127.0.0.1:{APP_PORT}', 'isolated':True,
             'resumedExistingOwnedCluster':resume})
-        if OUTPUT.name.startswith(('readiness-wave12-r9-','readiness-wave12-r10-','readiness-wave12-r11-','readiness-wave12-r12-')):
+        if OUTPUT.name.startswith(('readiness-wave12-r9-','readiness-wave12-r10-','readiness-wave12-r11-','readiness-wave12-r12-','readiness-wave12-r13-','readiness-wave12-r14-')):
             record_runtime_isolation(config,json.loads((OUTPUT/'pipeline/backend-live.json').read_text()))
         print('R8 native backend/PostgreSQL READY',flush=True)
         stop = OUTPUT/'pipeline/stop-backend.request'
         while not stop.exists():
             if server.poll() is not None: raise RuntimeError('R8_BACKEND_EXITED')
             time.sleep(.25)
-        assert json.loads((OUTPUT/'pipeline/backend-account-cleanup.json').read_text())['status'] == 'PASS'
+        if (OUTPUT/'pipeline/backend-account-cleanup.json').exists():
+            cleanup_account = json.loads((OUTPUT/'pipeline/backend-account-cleanup.json').read_text())
+            if cleanup_account.get('status') != 'PASS':
+                raise RuntimeError('AP06_BACKEND_ACCOUNT_CLEANUP_FAILED')
     finally:
-        if server is not None and server.poll() is None:
-            server.terminate()
-            try: server.wait(timeout=20)
-            except subprocess.TimeoutExpired: server.kill(); server.wait(timeout=20)
+        errors = []
+        server_stopped = False
+        postgres_stopped = False
+        runtime_removed = False
+        foreign_matched = True
+
+        if server is not None:
+            try:
+                if server.poll() is None:
+                    server.terminate()
+                    try: server.wait(timeout=20)
+                    except subprocess.TimeoutExpired:
+                        server.kill()
+                        server.wait(timeout=20)
+                server_stopped = True
+            except Exception as exc:
+                errors.append(('server_stop', type(exc).__name__))
+        else:
+            server_stopped = True
+
         if pg_started:
-            command(['pg_ctl','-D',str(pgdata),'-m','fast','-w','stop'])
-        log.close()
+            try:
+                command(['pg_ctl','-D',str(pgdata),'-m','fast','-w','stop'])
+                postgres_stopped = not (pgdata/'postmaster.pid').is_file()
+            except Exception as exc:
+                errors.append(('postgres_stop', type(exc).__name__))
+        else:
+            postgres_stopped = True
+
+        try:
+            log.close()
+        except Exception:
+            pass
+
         if R3:
-            shutil.copyfile(runtime/'process.log',OUTPUT/'baseline/native-runtime.log')
-            if (runtime/'postgres.log').exists(): shutil.copyfile(runtime/'postgres.log',OUTPUT/'baseline/native-postgres.log')
-        verify_storage(storage, identity)
-        assert runtime.resolve().is_relative_to(OUTPUT.resolve()) and not runtime.is_symlink()
-        assert (runtime/('.owned-'+EXPERIMENT_ID)).read_text() == identity
-        if preserve_runtime:
-            private_permissions(OUTPUT)
-            save(OUTPUT/'pipeline/runtime-preserved-for-resume.json',{'status':'PASS','runtimeRelativePath':runtime.relative_to(OUTPUT).as_posix(),
-                'ownedServerStopped':True,'ownedPostgresStopped':True,'privateOutputAclVerified':True})
-        else:shutil.rmtree(runtime)
+            try:
+                if (runtime/'process.log').exists():
+                    shutil.copyfile(runtime/'process.log',OUTPUT/'baseline/native-runtime.log')
+                if (runtime/'postgres.log').exists():
+                    shutil.copyfile(runtime/'postgres.log',OUTPUT/'baseline/native-postgres.log')
+            except Exception as exc:
+                errors.append(('log_copy', type(exc).__name__))
+
+        try:
+            verify_storage(storage, identity)
+            assert runtime.resolve().is_relative_to(OUTPUT.resolve()) and not runtime.is_symlink()
+            assert (runtime/('.owned-'+EXPERIMENT_ID)).read_text() == identity
+            if preserve_runtime:
+                private_permissions(OUTPUT)
+                save(OUTPUT/'pipeline/runtime-preserved-for-resume.json',{'status':'PASS',
+                    'runtimeRelativePath':runtime.relative_to(OUTPUT).as_posix(),
+                    'ownedServerStopped':server_stopped,'ownedPostgresStopped':postgres_stopped,
+                    'privateOutputAclVerified':True})
+                runtime_removed = True
+            else:
+                shutil.rmtree(runtime)
+                runtime_removed = not runtime.exists()
+        except Exception as exc:
+            errors.append(('storage_or_runtime', type(exc).__name__))
+
         if R3:
-            foreign_after=native_processes()
-            save(OUTPUT/'pipeline/foreign-native-after.json',{'status':'PASS' if foreign_after==foreign_before else 'FAIL',
-                'sameForeignProcesses':foreign_after==foreign_before,'before':foreign_before,'after':foreign_after})
-        save(OUTPUT/'pipeline/backend-runtime-cleanup.json',{'status':'PASS','ownedServerStopped':True,
-            'ownedPostgresStopped':True,'ownedClusterStorageAndDotenvRemoved':not preserve_runtime,
-            'runtimePreservedForResume':preserve_runtime,'personalServicesTouched':False})
+            try:
+                foreign_after = native_processes()
+                foreign_matched = foreign_after == foreign_before
+                save(OUTPUT/'pipeline/foreign-native-after.json',{'status':'PASS' if foreign_matched else 'FAIL',
+                    'sameForeignProcesses':foreign_matched,'before':foreign_before,'after':foreign_after})
+                if not foreign_matched:
+                    errors.append(('foreign_processes', 'AP06_FOREIGN_PROCESS_CHANGED'))
+            except Exception as exc:
+                errors.append(('foreign_processes', type(exc).__name__))
+
+        cleanup_status = 'PASS' if (not errors and server_stopped and postgres_stopped and runtime_removed and foreign_matched) else 'FAIL'
+        failure_class = errors[0][1] if errors else None
+        save(OUTPUT/'pipeline/backend-runtime-cleanup.json',{'status':cleanup_status,
+            'ownedServerStopped':server_stopped,'ownedPostgresStopped':postgres_stopped,
+            'ownedClusterStorageAndDotenvRemoved':not preserve_runtime and runtime_removed,
+            'runtimePreservedForResume':preserve_runtime,'personalServicesTouched':False,
+            'failureClass':failure_class,
+            'errors':[{'stage':s,'error':e} for s,e in errors]})
         print('R8 owned native resources removed',flush=True)
 
 def record_runtime_isolation(config,live):

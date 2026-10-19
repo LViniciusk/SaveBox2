@@ -7,7 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {execFileSync,spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {chromium} from '@playwright/test';
-import {frozenLaunchOptions,validateResolution,resolveBrowserIdentity,AUTOPLAY_ARGS,NATIVE_ARGS,launchWithIdentityLease,finishBrowserIdentity,getAttestedBrowserProof,launchAttestedBrowser,closeBrowserIdentity,closeBrowserWithIdentity} from './ap06-browser-identity.mjs';
+import {frozenLaunchOptions,validateResolution,resolveBrowserIdentity,AUTOPLAY_ARGS,NATIVE_ARGS,launchWithIdentityLease,finishBrowserIdentity,getAttestedBrowserProof,launchAttestedBrowser,closeBrowserIdentity,closeBrowserWithIdentity,parseExactFiletime,createRendererIdentityProof} from './ap06-browser-identity.mjs';
 import {NativeTrace} from './ap06-native-trace.mjs';
 
 const identity={mode:'headless-shell',executablePath:'C:/owned/chrome-headless-shell.exe',executableSha256:'a'.repeat(64),
@@ -294,3 +294,81 @@ test('native profiler rejects missing proof before creating CDP session',async()
   await assert.rejects(trace.start({newBrowserCDPSession:async()=>{cdpRequested=true;throw new Error('unexpected');}}),/AP06_BROWSER_NOT_ATTESTED/);
   assert.equal(cdpRequested,false);
 });
+test('parseExactFiletime parses exact 64-bit uint64 FILETIME strings and rejects non-canonical values',()=>{
+  assert.equal(parseExactFiletime('134368223588270130'), 134368223588270130n);
+  assert.equal(parseExactFiletime('18446744073709551615'), 18446744073709551615n);
+  assert.equal(parseExactFiletime('1'), 1n);
+
+  for(const bad of ['0', '-1', '0134368223588270130', '134368223588270130.0', '1e17', 'NaN', '18446744073709551616', null, undefined, 123, 134368223588270130n, '']){
+    assert.throws(()=>parseExactFiletime(bad), /NATIVE_FILETIME_INVALID/);
+  }
+});
+test('createRendererIdentityProof accepts exact 64-bit FILETIME strings above Number.MAX_SAFE_INTEGER',()=>{
+  const phases = ['baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final'];
+  const baseRecord = {
+    processExitAudit: {
+      status: 'PASS',
+      method: 'retained-win32-process-handles',
+      processes: [{pid: 27900, creationTimeExact: '134368223588270130', roles: ['renderer']}]
+    },
+    processSamples: phases.map(phase => ({phase, processes: [{pid: 27900, type: 'renderer'}]})),
+    handleRelease: {status: 'PASS'}
+  };
+  const proof = createRendererIdentityProof(baseRecord);
+  assert.ok(proof);
+  assert.equal(proof.status, 'PASS');
+  assert.equal(proof.rendererPid, 27900);
+  assert.equal(proof.creationTimeExact, '134368223588270130');
+
+  // Rejects invalid string
+  const badRecord = {
+    ...baseRecord,
+    processExitAudit: {
+      ...baseRecord.processExitAudit,
+      processes: [{pid: 27900, creationTimeExact: '134368223588270130.5', roles: ['renderer']}]
+    }
+  };
+  assert.equal(createRendererIdentityProof(badRecord), null);
+});
+test('createRendererIdentityProof requires creationTimeExact and never falls back to Number or BigInt',()=>{
+  const phases = ['baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final'];
+  const makeRecord = audited => ({
+    processExitAudit: {
+      status: 'PASS',
+      method: 'retained-win32-process-handles',
+      processes: [{pid: 27900, roles: ['renderer'], ...audited}]
+    },
+    processSamples: phases.map(phase => ({phase, processes: [{pid: 27900, type: 'renderer'}]})),
+    handleRelease: {status: 'PASS'}
+  });
+
+  assert.equal(createRendererIdentityProof(makeRecord({creationTime: 134368223588270130})), null);
+  assert.equal(createRendererIdentityProof(makeRecord({creationTime: '134368223588270130'})), null);
+  assert.equal(createRendererIdentityProof(makeRecord({creationTime: 123456})), null);
+
+  const exact = makeRecord({creationTimeExact: '134368223588270130'});
+  assert.equal(createRendererIdentityProof(makeRecord({
+    creationTimeExact: '134368223588270130', creationTime: 123456
+  })), null);
+
+  const safe = createRendererIdentityProof(makeRecord({
+    creationTimeExact: '123456', creationTime: 123456
+  }));
+  assert.ok(safe);
+  assert.equal(safe.creationTimeExact, '123456');
+  assert.equal(safe.creationTime, 123456);
+  assert.equal(JSON.parse(JSON.stringify(safe)).creationTimeExact, '123456');
+
+  // A rounded JavaScript Number is ignored because the canonical string is authoritative.
+  const rounded = createRendererIdentityProof(makeRecord({
+    creationTimeExact: '134368223588270130', creationTime: 134368223588270128
+  }));
+  assert.ok(rounded);
+  assert.equal(rounded.creationTimeExact, '134368223588270130');
+  assert.equal(rounded.creationTime, undefined);
+
+  const roundTrip = createRendererIdentityProof(JSON.parse(JSON.stringify(exact)));
+  assert.ok(roundTrip);
+  assert.equal(roundTrip.creationTimeExact, '134368223588270130');
+});
+
