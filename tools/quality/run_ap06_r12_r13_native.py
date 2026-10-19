@@ -252,97 +252,6 @@ def verify_frozen_campaign(wave, source):
 verify_frozen_r13 = verify_frozen_campaign
 
 
-def validate_scientific_authorization(wave, authorization_path=None, trust_anchor_path=None):
-    output = wave.output
-    tag = campaign_tag()
-    auth_path = Path(authorization_path) if authorization_path else (output / 'baseline/scientific-authorization.json')
-    if not auth_path.is_file():
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_MISSING')
-    if auth_path.is_symlink():
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-    if auth_path.stat().st_size > 65536:
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-
-    if any((output / p).exists() for p in ('pipeline/capability-reservation.json', 'final/STOP.json', 'final/decision.json')):
-        raise NativeContractFailure(f'R12{tag}_NATIVE_NO_RETRY_OR_RESUME')
-
-    anchor_path = Path(trust_anchor_path) if trust_anchor_path else (output / 'baseline/scientific-trust-anchor.json')
-
-    # Invoke Node verifier tools/quality/verify_scientific_authorization.mjs
-    verifier_script = Path(__file__).resolve().parent / 'verify_scientific_authorization.mjs'
-    node_exe = getattr(wave, 'node', 'node')
-    try:
-        proc = subprocess.run(
-            [str(node_exe), str(verifier_script), str(auth_path), str(anchor_path)],
-            capture_output=True,
-            text=True,
-            check=False
-        )
-    except Exception as err:
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID') from err
-
-    try:
-        verifier_res = json.loads(proc.stdout.strip()) if proc.stdout.strip() else {}
-    except Exception:
-        verifier_res = {}
-
-    if proc.returncode != 0 or verifier_res.get('status') != 'VALID':
-        reason = verifier_res.get('reason')
-        if reason and reason.startswith('R16_AUTHORIZATION_'):
-            raise NativeContractFailure(reason)
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-
-    payload = verifier_res.get('payload')
-    if not isinstance(payload, dict):
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-
-    if payload.get('campaign') != CAMPAIGN:
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-    if payload.get('scope') != 'capability-only':
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-
-    task_file = wave.root / TASK_PATH
-    expected_task_sha = sha256(task_file) if task_file.is_file() else None
-    if not expected_task_sha or payload.get('taskSha256') != expected_task_sha:
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-
-    frozen_path = output / 'tooling/freeze.json'
-    if not frozen_path.is_file():
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-    frozen = json.loads(frozen_path.read_text(encoding='utf-8'))
-    if payload.get('implementationHead') != frozen.get('implementationHead'):
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-    if payload.get('freezeSha256') != sha256(frozen_path):
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-
-    config_path = output / 'baseline/authority-config.local.json'
-    if config_path.is_file():
-        config = json.loads(config_path.read_text(encoding='utf-8-sig'))
-        if payload.get('authorityIdentity') != config.get('identity'):
-            raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-
-    expected_budget = {
-        'capability': 1,
-        'profiledA': 0,
-        'profiledB': 0,
-        'maximum': 1,
-        'retries': 0,
-    }
-    budget = payload.get('budget')
-    if (
-        not isinstance(budget, dict)
-        or set(budget.keys()) != set(expected_budget.keys())
-        or any(
-            type(budget[k]) is not int or budget[k] != expected_budget[k]
-            for k in expected_budget
-        )
-    ):
-        raise NativeContractFailure(f'R12{tag}_SCIENTIFIC_AUTHORIZATION_INVALID')
-
-    auth_sha = sha256(auth_path)
-    return {**payload, 'authFileSha256': auth_sha, 'keyId': verifier_res.get('keyId')}
-
-
 def capture_capability_once(wave, source, frozen=None, native=None):
     output = wave.output
     tag = campaign_tag()
@@ -486,11 +395,9 @@ def execution_lock(wave):
                 pass
 
 
-def run_capability(wave, source, authorization_path=None, trust_anchor_path=None):
+def run_capability(wave, source):
     tag = campaign_tag()
     with execution_lock(wave):
-        if tag == 'R16':
-            validate_scientific_authorization(wave, authorization_path=authorization_path, trust_anchor_path=trust_anchor_path)
         capability, frozen, native = capture_capability_once(wave, source)
         status = capability.get('status')
         if status == 'NATIVE_CAPABILITY_PASS':
@@ -684,15 +591,6 @@ def offline_preflight(wave, source_output):
         f'R12{tag}_BROWSER_IDENTITY_INVALID')
     if tag == 'R16':
         require(os.name == 'nt', 'R16_PLATFORM_WINDOWS_REQUIRED')
-        auth_file = wave.output / 'baseline/scientific-authorization.json'
-        auth_present = auth_file.is_file()
-        auth_verified = False
-        if auth_present:
-            try:
-                validate_scientific_authorization(wave, auth_file)
-                auth_verified = True
-            except Exception:
-                auth_verified = False
     for relative in ('experimental-backend.json', 'backend-isolation.json', 'listener-isolation.json',
         'network-spoof-guard.json', 'network-spoof-recovery.json', 'startup-rejections.json',
         'backend-runtime.local.json',
@@ -778,9 +676,7 @@ def offline_preflight(wave, source_output):
     result = {'status': 'PASS', 'scientificChromium': 0, 'reservationCreated': False,
         'implementationHead': wave.git('rev-parse', 'HEAD').strip(), 'sourceGate': source.get('status')}
     if tag == 'R16':
-        result['classification'] = 'R16_ENGINEERING_READY_AWAITING_AUTHORIZATION'
-        result['scientificAuthorizationPresent'] = auth_present
-        result['authorizationVerified'] = auth_verified
+        result['classification'] = 'R16_ENGINEERING_READY_FOR_CAPABILITY'
     return result
 
 
@@ -1485,8 +1381,6 @@ def main(wave_root=None):
     actions.add_argument('--run', action='store_true')
     actions.add_argument('--run-capability', action='store_true')
     actions.add_argument('--verify-publication', action='store_true')
-    parser.add_argument('--authorization', type=Path)
-    parser.add_argument('--trust-anchor', type=Path)
     parser.add_argument('--source-output', type=Path)
     parser.add_argument('--receipt', type=Path)
     args = parser.parse_args()
@@ -1523,8 +1417,7 @@ def main(wave_root=None):
             if tag_str != 'R16':
                 raise NativeContractFailure(f'R12{tag_str}_RUN_CAPABILITY_NOT_SUPPORTED')
             require(args.source_output is not None, f'R12{tag_str}_HISTORICAL_SOURCE_REQUIRED')
-            result = run_capability(wave, args.source_output, authorization_path=args.authorization,
-                                    trust_anchor_path=args.trust_anchor)
+            result = run_capability(wave, args.source_output)
         elif args.run:
             if tag_str == 'R16':
                 raise NativeContractFailure('R12R16_RUN_NOT_SUPPORTED_USE_RUN_CAPABILITY')

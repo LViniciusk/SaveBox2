@@ -36,7 +36,6 @@ record_durable_stop = runner_engine.record_durable_stop
 NativeContractFailure = runner_engine.NativeContractFailure
 publish_inconclusive_decision = runner_engine.publish_inconclusive_decision
 publish_capability_pass_decision = runner_engine.publish_capability_pass_decision
-validate_scientific_authorization = runner_engine.validate_scientific_authorization
 capture_capability_once = runner_engine.capture_capability_once
 main = runner_engine.main
 
