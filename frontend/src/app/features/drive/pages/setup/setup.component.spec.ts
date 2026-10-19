@@ -14,6 +14,7 @@ describe('SetupComponent', () => {
   let appStateSpy: any;
   let authSpy: any;
   let routerSpy: any;
+  let anchorClickSpy: jasmine.Spy;
 
   beforeEach(() => {
     cryptoSpy = jasmine.createSpyObj('CryptoService', ['initializeVault']);
@@ -34,6 +35,7 @@ describe('SetupComponent', () => {
 
     fixture = TestBed.createComponent(SetupComponent);
     component = fixture.componentInstance;
+    anchorClickSpy = spyOn(HTMLAnchorElement.prototype, 'click').and.stub();
   });
 
   describe('onSubmit', () => {
@@ -62,9 +64,7 @@ describe('SetupComponent', () => {
       component.confirmPhrase = '12345678';
       cryptoSpy.initializeVault.and.returnValue(Promise.resolve());
       authSpy.restoreSession.and.returnValue(of({}));
-      
-      const anchorSpy = jasmine.createSpyObj('a', ['click']);
-      spyOn(document, 'createElement').and.returnValue(anchorSpy);
+      const createElementSpy = spyOn(document, 'createElement').and.callThrough();
       spyOn(window.URL, 'createObjectURL').and.returnValue('blob-url');
       spyOn(window.URL, 'revokeObjectURL');
 
@@ -74,11 +74,15 @@ describe('SetupComponent', () => {
       expect(authSpy.restoreSession).toHaveBeenCalled();
       expect(appStateSpy.unlock).toHaveBeenCalled();
       expect(routerSpy.navigate).toHaveBeenCalledWith(['/drive/home']);
-      
+      expect(component.phrase).toBe('');
+      expect(component.confirmPhrase).toBe('');
+      expect((component as any).committedPhrase).toBe('');
+
       expect(document.createElement).toHaveBeenCalledWith('a');
-      expect(anchorSpy.download).toBe('nanika-recovery.txt');
-      expect(anchorSpy.href).toBe('blob-url');
-      expect(anchorSpy.click).toHaveBeenCalled();
+      const anchor = createElementSpy.calls.mostRecent().returnValue as HTMLAnchorElement;
+      expect(anchor.download).toBe('nanika-recovery.txt');
+      expect(anchor.href).toBe(new URL('blob-url', document.baseURI).href);
+      expect(anchorClickSpy).toHaveBeenCalled();
       expect(window.URL.revokeObjectURL).toHaveBeenCalledWith('blob-url');
     });
 
@@ -87,7 +91,6 @@ describe('SetupComponent', () => {
       component.confirmPhrase = '12345678';
       cryptoSpy.initializeVault.and.returnValue(Promise.resolve());
       authSpy.restoreSession.and.returnValue(throwError(() => new Error('Refresh failed')));
-      
       spyOn(window.URL, 'createObjectURL').and.returnValue('blob-url');
       spyOn(window.URL, 'revokeObjectURL');
 
@@ -107,5 +110,52 @@ describe('SetupComponent', () => {
       expect(component.error()).toBe('Erro ao inicializar o drive.');
       expect(component.loading()).toBeFalse();
     });
+
+    it('keeps a committed vault when recovery download fails and retries without initialization', async () => {
+      component.phrase = '12345678';
+      component.confirmPhrase = '12345678';
+      cryptoSpy.initializeVault.and.returnValue(Promise.resolve());
+      authSpy.restoreSession.and.returnValue(of({}));
+      spyOn(window.URL, 'createObjectURL').and.returnValue('blob-url');
+      spyOn(window.URL, 'revokeObjectURL');
+      anchorClickSpy.and.throwError('download blocked');
+
+      await component.onSubmit();
+
+      expect(cryptoSpy.initializeVault).toHaveBeenCalledOnceWith('12345678');
+      expect(component.error()).toBeNull();
+      expect(component.warning()).toContain('Não foi possível baixar');
+      expect(routerSpy.navigate).not.toHaveBeenCalled();
+      expect(component.vaultInitialized()).toBeTrue();
+
+      anchorClickSpy.and.stub();
+      await component.retryRecovery();
+
+      expect(cryptoSpy.initializeVault).toHaveBeenCalledTimes(1);
+      expect(authSpy.restoreSession).toHaveBeenCalledTimes(1);
+      expect(appStateSpy.unlock).toHaveBeenCalledOnceWith();
+      expect(routerSpy.navigate).toHaveBeenCalledOnceWith(['/drive/home']);
+      expect(component.phrase).toBe('');
+      expect(component.confirmPhrase).toBe('');
+      expect((component as any).committedPhrase).toBe('');
+    });
+
+    it('can continue after a recovery download failure without retrying initialization', async () => {
+      component.phrase = '12345678';
+      component.confirmPhrase = '12345678';
+      cryptoSpy.initializeVault.and.returnValue(Promise.resolve());
+      anchorClickSpy.and.throwError('download blocked');
+
+      await component.onSubmit();
+      await component.continueWithoutRecovery();
+
+      expect(cryptoSpy.initializeVault).toHaveBeenCalledTimes(1);
+      expect(appStateSpy.unlock).toHaveBeenCalledOnceWith();
+      expect(routerSpy.navigate).toHaveBeenCalledOnceWith(['/drive/home']);
+      expect(component.phrase).toBe('');
+      expect(component.confirmPhrase).toBe('');
+      expect((component as any).committedPhrase).toBe('');
+    });
+
   });
 });

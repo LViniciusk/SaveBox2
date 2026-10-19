@@ -1,14 +1,23 @@
-import { Injectable, inject, signal, computed } from '@angular/core';
+import { Injectable, Injector, inject, signal, computed } from '@angular/core';
 import { HttpClient, HttpContext } from '@angular/common/http';
 import { Router } from '@angular/router';
 import { Observable, of, catchError, map, tap, switchMap, firstValueFrom } from 'rxjs';
 import { AppStateService, UserInfo, AppStatus } from '../state/app-state.service';
 import { CryptoService } from '../crypto/crypto.service';
 import { environment } from '../../../environments/environment';
-import { BYPASS_LOGOUT } from '../interceptors/error.interceptor';
+import { BYPASS_LOGOUT } from '../interceptors/http-context-tokens';
+import { ComputerStore } from '../../features/drive/state/computer.store';
+import { DriveStore } from '../../features/drive/state/drive.store';
+import { StorageMoveEngineService } from '../../features/drive/storage-move/storage-move-engine.service';
 
 interface GoogleLoginResponse {
   token: string;
+}
+
+interface GoogleLoginAttempt {
+  state: string;
+  nonce: string;
+  createdAt: number;
 }
 
 /**
@@ -17,10 +26,12 @@ interface GoogleLoginResponse {
  * Flow:
  * 1. User clicks "Entrar com Google"
  * 2. Frontend redirects to Google OAuth
- * 3. Google redirects back to /auth/callback#id_token=...&state=nonce
- * 4. AuthCallbackComponent sends { id_token, nonce } to POST /api/auth/google
- * 5. Backend validates and returns { token: "jwt" } + sets HttpOnly cookie
- * 6. JWT stored in RAM, state → Locked, navigate to /vault
+ * 3. Frontend stores independent state/nonce values before redirecting
+ * 4. Google redirects back to /auth/callback#id_token=...&state=...
+ * 5. AuthCallbackComponent validates state and sends the stored nonce
+ *    with { id_token, nonce } to POST /api/auth/google
+ * 6. Backend validates and returns { token: "jwt" } + sets HttpOnly cookie
+ * 7. JWT stored in RAM, state → Locked, navigate to /vault
  *
  * SECURITY:
  * - The JWT Bearer Token is stored exclusively in RAM.
@@ -28,10 +39,14 @@ interface GoogleLoginResponse {
  */
 @Injectable({ providedIn: 'root' })
 export class AuthService {
+  private static readonly GOOGLE_LOGIN_ATTEMPT_KEY = 'nanika.google-login-attempt.v1';
+  private static readonly GOOGLE_LOGIN_ATTEMPT_MAX_AGE_MS = 10 * 60 * 1000;
+
   private readonly http = inject(HttpClient);
   private readonly router = inject(Router);
   private readonly appState = inject(AppStateService);
   private readonly cryptoService = inject(CryptoService);
+  private readonly injector = inject(Injector);
 
   private jwtToken: string | null = null;
 
@@ -79,34 +94,67 @@ export class AuthService {
   }
 
   loginWithGoogle(): void {
-    const nonce = crypto.randomUUID();
+    this._error.set(null);
+
+    let attempt: GoogleLoginAttempt;
+    try {
+      attempt = {
+        state: crypto.randomUUID(),
+        nonce: crypto.randomUUID(),
+        createdAt: Date.now(),
+      };
+    } catch {
+      this._error.set('Não foi possível iniciar o login com Google.');
+      return;
+    }
+
+    if (!this.storeGoogleLoginAttempt(attempt)) {
+      this._error.set('Não foi possível iniciar o login com Google.');
+      return;
+    }
 
     const params = new URLSearchParams({
       client_id: environment.googleClientId,
       redirect_uri: `${window.location.origin}/auth/callback`,
       response_type: 'id_token',
       scope: 'openid email profile',
-      nonce,
-      state: nonce,
+      nonce: attempt.nonce,
+      state: attempt.state,
       prompt: 'select_account',
     });
 
-    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+    this.redirectToGoogle(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
   }
 
   async handleOAuthCallback(fragment: string): Promise<void> {
     const params = new URLSearchParams(fragment);
     const idToken = params.get('id_token');
-    const state = params.get('state');
+    const returnedState = params.get('state');
+    const providerError = params.get('error');
+    const attempt = this.consumeGoogleLoginAttempt();
 
-    if (!idToken || !state) {
-      const error = params.get('error');
+    if (!attempt || !returnedState || returnedState !== attempt.state) {
+      this._loading.set(false);
+      this._error.set('Tentativa de login inválida ou expirada.');
+      await this.router.navigate(['/login']);
+      return;
+    }
+
+    if (providerError) {
+      this._loading.set(false);
       this._error.set(
-        error === 'access_denied'
+        providerError === 'access_denied'
           ? 'Acesso negado. Tente novamente.'
-          : 'Falha na autenticação: token não recebido.',
+          : 'Falha na autenticação com Google.',
       );
-      this.router.navigate(['/login']);
+      await this.router.navigate(['/login']);
+      return;
+    }
+
+    if (!idToken) {
+      this._loading.set(false);
+      this._error.set('Falha na autenticação: token não recebido.');
+      await this.router.navigate(['/login']);
       return;
     }
 
@@ -117,7 +165,7 @@ export class AuthService {
       const res = await firstValueFrom(
         this.http.post<GoogleLoginResponse>(`${environment.apiUrl}/api/auth/google`, {
           id_token: idToken,
-          nonce: state,
+          nonce: attempt.nonce,
         }, { withCredentials: true })
       );
       
@@ -141,6 +189,81 @@ export class AuthService {
     }
   }
 
+  private redirectToGoogle(url: string): void {
+    window.location.href = url;
+  }
+
+  private storeGoogleLoginAttempt(attempt: GoogleLoginAttempt): boolean {
+    try {
+      sessionStorage.removeItem(AuthService.GOOGLE_LOGIN_ATTEMPT_KEY);
+      sessionStorage.setItem(
+        AuthService.GOOGLE_LOGIN_ATTEMPT_KEY,
+        JSON.stringify(attempt),
+      );
+      return true;
+    } catch {
+      try {
+        sessionStorage.removeItem(AuthService.GOOGLE_LOGIN_ATTEMPT_KEY);
+      } catch {
+        // Storage indisponível: o login permanece bloqueado sem redirecionar.
+      }
+      return false;
+    }
+  }
+
+  private consumeGoogleLoginAttempt(): GoogleLoginAttempt | null {
+    let raw: string | null;
+
+    try {
+      raw = sessionStorage.getItem(AuthService.GOOGLE_LOGIN_ATTEMPT_KEY);
+      sessionStorage.removeItem(AuthService.GOOGLE_LOGIN_ATTEMPT_KEY);
+    } catch {
+      return null;
+    }
+
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return null;
+      }
+
+      const candidate = parsed as Partial<GoogleLoginAttempt>;
+      const now = Date.now();
+      if (
+        typeof candidate.state !== 'string' ||
+        candidate.state.length === 0 ||
+        typeof candidate.nonce !== 'string' ||
+        candidate.nonce.length === 0 ||
+        typeof candidate.createdAt !== 'number' ||
+        !Number.isFinite(candidate.createdAt) ||
+        candidate.createdAt > now ||
+        now - candidate.createdAt > AuthService.GOOGLE_LOGIN_ATTEMPT_MAX_AGE_MS
+      ) {
+        return null;
+      }
+
+      return {
+        state: candidate.state,
+        nonce: candidate.nonce,
+        createdAt: candidate.createdAt,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private clearGoogleLoginAttempt(): void {
+    try {
+      sessionStorage.removeItem(AuthService.GOOGLE_LOGIN_ATTEMPT_KEY);
+    } catch {
+      // No pending attempt can remain authoritative when storage is unavailable.
+    }
+  }
+
   private decodeUserFromIdToken(idToken: string): UserInfo {
     try {
       let payloadSegment = idToken.split('.')[1];
@@ -158,8 +281,8 @@ export class AuthService {
         name: decoded.name || '',
         picture: decoded.picture || '',
       };
-    } catch (e) {
-      console.error('Failed to decode id token', e);
+    } catch {
+      console.error('Failed to decode Google identity');
       return { email: '', name: '', picture: '' };
     }
   }
@@ -218,6 +341,9 @@ export class AuthService {
         auth_code: code,
         state: state
       }, { withCredentials: true }));
+
+      await this.injector.get(ComputerStore, null, { optional: true })?.loadTargets({ force: true });
+      await this.injector.get(DriveStore, null, { optional: true })?.loadLinkedAccounts();
       
       this._loading.set(false);
       this.router.navigate(['/drive/home'], { queryParams: { drive_linked: 'success' } });
@@ -232,6 +358,7 @@ export class AuthService {
     return this.http.post<GoogleLoginResponse>(`${environment.apiUrl}/login`, { username, password }, { withCredentials: true })
       .pipe(
         tap(res => {
+          this.clearGoogleLoginAttempt();
           this.jwtToken = res.token;
           const userInfo = this.decodeUserFromIdToken(res.token);
           const isVaultInitialized = this.isVaultInitializedFromToken(res.token);
@@ -253,7 +380,12 @@ export class AuthService {
   logout(): void {
     const token = this.jwtToken;
 
+    this.clearGoogleLoginAttempt();
     this.jwtToken = null;
+    this.injector.get(StorageMoveEngineService, null, { optional: true })?.resetRuntimeState();
+    const driveStore = this.injector.get(DriveStore, null, { optional: true });
+    driveStore?.resetUploadRuntimeState();
+    driveStore?.resetDownloadRuntimeState();
     this.cryptoService.lockVault();
     this.appState.logout();
 
@@ -274,7 +406,12 @@ export class AuthService {
   logoutGlobal(): void {
     const token = this.jwtToken;
 
+    this.clearGoogleLoginAttempt();
     this.jwtToken = null;
+    this.injector.get(StorageMoveEngineService, null, { optional: true })?.resetRuntimeState();
+    const driveStore = this.injector.get(DriveStore, null, { optional: true });
+    driveStore?.resetUploadRuntimeState();
+    driveStore?.resetDownloadRuntimeState();
     this.cryptoService.lockVault();
     this.appState.logout();
 

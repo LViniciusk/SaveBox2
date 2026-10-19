@@ -1,5 +1,6 @@
 import { Component, input, output } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { DefaultShellComponent } from './default-shell.component';
 
@@ -7,17 +8,21 @@ import { DefaultShellComponent } from './default-shell.component';
 class PinnedFoldersSectionStubComponent {
   readonly currentFolderId = input<number | null>(null);
   readonly locked = input(false);
+  readonly movingFileIds = input<ReadonlySet<number>>(new Set<number>());
   readonly showTitle = input(true);
   readonly variant = input<'gdrive' | 'default'>('gdrive');
   readonly navigate = output<number>();
 }
 
-@Component({ selector: 'app-drive-workspace', standalone: true, template: '<span class="workspace-stub"></span>' })
+@Component({ selector: 'app-drive-workspace', standalone: true, template: '<button class="workspace-stub" id="share" (click)="shareRequested.emit(file)"></button>' })
 class WorkspaceStubComponent {
+  readonly file = { id: 7, storageProvider: 'local' };
   readonly currentView = input<string>();
   readonly locked = input(false);
+  readonly movingFileIds = input<ReadonlySet<number>>(new Set<number>());
   readonly createFolderRequested = output<void>(); readonly uploadFileRequested = output<void>();
-  readonly videoSelected = output<any>(); readonly imageSelected = output<any>(); readonly shareRequested = output<any>(); readonly emptyTrashRequested = output<void>();
+  readonly previewRequested = output<any>(); readonly shareRequested = output<any>(); readonly emptyTrashRequested = output<void>();
+  readonly storageMoveRequested = output<any>();
   readonly dropStarted = output<void>(); readonly externalDrop = output<any>(); readonly dropError = output<unknown>();
 }
 
@@ -167,5 +172,19 @@ describe('DefaultShellComponent', () => {
     (fixture.nativeElement.querySelectorAll('.address-segment')[1] as HTMLButtonElement).click();
 
     expect(address).toHaveBeenCalledWith('Nanika/Projetos');
+  });
+
+  it('forwards local share requests from the workspace', () => {
+    const share = jasmine.createSpy('share');
+    const move = jasmine.createSpy('move');
+    component.shareRequested.subscribe(share);
+    component.storageMoveRequested.subscribe(move);
+    fixture.detectChanges();
+
+    fixture.nativeElement.querySelector('#share').click();
+    fixture.debugElement.query(By.directive(WorkspaceStubComponent)).componentInstance.storageMoveRequested.emit((fixture.debugElement.query(By.directive(WorkspaceStubComponent)).componentInstance as WorkspaceStubComponent).file);
+
+    expect(share).toHaveBeenCalledWith(jasmine.objectContaining({ id: 7, storageProvider: 'local' }));
+    expect(move).toHaveBeenCalledWith(jasmine.objectContaining({ id: 7, storageProvider: 'local' }));
   });
 });

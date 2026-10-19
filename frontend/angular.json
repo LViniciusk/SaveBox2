@@ -32,6 +32,12 @@
           },
           "configurations": {
             "production": {
+              "optimization": {
+                "styles": {
+                  "minify": true,
+                  "inlineCritical": false
+                }
+              },
               "fileReplacements": [
                 {
                   "replace": "src/environments/environment.ts",
@@ -62,6 +68,9 @@
         },
         "serve": {
           "builder": "@angular/build:dev-server",
+          "options": {
+            "host": "127.0.0.1"
+          },
           "configurations": {
             "production": {
               "buildTarget": "frontend:build:production"
@@ -93,6 +102,32 @@
             ],
             "styles": [
               "src/styles.css"
+            ]
+          }
+        }
+      }
+    },
+    "ap06-r7": {
+      "projectType": "application",
+      "root": "experiments/ap06-r7",
+      "sourceRoot": "experiments/ap06-r7",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            "browser": "experiments/ap06-r7/main.ts",
+            "tsConfig": "experiments/ap06-r7/tsconfig.json",
+            "index": "experiments/ap06-r7/index.html",
+            "outputPath": "../.quality/readiness-wave8/tooling/app",
+            "optimization": true,
+            "sourceMap": false,
+            "outputHashing": "all",
+            "statsJson": true,
+            "fileReplacements": [
+              {
+                "replace": "src/environments/environment.ts",
+                "with": "experiments/ap06-r7/environment.r8.ts"
+              }
             ]
           }
         }

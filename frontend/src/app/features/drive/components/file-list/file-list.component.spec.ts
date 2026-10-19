@@ -7,6 +7,33 @@ import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 import { signal } from '@angular/core';
 import { provideZonelessChangeDetection } from '@angular/core';
 
+class FakeIntersectionObserver {
+  static instances: FakeIntersectionObserver[] = [];
+  readonly observed = new Set<Element>();
+  disconnected = false;
+
+  constructor(private readonly callback: (entries: IntersectionObserverEntry[]) => void) {
+    FakeIntersectionObserver.instances.push(this);
+  }
+
+  observe(element: Element): void {
+    this.observed.add(element);
+  }
+
+  unobserve(element: Element): void {
+    this.observed.delete(element);
+  }
+
+  disconnect(): void {
+    this.disconnected = true;
+    this.observed.clear();
+  }
+
+  emit(element: Element, isIntersecting = true): void {
+    this.callback([{ target: element, isIntersecting } as IntersectionObserverEntry]);
+  }
+}
+
 describe('FileListComponent', () => {
   let component: FileListComponent;
   let fixture: ComponentFixture<FileListComponent>;
@@ -14,8 +41,12 @@ describe('FileListComponent', () => {
   let mockAppState: any;
   let mockDialogService: any;
   let mockPinnedFoldersStore: any;
+  let nativeIntersectionObserver: typeof IntersectionObserver;
 
   beforeEach(async () => {
+    nativeIntersectionObserver = globalThis.IntersectionObserver;
+    FakeIntersectionObserver.instances = [];
+    (globalThis as any).IntersectionObserver = FakeIntersectionObserver;
     // Isolate dependencies with strict mocks (Ponytail philosophy: test logic, not framework)
     mockDriveStore = jasmine.createSpyObj('DriveStore', [
       'restoreItem', 'permanentDeleteItem', 'downloadFile', 'renameItem', 'moveItem', 'trashItem',
@@ -67,13 +98,13 @@ describe('FileListComponent', () => {
 
   afterEach(() => {
     delete document.documentElement.dataset['theme'];
+    (globalThis as any).IntersectionObserver = nativeIntersectionObserver;
   });
 
   describe('getPercentage', () => {
     it('should correctly calculate percentages for extreme bounds (0 bytes, over quota, tiny files)', () => {
       // Arrange
       const zeroFile = { sizeBytes: 0 } as DriveFile;
-      const tinyFile = { sizeBytes: 1 } as DriveFile; // 0.1% -> <0.01% logic? (1/1000 = 0.001 -> 0.1%)
       const microFile = { sizeBytes: 0.05 } as DriveFile; // (0.05/1000) * 100 = 0.005% (< 0.01%)
       const normalFile = { sizeBytes: 250 } as DriveFile; // 25%
       const overQuotaFile = { sizeBytes: 1500 } as DriveFile; // 150%
@@ -206,6 +237,42 @@ describe('FileListComponent', () => {
     expect(mockDriveStore.navigateTo).toHaveBeenCalledWith(3);
   });
 
+  it('routes audio through the generic preview event', () => {
+    const audio = { id: 9, isFolder: false, decryptedName: 'song.m4a', type: 'audio', sizeBytes: 1 } as DriveFile;
+    fixture.componentRef.setInput('files', [audio]);
+    fixture.detectChanges();
+    const preview = jasmine.createSpy('preview');
+    component.previewRequested.subscribe(preview);
+
+    component.onFileDblClick(audio, new Event('dblclick'));
+
+    expect(preview).toHaveBeenCalledWith(jasmine.objectContaining({ file: audio }));
+  });
+
+  it('routes the context-menu preview through the same generic event as double click', () => {
+    const video = { id: 10, isFolder: false, decryptedName: 'movie.mp4', type: 'video', sizeBytes: 1 } as DriveFile;
+    fixture.componentRef.setInput('files', [video]);
+    fixture.detectChanges();
+    const preview = jasmine.createSpy('preview');
+    component.previewRequested.subscribe(preview);
+
+    component.onPlayOriginal(video, new Event('click'));
+
+    expect(preview).toHaveBeenCalledWith({ file: video, playlist: [video] });
+  });
+
+  it('opens unsupported files through the generic preview event too', () => {
+    const archive = { id: 11, isFolder: false, decryptedName: 'archive.zip', type: 'archive', sizeBytes: 1 } as DriveFile;
+    fixture.componentRef.setInput('files', [archive]);
+    fixture.detectChanges();
+    const preview = jasmine.createSpy('preview');
+    component.previewRequested.subscribe(preview);
+
+    component.onFileDblClick(archive, new Event('dblclick'));
+
+    expect(preview).toHaveBeenCalledWith({ file: archive, playlist: [archive] });
+  });
+
   it('does not expose the virtual parent shortcut in the trash', () => {
     const folder = { id: 7, isFolder: true, parentId: 3, decryptedName: 'Folder', type: 'folder', sizeBytes: 0 } as DriveFile;
     fixture.componentRef.setInput('files', [folder]);
@@ -213,7 +280,7 @@ describe('FileListComponent', () => {
     mockDriveStore.currentFolderId.set(7);
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector('[data-id="-9999"]')).toBeNull();
+    expect(fixture.nativeElement.querySelector('[data-item-key="folder:-9999"]')).toBeNull();
   });
 
   it('validates drag targets and exposes eligible destination folders', () => {
@@ -223,11 +290,11 @@ describe('FileListComponent', () => {
     component.draggedFiles.set([file]);
     const dragEvent = new DragEvent('dragover', { bubbles: true, cancelable: true });
     component.onDragOver(dragEvent, folder);
-    expect(component.dragOverFolderId()).toBe(2);
+    expect(component.dragOverItemKey()).toBe('folder:2');
     component.onDragLeave(dragEvent, folder);
-    expect(component.dragOverFolderId()).toBeNull();
+    expect(component.dragOverItemKey()).toBeNull();
     component.onDragOver(dragEvent, file);
-    expect(component.dragOverFolderId()).toBeNull();
+    expect(component.dragOverItemKey()).toBeNull();
     expect(component.getAvailableFolders(folder)).toEqual([]);
     component.onDragEnd();
     expect(component.draggedFiles()).toEqual([]);
@@ -248,6 +315,37 @@ describe('FileListComponent', () => {
     expect(share).toHaveBeenCalledWith(file);
   });
 
+  it('disables Google sharing in list/grid and both themes without emitting', () => {
+    const googleFile = {
+      id: 91,
+      isFolder: false,
+      encryptedName: 'ciphertext',
+      decryptedName: 'remote.mp4',
+      type: 'video',
+      sizeBytes: 1,
+      storageProvider: 'google_drive',
+    } as DriveFile;
+    mockDriveStore.files.set([googleFile]);
+    fixture.componentRef.setInput('files', [googleFile]);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    const share = spyOn(component.shareRequested, 'emit');
+
+    for (const [theme, mode] of [['gdrive', 'list'], ['default', 'grid']] as const) {
+      document.documentElement.dataset['theme'] = theme;
+      mockDriveStore.displayMode.set(mode);
+      component.activeMenuItem.set(googleFile);
+      fixture.detectChanges();
+      const action = [...fixture.nativeElement.querySelectorAll('.menu-item')]
+        .find((item: Element) => item.textContent?.includes('Compartilhamento indisponível')) as HTMLButtonElement;
+      expect(action).toBeTruthy();
+      expect(action.disabled).toBeTrue();
+      expect(action.getAttribute('aria-disabled')).toBe('true');
+    }
+
+    component.onShare(googleFile, { stopPropagation: jasmine.createSpy() } as any);
+    expect(share).not.toHaveBeenCalled();
+  });
+
   it('opens and clamps file/container menus, while respecting locked and trash views', () => {
     const file = { id: 1, isFolder: false, decryptedName: 'file.txt' } as DriveFile;
     const target = document.createElement('button');
@@ -255,9 +353,9 @@ describe('FileListComponent', () => {
     const event = new MouseEvent('click', { bubbles: true });
     Object.defineProperty(event, 'currentTarget', { value: target });
     component.toggleMenu(file, event);
-    expect(component.activeMenuFileId()).toBe(1);
+    expect(component.activeMenuItem()).toBe(file);
     component.toggleMenu(file, event);
-    expect(component.activeMenuFileId()).toBeNull();
+    expect(component.activeMenuItem()).toBeNull();
     component.onContextMenu(file, new MouseEvent('contextmenu', { clientX: 10000, clientY: 10000, cancelable: true }));
     expect(component.contextMenuPosition()?.x).toBeLessThan(window.innerWidth);
     component.closeMenu();
@@ -266,7 +364,7 @@ describe('FileListComponent', () => {
     expect(component.isContainerMenuOpen()).toBeFalse();
     mockAppState.isLocked.set(true);
     component.onContextMenu(file, new MouseEvent('contextmenu'));
-    expect(component.activeMenuFileId()).toBeNull();
+    expect(component.activeMenuItem()).toBeNull();
   });
 
   it('renders Explorer folder, video and image variants with thumbnail fallback', () => {
@@ -286,15 +384,31 @@ describe('FileListComponent', () => {
     const folder = fixture.nativeElement.querySelector('.folder-card') as HTMLElement;
     const video = fixture.nativeElement.querySelector('.video-card') as HTMLElement;
     const image = fixture.nativeElement.querySelector('.image-card') as HTMLElement;
-    expect(folder.querySelector('.default-folder-visual')).not.toBeNull();
+    expect(folder.querySelector('.default-preview-viewport.folder-preview-viewport')).not.toBeNull();
     expect(video.querySelector('.file-card-thumbnail')?.getAttribute('style')).toContain('data:image/png');
     expect(image.querySelector('.thumbnail-icon')).not.toBeNull();
     expect(fixture.nativeElement.textContent).toContain('Projetos');
     expect(fixture.nativeElement.textContent).toContain('demo.mp4');
     expect(fixture.nativeElement.textContent).toContain('captura.png');
     expect(getComputedStyle(folder).borderRadius).toBe('0px');
-    expect(mockDriveStore.loadThumbnail).toHaveBeenCalledWith(files[1]);
-    expect(mockDriveStore.loadThumbnail).toHaveBeenCalledWith(files[2]);
+    expect(mockDriveStore.loadThumbnail).not.toHaveBeenCalled();
+  });
+
+  it('does not authorize offscreen grid thumbnails before viewport demand', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    mockDriveStore.displayMode.set('grid');
+    const files = Array.from({ length: 20 }, (_, id) => ({
+      id: id + 1,
+      type: id % 2 === 0 ? 'image' : 'video',
+      decryptedName: `media-${String(id).padStart(2, '0')}`,
+      isFolder: false,
+      sizeBytes: 1,
+    })) as DriveFile[];
+    fixture.componentRef.setInput('files', files);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    fixture.detectChanges();
+
+    expect(mockDriveStore.loadThumbnail).not.toHaveBeenCalled();
   });
 
   it('uses the first media thumbnail inside a folder and keeps empty folders plain', () => {
@@ -313,7 +427,141 @@ describe('FileListComponent', () => {
     const cards = [...fixture.nativeElement.querySelectorAll('.folder-card')] as HTMLElement[];
     expect(cards[0].querySelector('.default-folder-preview-image')?.getAttribute('src')).toContain('data:image/png');
     expect(cards[1].querySelector('.default-folder-preview')).toBeNull();
-    expect(mockDriveStore.loadThumbnail).toHaveBeenCalledWith(child);
+    expect(mockDriveStore.loadThumbnail).not.toHaveBeenCalled();
+  });
+
+  it('authorizes only intersecting media cards and ignores repeated entry', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    mockDriveStore.displayMode.set('grid');
+    const files = Array.from({ length: 20 }, (_, id) => ({
+      id: id + 1,
+      type: id % 2 === 0 ? 'image' : 'video',
+      decryptedName: `media-${String(id).padStart(2, '0')}`,
+      isFolder: false,
+      sizeBytes: 1,
+    })) as DriveFile[];
+    fixture.componentRef.setInput('files', files);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    fixture.detectChanges();
+
+    const observer = FakeIntersectionObserver.instances.at(-1)!;
+    const cards = [...fixture.nativeElement.querySelectorAll('.file-card-thumbnail')] as Element[];
+    expect(observer.observed.size).toBe(20);
+    expect(mockDriveStore.loadThumbnail).not.toHaveBeenCalled();
+
+    observer.emit(cards[2]);
+    observer.emit(cards[2]);
+    observer.emit(cards[9]);
+
+    expect(mockDriveStore.loadThumbnail).toHaveBeenCalledTimes(2);
+    expect(mockDriveStore.loadThumbnail.calls.argsFor(0)[0]).toBe(files[2]);
+    expect(mockDriveStore.loadThumbnail.calls.argsFor(1)[0]).toBe(files[9]);
+  });
+
+  it('authorizes a folder preview only when its folder card intersects', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    mockDriveStore.displayMode.set('grid');
+    const folder = { id: 1, type: 'folder', decryptedName: 'Pasta', isFolder: true, sizeBytes: 0 } as DriveFile;
+    const child = { id: 2, type: 'video', decryptedName: 'video.mp4', isFolder: false, folderId: 1, sizeBytes: 1 } as DriveFile;
+    mockDriveStore.files.set([folder, child]);
+    fixture.componentRef.setInput('files', [folder]);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    fixture.detectChanges();
+
+    const observer = FakeIntersectionObserver.instances.at(-1)!;
+    const viewport = fixture.nativeElement.querySelector('.folder-preview-viewport') as Element;
+    expect(observer.observed.has(viewport)).toBeTrue();
+    expect(mockDriveStore.loadThumbnail).not.toHaveBeenCalled();
+
+    observer.emit(viewport);
+
+    expect(mockDriveStore.loadThumbnail).toHaveBeenCalledOnceWith(child);
+  });
+
+  it('uses one locked preview for every Default grid item and restores type renderers when unlocked', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    mockDriveStore.displayMode.set('grid');
+    const files = [
+      { id: 11, type: 'folder', encryptedName: 'encrypted-folder-name', decryptedName: 'Segredo', isFolder: true, sizeBytes: 0 },
+      { id: 12, type: 'image', encryptedName: 'encrypted-image', decryptedName: 'foto.png', isFolder: false, sizeBytes: 1 },
+      { id: 13, type: 'video', encryptedName: 'encrypted-video', decryptedName: 'video.mp4', isFolder: false, sizeBytes: 1 },
+      { id: 14, type: 'doc', encryptedName: 'encrypted-doc', decryptedName: 'arquivo.txt', isFolder: false, sizeBytes: 1 },
+    ] as DriveFile[];
+    mockDriveStore.files.set(files);
+    mockDriveStore.thumbnails.set({ 12: 'data:image/png;base64,AA==' });
+    fixture.componentRef.setInput('files', files);
+    fixture.componentRef.setInput('viewMode', 'drive');
+
+    mockAppState.isLocked.set(true);
+    fixture.detectChanges();
+    const lockedCards = [...fixture.nativeElement.querySelectorAll('.grid-card')] as HTMLElement[];
+    expect(lockedCards.length).toBe(4);
+    lockedCards.forEach(card => {
+      expect(card.querySelector('app-default-locked-preview')).not.toBeNull();
+      expect(card.querySelectorAll('.default-preview-viewport').length).toBe(1);
+      expect(card.querySelector('.folder-art-stage')).toBeNull();
+      expect(card.querySelector('.folder-thumbnail')).toBeNull();
+      expect(card.querySelector('.file-card-thumbnail .thumbnail-icon')).toBeNull();
+      expect(card.querySelector('app-file-icon')).toBeNull();
+    });
+
+    const lockedStructure = lockedCards.map(card => card.querySelector('.default-preview-viewport')?.outerHTML);
+    mockDriveStore.selectedFileIds.set(new Set([files[0].id]));
+    fixture.detectChanges();
+    expect(lockedCards[0].classList.contains('selected')).toBeTrue();
+    expect(lockedCards.map(card => card.querySelector('.default-preview-viewport')?.outerHTML)).toEqual(lockedStructure);
+
+    mockAppState.isLocked.set(false);
+    fixture.detectChanges();
+    const unlockedFolder = fixture.nativeElement.querySelector('.folder-card') as HTMLElement;
+    expect(unlockedFolder.querySelector('.default-preview-viewport')).not.toBeNull();
+    expect(unlockedFolder.querySelector('.folder-art-stage')).toBeNull();
+    expect(unlockedFolder.querySelectorAll('.folder-art-layer')).toHaveSize(2);
+    expect(unlockedFolder.querySelector('app-default-locked-preview')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.image-card app-default-locked-preview')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.video-card .file-card-thumbnail')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.file-card:not(.mixed-folder-card) .thumbnail-icon')).not.toBeNull();
+  });
+
+  it('keeps the folder thumbnail in the viewport instead of the scaled art layer', () => {
+    document.documentElement.dataset['theme'] = 'default';
+    mockDriveStore.displayMode.set('grid');
+    const folder = { id: 31, type: 'folder', encryptedName: 'folder', decryptedName: 'Folder', isFolder: true, sizeBytes: 0 } as DriveFile;
+    const child = { id: 32, type: 'image', encryptedName: 'image', decryptedName: 'image.png', isFolder: false, folderId: 31, sizeBytes: 1 } as DriveFile;
+    mockDriveStore.files.set([folder, child]);
+    mockDriveStore.thumbnails.set({ 32: 'data:image/png;base64,AA==' });
+    fixture.componentRef.setInput('files', [folder]);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    mockAppState.isLocked.set(false);
+    fixture.detectChanges();
+
+    const viewport = fixture.nativeElement.querySelector('.folder-preview-viewport') as HTMLElement;
+    const thumbnail = viewport.querySelector('.folder-thumbnail') as HTMLElement;
+    expect(thumbnail).not.toBeNull();
+    expect(thumbnail.parentElement).toBe(viewport);
+    expect(thumbnail.closest('.folder-art-stage')).toBeNull();
+    expect(viewport.querySelector('.folder-back')?.classList.contains('folder-art-layer')).toBeTrue();
+    expect(viewport.querySelector('.folder-front')?.classList.contains('folder-art-layer')).toBeTrue();
+    expect(viewport.querySelectorAll('.folder-thumbnail')).toHaveSize(1);
+  });
+
+  it('preserves the GDrive locked grid renderer', () => {
+    document.documentElement.dataset['theme'] = 'gdrive';
+    mockDriveStore.displayMode.set('grid');
+    const files = [
+      { id: 21, type: 'folder', encryptedName: 'folder', isFolder: true, sizeBytes: 0 },
+      { id: 22, type: 'image', encryptedName: 'image', isFolder: false, sizeBytes: 1 },
+    ] as DriveFile[];
+    mockDriveStore.files.set(files);
+    fixture.componentRef.setInput('files', files);
+    fixture.componentRef.setInput('viewMode', 'drive');
+    mockAppState.isLocked.set(true);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.grid-layout[data-renderer="gdrive"]')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('app-default-locked-preview')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.folder-card app-file-icon')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.file-card-thumbnail app-file-icon')).not.toBeNull();
   });
 
   it('uses the dark context-menu variant only for the Default theme', () => {
@@ -379,7 +627,7 @@ describe('FileListComponent', () => {
     expect(component.draggedFiles()).toEqual([]);
     mockAppState.isLocked.set(true);
     component.onDragOver(new DragEvent('dragover'), folder);
-    expect(component.dragOverFolderId()).toBeNull();
+    expect(component.dragOverItemKey()).toBeNull();
   });
 
   it('covers restore, permanent delete, download, rename and move outcomes', async () => {
@@ -435,7 +683,7 @@ describe('FileListComponent', () => {
     fixture.componentRef.setInput('files', [{ id: 1, isFolder: false } as DriveFile]);
     const item = document.createElement('div');
     item.className = 'selectable-item';
-    item.setAttribute('data-id', '1');
+    item.setAttribute('data-item-key', 'file:1');
     spyOn(item, 'getBoundingClientRect').and.returnValue({ left: 5, top: 5, right: 20, bottom: 20 } as DOMRect);
     fixture.nativeElement.appendChild(item);
     const mouseDown = new MouseEvent('mousedown', { button: 0, clientX: 0, clientY: 0, bubbles: true });
@@ -446,5 +694,115 @@ describe('FileListComponent', () => {
     expect(mockDriveStore.selectedFileIds()).toEqual(new Set([1]));
     component.onWindowMouseUp(new MouseEvent('mouseup'));
     expect(component.isDraggingSelection()).toBeFalse();
+  });
+
+  it('uses the projected collection in computer mode without touching DriveStore navigation', () => {
+    const folder = { id: 50, isFolder: true, decryptedName: 'Google', type: 'folder', sizeBytes: 0 } as DriveFile;
+    const file = { id: 51, isFolder: false, decryptedName: 'remote.txt', type: 'doc', sizeBytes: 1, storageProvider: 'google_drive' } as DriveFile;
+    fixture.componentRef.setInput('viewMode', 'computer');
+    fixture.componentRef.setInput('files', [folder, file]);
+    fixture.detectChanges();
+
+    const folderOpen = spyOn(component.folderOpenRequested, 'emit');
+    component.onFileDblClick(folder, new Event('dblclick'));
+    expect(folderOpen).toHaveBeenCalledWith(folder);
+    expect(mockDriveStore.navigateTo).not.toHaveBeenCalledWith(50);
+
+    component.onFileClick(file, new MouseEvent('click'));
+    expect(component.selectedCount()).toBe(1);
+    expect(mockDriveStore.selectedFileIds()).toEqual(new Set());
+    expect(component.getSelectedFiles()).toEqual([file]);
+  });
+
+  it('keeps folder and file with the same numeric id independent in list and grid', () => {
+    const folder = { id: 7, isFolder: true, type: 'folder', decryptedName: 'Pasta' } as DriveFile;
+    const file = { id: 7, isFolder: false, type: 'doc', decryptedName: 'Arquivo' } as DriveFile;
+    fixture.componentRef.setInput('viewMode', 'computer');
+    fixture.componentRef.setInput('files', [folder, file]);
+
+    for (const mode of ['list', 'grid'] as const) {
+      mockDriveStore.displayMode.set(mode);
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelector('[data-item-key="folder:7"]')).not.toBeNull();
+      expect(fixture.nativeElement.querySelector('[data-item-key="file:7"]')).not.toBeNull();
+
+      component.onContextMenu(folder, new MouseEvent('contextmenu', { clientX: 10, clientY: 10, cancelable: true }));
+      fixture.detectChanges();
+      let labels = [...fixture.nativeElement.querySelectorAll('.action-menu .menu-item')]
+        .map((item: Element) => item.textContent?.trim());
+      expect(labels.some(label => label?.includes('Abrir'))).toBeTrue();
+      expect(labels.some(label => label?.includes('Preview'))).toBeFalse();
+
+      component.onContextMenu(file, new MouseEvent('contextmenu', { clientX: 10, clientY: 10, cancelable: true }));
+      fixture.detectChanges();
+      labels = [...fixture.nativeElement.querySelectorAll('.action-menu .menu-item')]
+        .map((item: Element) => item.textContent?.trim());
+      expect(labels.some(label => label?.includes('Preview'))).toBeTrue();
+      expect(labels.some(label => label?.includes('Baixar'))).toBeTrue();
+      expect(labels.some(label => label?.includes('Mover para...'))).toBeTrue();
+      expect(labels.some(label => label?.includes('Abrir'))).toBeFalse();
+    }
+
+    component.onFileClick(folder, new MouseEvent('click'));
+    expect(component.isFileSelected(folder)).toBeTrue();
+    expect(component.isFileSelected(file)).toBeFalse();
+    component.onFileClick(file, new MouseEvent('click', { ctrlKey: true }));
+    expect(component.getSelectedFiles()).toEqual([folder, file]);
+  });
+
+  it('offers storage move in drive and storage, but not for invalid items', () => {
+    const file = {
+      id: 21, isFolder: false, isHidden: false, type: 'doc', decryptedName: 'Arquivo', encryptedName: 'cipher',
+      sizeBytes: 1, sizeFormatted: '1 B', modifiedAt: '—', owner: 'eu', storageProvider: 'local', externalStorageId: null,
+    } as DriveFile;
+    fixture.componentRef.setInput('files', [file]);
+
+    for (const mode of ['drive', 'storage'] as const) {
+      fixture.componentRef.setInput('viewMode', mode);
+      fixture.detectChanges();
+      component.onContextMenu(file, new MouseEvent('contextmenu', { clientX: 10, clientY: 10, cancelable: true }));
+      fixture.detectChanges();
+      expect([...fixture.nativeElement.querySelectorAll('.action-menu .menu-item')]
+        .some((item: Element) => item.textContent?.includes('Mover para...'))).toBeTrue();
+      component.closeMenu();
+    }
+
+    expect(component.canRequestStorageMove({ ...file, isFolder: true })).toBeFalse();
+    expect(component.canRequestStorageMove({ ...file, isHidden: true })).toBeFalse();
+    expect(component.canRequestStorageMove({ ...file, id: -9999 })).toBeFalse();
+    fixture.componentRef.setInput('viewMode', 'trash');
+    expect(component.canRequestStorageMove(file)).toBeFalse();
+  });
+
+  it('takes folder previews only from the current computer projection and blocks drag/drop', () => {
+    const folder = { id: 60, isFolder: true, decryptedName: 'Vídeos', type: 'folder', sizeBytes: 0 } as DriveFile;
+    const ownChild = { id: 61, isFolder: false, folderId: 60, type: 'image', encryptedFdk: 'own', sizeBytes: 1 } as DriveFile;
+    const otherChild = { id: 62, isFolder: false, folderId: 60, type: 'image', encryptedFdk: 'other', sizeBytes: 1 } as DriveFile;
+    mockDriveStore.files.set([otherChild]);
+    mockDriveStore.thumbnails.set({ 61: 'data:image/png;base64,own' });
+    fixture.componentRef.setInput('viewMode', 'computer');
+    fixture.componentRef.setInput('files', [folder]);
+    fixture.componentRef.setInput('folderPreviewFiles', [ownChild]);
+    fixture.detectChanges();
+
+    expect(component.getFolderThumbnail(folder)).toContain('own');
+    expect(component.canDrag(folder)).toBeFalse();
+    component.onDragOver(new DragEvent('dragover', { cancelable: true }), folder);
+    expect(component.dragOverItemKey()).toBeNull();
+  });
+
+  it('keeps computer selection and drag restrictions in list mode', () => {
+    const file = { id: 70, isFolder: false, decryptedName: 'remote.txt', type: 'doc', sizeBytes: 1 } as DriveFile;
+    fixture.componentRef.setInput('viewMode', 'computer');
+    fixture.componentRef.setInput('files', [file]);
+    fixture.detectChanges();
+
+    const row = fixture.nativeElement.querySelector('.file-row') as HTMLElement;
+    row.click();
+    fixture.detectChanges();
+
+    expect(row.classList.contains('selected')).toBeTrue();
+    expect(row.getAttribute('draggable')).toBeNull();
+    expect(mockDriveStore.selectedFileIds()).toEqual(new Set());
   });
 });

@@ -1,0 +1,155 @@
+{
+    "schemaVersion":  1,
+    "campaignName":  "AP-06-R12-R13-native",
+    "status":  "R12R13_NATIVE_STOP",
+    "implementationHead":  "9af08ad676d7e0e09e616bfb8c9310972a672cd1",
+    "freezeSha256":  "1bef5754d1b4bcc97b03663b21a78a6543f4e24edabb1a78be44adbb3f081adf",
+    "historicalR12":  {
+                          "status":  "R12R13_HISTORICAL_TRACE_DIAGNOSED",
+                          "traceBytes":  4430975,
+                          "traceSha256":  "da8d207b98b0979fb280ac821fde04c1a09ef3178acc22835d92ba9281798df6",
+                          "events":  669,
+                          "eventsByCategory":  {
+                                                   "disabled-by-default-memory-infra":  398,
+                                                   "other":  271
+                                               },
+                          "rendererProcessNameEvents":  0,
+                          "rendererDumpEvents":  12,
+                          "otherProcessDumpEvents":  32,
+                          "dumpEventsWithoutHeapsV2":  44,
+                          "checkpointGuidsExpected":  4,
+                          "checkpointGuidsMatched":  3,
+                          "guidForm":  "id:string",
+                          "findings":  [
+                                           "RENDERER_METADATA_MISSING",
+                                           "DUMP_GUID_NOT_EMITTED",
+                                           "HEAPS_V2_NOT_EMITTED",
+                                           "TRACE_INSUFFICIENT_EVIDENCE"
+                                       ],
+                          "traceComplete":  true,
+                          "timestampsMonotonic":  true,
+                          "dataLossOccurred":  false,
+                          "categoryMisconfigured":  false,
+                          "effectiveProfilerProven":  false,
+                          "schemaHeapsV2":  "NOT_ASSESSABLE_NO_HEAPS_V2",
+                          "historicalClassificationChanged":  false
+                      },
+    "engineering":  {
+                        "status":  "PASS",
+                        "captureParserIntegration":  "PASS",
+                        "pythonTests":  {
+                                            "parser":  8,
+                                            "runner":  6,
+                                            "freeze":  11
+                                        },
+                        "nodeIntegrationTests":  4,
+                        "typescript":  "PASS",
+                        "angularBuild":  "PASS",
+                        "nativeTests":  {
+                                            "production":  {
+                                                               "cases":  320,
+                                                               "assertions":  14330,
+                                                               "failures":  0
+                                                           },
+                                            "experimental":  {
+                                                                 "cases":  17,
+                                                                 "assertions":  26021,
+                                                                 "failures":  0
+                                                             }
+                                        },
+                        "gitleaks":  {
+                                         "version":  "v8.30.1",
+                                         "sourceScan":  "PASS",
+                                         "stagedReportScan":  "PASS",
+                                         "findings":  0
+                                     }
+                    },
+    "ci":  {
+               "implementationHead":  "9af08ad676d7e0e09e616bfb8c9310972a672cd1",
+               "status":  "PASS",
+               "runs":  [
+                            {
+                                "workflow":  "Backend CI",
+                                "runId":  39141403515,
+                                "conclusion":  "success"
+                            },
+                            {
+                                "workflow":  "Frontend CI",
+                                "runId":  39141403423,
+                                "conclusion":  "success"
+                            },
+                            {
+                                "workflow":  "Quality Baseline",
+                                "runId":  39141403664,
+                                "conclusion":  "success",
+                                "e2e":  "5/5 passed"
+                            }
+                        ],
+               "earlierQualityBaseline":  {
+                                              "runId":  39139617009,
+                                              "conclusion":  "failure",
+                                              "e2e":  "4/5; upload recovery timed out at 50% after 120 seconds"
+                                          },
+               "rerun":  {
+                             "runId":  39140064224,
+                             "conclusion":  "success",
+                             "e2e":  "5/5 passed"
+                         }
+           },
+    "execution":  {
+                      "budget":  {
+                                     "capability":  1,
+                                     "profiledA":  1,
+                                     "profiledB":  1,
+                                     "maximum":  3,
+                                     "retries":  0
+                                 },
+                      "scientificChromium":  0,
+                      "reservationCreated":  false,
+                      "capabilityChromium":  0,
+                      "measurementChromium":  0,
+                      "abAuthorized":  false,
+                      "stopReason":  "NATIVE_BUDGET_BOM_UNSUPPORTED",
+                      "stopPublication":  "PASS",
+                      "independentReadback":  true
+                  },
+    "corpus":  {
+                   "source":  "R7 regenerated corpus",
+                   "parameters":  {
+                                      "width":  640,
+                                      "height":  360,
+                                      "bitrateKbps":  2400,
+                                      "chunkCount":  3
+                                  },
+                   "originalR6Mp4sAvailable":  false,
+                   "byteIdentityToR6Claimed":  false,
+                   "provenance":  "R7 use authorized; original R6 byte identity unproven"
+               },
+    "cleanup":  {
+                    "syntheticAccounts":  {
+                                              "status":  "PASS",
+                                              "requested":  2,
+                                              "cleaned":  2,
+                                              "filesRemoved":  3
+                                          },
+                    "backendAndPostgres":  {
+                                               "pidsPresentAfterStopSignal":  false,
+                                               "runtimeAndStoragePresent":  false,
+                                               "healthEndpoint":  "UNAVAILABLE",
+                                               "formalCleanupReceipt":  "MISSING",
+                                               "status":  "UNVERIFIED_RECEIPT_MISSING"
+                                           }
+                },
+    "dependencyFindings":  {
+                               "moderate":  7,
+                               "high":  20,
+                               "critical":  3,
+                               "upgradesPerformed":  false
+                           },
+    "limitations":  [
+                        "No R13 native capability trace or A/B profile was captured; no native allocation or leak conclusion is supported.",
+                        "Why Chromium omitted renderer process_name and heaps_v2 remains unknown; headless-shell incapability is not claimed.",
+                        "Original R6 MP4 byte identity cannot be verified after prior cleanup.",
+                        "The owned backend/PostgreSQL stopped and its runtime was absent, but the formal closure receipt is missing."
+                    ]
+}

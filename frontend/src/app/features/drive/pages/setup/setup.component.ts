@@ -5,6 +5,7 @@ import { AppStateService } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
 import { FormsModule } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
+import { downloadSecurityPhraseRecoveryFile } from '../../../../core/crypto/recovery-file';
 @Component({
   selector: 'app-setup',
   standalone: true,
@@ -60,10 +61,25 @@ import { firstValueFrom } from 'rxjs';
             <div class="error-msg">{{ error() }}</div>
           }
 
+          @if (warning()) {
+            <div class="recovery-warning">
+              <strong>Drive inicializado com sucesso.</strong>
+              <span>{{ warning() }}</span>
+              <div class="recovery-actions">
+                <button type="button" class="secondary-btn" (click)="retryRecovery()" [disabled]="loading()">
+                  Tentar baixar novamente
+                </button>
+                <button type="button" class="secondary-btn" (click)="continueWithoutRecovery()" [disabled]="loading()">
+                  Continuar mesmo assim
+                </button>
+              </div>
+            </div>
+          }
+
           <button
             type="submit"
             class="submit-btn"
-            [disabled]="setupForm.invalid || loading()"
+            [disabled]="setupForm.invalid || loading() || vaultInitialized()"
           >
             @if (loading()) {
               Criando Drive...
@@ -165,6 +181,36 @@ import { firstValueFrom } from 'rxjs';
         font-size: 14px;
         margin-bottom: 16px;
       }
+      .recovery-warning {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        color: #8a4b08;
+        background: #fef7e0;
+        border: 1px solid #fbbc04;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 16px;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+      .recovery-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .secondary-btn {
+        background: #fff;
+        color: #1a73e8;
+        border: 1px solid #1a73e8;
+        border-radius: 6px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      .secondary-btn:disabled {
+        opacity: .6;
+        cursor: not-allowed;
+      }
       .submit-btn {
         width: 100%;
         background: #1a73e8;
@@ -196,10 +242,16 @@ export class SetupComponent {
   phrase = '';
   confirmPhrase = '';
   error = signal<string | null>(null);
+  warning = signal<string | null>(null);
   loading = signal(false);
+  vaultInitialized = signal(false);
+  private committedPhrase = '';
 
   async onSubmit() {
     this.error.set(null);
+    this.warning.set(null);
+
+    if (this.vaultInitialized()) return;
 
     if (this.phrase !== this.confirmPhrase) {
       this.error.set('As frases não coincidem.');
@@ -218,38 +270,58 @@ export class SetupComponent {
 
     try {
       await this.cryptoService.initializeVault(this.phrase);
-
-      this.downloadRecoveryFile();
-
-      // Força um refresh para pegar o novo JWT com is_vault_initialized = true
-      try {
-        await firstValueFrom(this.authService.restoreSession());
-      } catch (err) {
-        // Ignora erro de refresh
+      this.vaultInitialized.set(true);
+      this.committedPhrase = this.phrase;
+      if (!this.tryDownloadRecovery()) {
+        this.loading.set(false);
+        return;
       }
-      
-      this.appState.unlock();
-      this.router.navigate(['/drive/home']);
-    } catch (e) {
-      console.error(e);
+      await this.finalizeSetupNavigation();
+    } catch {
       this.error.set('Erro ao inicializar o drive.');
       this.loading.set(false);
     }
   }
 
-  private downloadRecoveryFile() {
-    const text =
-      '=== NANIKA RECOVERY ===\\n' +
-      'Guarde esta frase em um local seguro, preferencialmente offline.\\n\\n' +
-      'Sua Frase de Segurança: ' + this.phrase + '\\n\\n' +
-      'Aviso: O Nanika possui arquitetura Zero-Knowledge. Não temos como recuperar esta frase se você a perder.';
-
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'nanika-recovery.txt';
-    a.click();
-    window.URL.revokeObjectURL(url);
+  async retryRecovery(): Promise<void> {
+    if (!this.vaultInitialized() || !this.committedPhrase) return;
+    this.loading.set(true);
+    this.warning.set(null);
+    if (!this.tryDownloadRecovery()) {
+      this.loading.set(false);
+      return;
+    }
+    await this.finalizeSetupNavigation();
   }
+
+  async continueWithoutRecovery(): Promise<void> {
+    if (!this.vaultInitialized()) return;
+    this.warning.set(null);
+    await this.finalizeSetupNavigation();
+  }
+
+  private tryDownloadRecovery(): boolean {
+    try {
+      downloadSecurityPhraseRecoveryFile(this.committedPhrase);
+      return true;
+    } catch {
+      this.warning.set('Não foi possível baixar o arquivo de recuperação. Guarde sua Frase de Segurança com segurança antes de continuar.');
+      return false;
+    }
+  }
+
+  private async finalizeSetupNavigation(): Promise<void> {
+    try {
+      await firstValueFrom(this.authService.restoreSession());
+    } catch {
+      // O vault já foi inicializado; preserve o fluxo atual mesmo sem refresh.
+    }
+    this.loading.set(false);
+    this.phrase = '';
+    this.confirmPhrase = '';
+    this.appState.unlock();
+    this.committedPhrase = '';
+    this.router.navigate(['/drive/home']);
+  }
+
 }

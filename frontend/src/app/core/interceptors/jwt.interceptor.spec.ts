@@ -4,6 +4,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { jwtInterceptor } from './jwt.interceptor';
 import { AuthService } from '../auth/auth.service';
 import { provideZonelessChangeDetection } from '@angular/core';
+import { environment } from '../../../environments/environment';
 
 describe('JwtInterceptor', () => {
   let httpMock: HttpTestingController;
@@ -30,50 +31,75 @@ describe('JwtInterceptor', () => {
     httpMock.verify();
   });
 
-  it('should attach Bearer token if token exists and URL is not Google Drive API', () => {
-    // Arrange
+  it('attaches the Nanika JWT to the configured API authority', () => {
     authSpy.getToken.and.returnValue('fake-jwt-token');
+    const url = `${environment.apiUrl.replace(/\/+$/, '')}/api/data`;
 
-    // Act
-    httpClient.get('/api/data').subscribe();
+    httpClient.get(url).subscribe();
 
-    // Assert
-    const req = httpMock.expectOne('/api/data');
+    const req = httpMock.expectOne(url);
     expect(req.request.headers.has('Authorization')).toBeTrue();
     expect(req.request.headers.get('Authorization')).toBe('Bearer fake-jwt-token');
     expect(req.request.withCredentials).toBeTrue();
   });
 
-  it('should not attach Bearer token if URL is googleapis.com', () => {
-    // Arrange
+  it('attaches the Nanika JWT to the configured upload authority', () => {
     authSpy.getToken.and.returnValue('fake-jwt-token');
+    const url = `${environment.uploadApiUrl.replace(/\/+$/, '')}/files/1/chunks`;
 
-    // Act
-    httpClient.get('https://www.googleapis.com/drive/v3/files').subscribe();
+    httpClient.get(url).subscribe();
 
-    // Assert
-    const req = httpMock.expectOne('https://www.googleapis.com/drive/v3/files');
-    expect(req.request.headers.has('Authorization')).toBeFalse();
+    const req = httpMock.expectOne(url);
+    expect(req.request.headers.get('Authorization')).toBe('Bearer fake-jwt-token');
+    expect(req.request.withCredentials).toBeTrue();
   });
 
-  it('should not trust a lookalike googleapis hostname', () => {
+  it('does not attach the Nanika JWT or credentials to an unrelated external origin', () => {
+    authSpy.getToken.and.returnValue('fake-jwt-token');
+
+    httpClient.get('https://external.example.test/resource').subscribe();
+
+    const req = httpMock.expectOne('https://external.example.test/resource');
+    expect(req.request.headers.has('Authorization')).toBeFalse();
+    expect(req.request.withCredentials).toBeFalse();
+  });
+
+  it('does not trust an external Google hostname lookalike', () => {
     authSpy.getToken.and.returnValue('fake-jwt-token');
 
     httpClient.get('https://googleapis.com.attacker.test/drive/v3/files').subscribe();
 
     const req = httpMock.expectOne('https://googleapis.com.attacker.test/drive/v3/files');
-    expect(req.request.headers.get('Authorization')).toBe('Bearer fake-jwt-token');
+    expect(req.request.headers.has('Authorization')).toBeFalse();
+    expect(req.request.withCredentials).toBeFalse();
   });
 
-  it('should not attach Bearer token if token is empty', () => {
-    // Arrange
+  it('preserves an external provider Authorization header and request headers', () => {
+    authSpy.getToken.and.returnValue('fake-jwt-token');
+
+    httpClient.get('https://www.googleapis.com/drive/v3/files', {
+      headers: {
+        Authorization: 'Bearer google-access-token',
+        Range: 'bytes=0-15',
+        'X-Provider': 'drive',
+      },
+    }).subscribe();
+
+    const req = httpMock.expectOne('https://www.googleapis.com/drive/v3/files');
+    expect(req.request.headers.get('Authorization')).toBe('Bearer google-access-token');
+    expect(req.request.headers.get('Range')).toBe('bytes=0-15');
+    expect(req.request.headers.get('X-Provider')).toBe('drive');
+    expect(req.request.withCredentials).toBeFalse();
+  });
+
+  it('does not mutate a configured Nanika request when the token is empty', () => {
     authSpy.getToken.and.returnValue(null);
+    const url = `${environment.apiUrl.replace(/\/+$/, '')}/api/data`;
 
-    // Act
-    httpClient.get('/api/data').subscribe();
+    httpClient.get(url).subscribe();
 
-    // Assert
-    const req = httpMock.expectOne('/api/data');
+    const req = httpMock.expectOne(url);
     expect(req.request.headers.has('Authorization')).toBeFalse();
+    expect(req.request.withCredentials).toBeFalse();
   });
 });

@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "outDir": "../../out-tsc/ap06-r7", "types": [] },
+  "files": ["main.ts"],
+  "include": ["../../src/**/*.d.ts"]
+}

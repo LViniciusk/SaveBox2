@@ -1,0 +1,1945 @@
+{
+  "campaign": "AP-06-R9-R2",
+  "status": "PASS_AP06_R9_R2_ANGULAR_FETCH_EFFECT_CONFIRMED",
+  "ap06": "OPEN",
+  "productionChanges": 0,
+  "branch": "investigation/ap06-r9-r2",
+  "base": "frontend",
+  "baseHead": "fa2a50f0099725ec29c7b93676561fdcc1bc6836",
+  "implementationHead": "443b7bf2b3a1bddbde81b13919185e7a62bf345a",
+  "freezeSha256": "e5a2573806c7fbc0694d88959058fd73e2435b659ce81a7af7004267004d2bb9",
+  "freezeFiles": 493,
+  "checkpoints": {
+    "AUTHORITIES_PUBLISHED": "PASS",
+    "AUTHORITIES_READBACK_VERIFIED": "PASS",
+    "CORPUS_GENERATED": "PASS",
+    "CORPUS_VERIFIED": "PASS",
+    "IMPLEMENTATION_FROZEN": "PASS",
+    "READY_FOR_MEASUREMENT": "PASS"
+  },
+  "priorStop": {
+    "pr": "https://github.com/LViniciusk/SaveBox2/pull/23",
+    "head": "24e147a9e3a52b93b8cfb4b88dc4dd495e9c3881",
+    "status": "BLOCKED_AP06_R9_INVALID_CONTROL",
+    "incorporatedByMerge": false
+  },
+  "newBaseline": "Explicitly authorized independent corpus; no old hash reconstruction or historical result substitution.",
+  "fixtureManifestSha256": "a7afaa6816b6d86603c295c1e8d2389214141f952f5821fd5b4bd9e907d1fe6d",
+  "fixtures": [
+    {
+      "id": 0,
+      "name": "classic-faststart-av-30s",
+      "path": "video-0.mp4",
+      "bytes": 9628766,
+      "sha256": "c55d4a61fa54f507bb93727a48812d5267ed762c341738fc10292b1517be09b3",
+      "container": "classic-mp4",
+      "layout": "faststart",
+      "durationSeconds": 30,
+      "bitrateKbps": 2400,
+      "width": 640,
+      "height": 360,
+      "supplementalCohort": true,
+      "moovOffset": 32,
+      "moovBytes": 16562,
+      "codec": "video/mp4; codecs=\"avc1.42c01e, mp4a.40.2\"",
+      "tracks": [
+        {
+          "type": "video",
+          "codec": "avc1.42c01e"
+        },
+        {
+          "type": "audio",
+          "codec": "mp4a.40.2"
+        }
+      ],
+      "chunkBytes": 4194304,
+      "chunkCount": 3,
+      "ffmpegVersion": "ffmpeg version 2024-02-04-git-7375a6ca7b-full_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers",
+      "generationCommand": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=640x360:rate=24:duration=30",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=880:sample_rate=48000:duration=30",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-threads",
+        "2",
+        "-b:v",
+        "2400k",
+        "-maxrate",
+        "2400k",
+        "-bufsize",
+        "4800k",
+        "-g",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-movflags",
+        "+faststart",
+        "<fixture>/video-0.mp4"
+      ],
+      "dataOffset": 114,
+      "expectedSize": 9628766,
+      "ciphertextBytes": 9628928,
+      "macBytesPerChunk": 16,
+      "lastChunkBytes": 1240158,
+      "roundTripSha256": "c55d4a61fa54f507bb93727a48812d5267ed762c341738fc10292b1517be09b3",
+      "authenticatedMetadata": true,
+      "ciphertextSha256": "e8b522f21359d5d4a37d69500d3212e208fac5ae5df08c962500494960e01842"
+    },
+    {
+      "id": 1,
+      "name": "classic-faststart-video-35s",
+      "path": "video-1.mp4",
+      "bytes": 10742440,
+      "sha256": "99b8efba22f1248341c4e742e559c70d88e8132b9da03db6d3b2b669cc613e64",
+      "container": "classic-mp4",
+      "layout": "faststart",
+      "durationSeconds": 35,
+      "bitrateKbps": 2400,
+      "width": 640,
+      "height": 360,
+      "supplementalCohort": true,
+      "moovOffset": 32,
+      "moovBytes": 4449,
+      "codec": "video/mp4; codecs=\"avc1.42c01e\"",
+      "tracks": [
+        {
+          "type": "video",
+          "codec": "avc1.42c01e"
+        }
+      ],
+      "chunkBytes": 4194304,
+      "chunkCount": 3,
+      "ffmpegVersion": "ffmpeg version 2024-02-04-git-7375a6ca7b-full_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers",
+      "generationCommand": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=640x360:rate=24:duration=35",
+        "-map",
+        "0:v:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-threads",
+        "2",
+        "-b:v",
+        "2400k",
+        "-maxrate",
+        "2400k",
+        "-bufsize",
+        "4800k",
+        "-g",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "<fixture>/video-1.mp4"
+      ],
+      "dataOffset": 117,
+      "expectedSize": 10742440,
+      "ciphertextBytes": 10742605,
+      "macBytesPerChunk": 16,
+      "lastChunkBytes": 2353832,
+      "roundTripSha256": "99b8efba22f1248341c4e742e559c70d88e8132b9da03db6d3b2b669cc613e64",
+      "authenticatedMetadata": true,
+      "ciphertextSha256": "93447a3d18c95cad7007b27dae05ae660a3a7ccc2dc72f7e256ed1e013a13463"
+    },
+    {
+      "id": 2,
+      "name": "classic-faststart-av-35s",
+      "path": "video-2.mp4",
+      "bytes": 11178968,
+      "sha256": "0cdd23ddda5df01fd3327fcf38c43737e6ba4a3cb0fe74c4bc03515a288b16ad",
+      "container": "classic-mp4",
+      "layout": "faststart",
+      "durationSeconds": 35,
+      "bitrateKbps": 2400,
+      "width": 640,
+      "height": 360,
+      "supplementalCohort": true,
+      "moovOffset": 32,
+      "moovBytes": 19102,
+      "codec": "video/mp4; codecs=\"avc1.42c01e, mp4a.40.2\"",
+      "tracks": [
+        {
+          "type": "video",
+          "codec": "avc1.42c01e"
+        },
+        {
+          "type": "audio",
+          "codec": "mp4a.40.2"
+        }
+      ],
+      "chunkBytes": 4194304,
+      "chunkCount": 3,
+      "ffmpegVersion": "ffmpeg version 2024-02-04-git-7375a6ca7b-full_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers",
+      "generationCommand": [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=640x360:rate=24:duration=35",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=880:sample_rate=48000:duration=35",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-threads",
+        "2",
+        "-b:v",
+        "2400k",
+        "-maxrate",
+        "2400k",
+        "-bufsize",
+        "4800k",
+        "-g",
+        "24",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-movflags",
+        "+faststart",
+        "<fixture>/video-2.mp4"
+      ],
+      "dataOffset": 114,
+      "expectedSize": 11178968,
+      "ciphertextBytes": 11179130,
+      "macBytesPerChunk": 16,
+      "lastChunkBytes": 2790360,
+      "roundTripSha256": "0cdd23ddda5df01fd3327fcf38c43737e6ba4a3cb0fe74c4bc03515a288b16ad",
+      "authenticatedMetadata": true,
+      "ciphertextSha256": "be7dd4d0ec5d902b71f081c98e6493c3ed9b38ab1d437da881f76716a107a973"
+    }
+  ],
+  "versions": {
+    "node": "v24.21.0",
+    "python": "3.14.3 (main, Feb  5 2026, 13:34:54)  [MINGW GCC UCRT 15.2.0 64 bit (AMD64)]",
+    "ffmpeg": "ffmpeg version 2024-02-04-git-7375a6ca7b-full_build-www.gyan.dev Copyright (c) 2000-2024 the FFmpeg developers",
+    "ffprobe": "ffprobe version 2024-02-04-git-7375a6ca7b-full_build-www.gyan.dev Copyright (c) 2007-2024 the FFmpeg developers",
+    "cmake": "cmake version 4.2.3",
+    "gcc": "g++.exe (Rev13, Built by MSYS2 project) 15.2.0",
+    "chromium": "151.0.7922.34 verified by actual browser.version() assertion in Angular preflight",
+    "playwright": "1.62.1",
+    "angular": "20.3.31",
+    "kasumi": "original KasumiCryptoService; full authenticated metadata/data roundtrip for all 3 generated fixtures"
+  },
+  "appProducts": {
+    ".quality/readiness-wave9-r2/tooling/app/browser/index.html": "3289322c37dac2d79189ffe2cc7c6fceea4d38192ca47313178f5ea6f2392ba4",
+    ".quality/readiness-wave9-r2/tooling/app/browser/main-HO5RIA7A.js": "5161d9ec96b5741d383c902894eefbfb053868e371f00c5ced92ccb6e9ea0c4b",
+    ".quality/readiness-wave9-r2/tooling/app/browser/worker-CR5S5SJJ.js": "aadbab5d9bf4357ff7a7cdf92d81b53d62d25d4fa61e2480b85bd1d456de9dc6",
+    ".quality/readiness-wave9-r2/tooling/app/browser/worker-DKFWJH2L.js": "da23cd445ea5d898d00f0c0c2d63a4411d90258fdd21447c9a6f00e9e5994127",
+    ".quality/readiness-wave9-r2/tooling/app/browser/worker-OK5RSCLR.js": "ea645aefd0a14148aeaa7e95a672b446745f4a2436ae5c018549efd1fd94273b"
+  },
+  "workers": {
+    "crypto": {
+      "name": "worker-OK5RSCLR.js",
+      "path": ".quality/readiness-wave9-r2/tooling/app/browser/worker-OK5RSCLR.js",
+      "sha256": "ea645aefd0a14148aeaa7e95a672b446745f4a2436ae5c018549efd1fd94273b"
+    },
+    "transmux": {
+      "name": "worker-CR5S5SJJ.js",
+      "path": ".quality/readiness-wave9-r2/tooling/app/browser/worker-CR5S5SJJ.js",
+      "sha256": "aadbab5d9bf4357ff7a7cdf92d81b53d62d25d4fa61e2480b85bd1d456de9dc6"
+    }
+  },
+  "nativeExecutables": {
+    ".quality/readiness-wave9-r2/tooling/backend-build/nanika_e2e_fixture.exe": "a0870595266a59524775073aef5eff0bfa54d9c26fc5d0c54f450a0fb3eddcfc",
+    ".quality/readiness-wave9-r2/tooling/backend-build/savebox_server.exe": "945018795b9b7588966133080f061289156d7cc702c4b909fa6a7a3196e55850"
+  },
+  "workload": {
+    "allThreeTransportsEqual": true,
+    "bytesPerCycle": 25559136,
+    "cycles": 6,
+    "derivedBeforeFreeze": true,
+    "rangesPerCycle": [
+      [
+        0,
+        "bytes=0-131071"
+      ],
+      [
+        0,
+        "bytes=114-4194433"
+      ],
+      [
+        0,
+        "bytes=4194434-8388753"
+      ],
+      [
+        1,
+        "bytes=0-131071"
+      ],
+      [
+        1,
+        "bytes=117-4194436"
+      ],
+      [
+        1,
+        "bytes=4194437-8388756"
+      ],
+      [
+        2,
+        "bytes=0-131071"
+      ],
+      [
+        2,
+        "bytes=114-4194433"
+      ],
+      [
+        2,
+        "bytes=4194434-8388753"
+      ]
+    ],
+    "requestsPerCycle": 9
+  },
+  "conditions": [
+    {
+      "condition": "r9-r2.0",
+      "transport": "xhr",
+      "status": "VALID_BROWSER_HEAVY_TRIAGE"
+    },
+    {
+      "condition": "r9-r2.1",
+      "transport": "angular-fetch",
+      "status": "VALID_RENDERER_HEAVY_TRIAGE_AND_THREE_FORMALS"
+    },
+    {
+      "condition": "r9-r2.2",
+      "transport": "direct-fetch",
+      "status": "NOT_MEASURED",
+      "reason": "Angular Fetch was renderer-heavy; scientific tree forbids direct-fetch measurement on this path",
+      "realPreFreezeTests": "PASS"
+    }
+  ],
+  "results": [
+    {
+      "condition": "r9-r2.0",
+      "stage": "triage",
+      "status": "VALID",
+      "classification": "TRANSMUX_MSE_REPRODUCES_BROWSER_PROCESS_OWNERSHIP",
+      "rawPath": "triage/r9-r2.0/crypto-transmux-mse.raw.json",
+      "rawSha256": "2d3673233599fc149b56484c9d5a429426390796b7c79c855d7818a9716c8233",
+      "runs": [
+        {
+          "runId": "triage-r9-r2.0-r1",
+          "classification": "TRANSMUX_MSE_REPRODUCES_BROWSER_PROCESS_OWNERSHIP",
+          "browserDeltaMiB": 171.19921875,
+          "rendererDeltaMiB": 32.96875,
+          "transportProof": {
+            "transport": "xhr",
+            "xhrBackend": true,
+            "fetchBackend": false,
+            "originalRange": true,
+            "directRange": false,
+            "realAuth": true
+          },
+          "playbackSessions": 18,
+          "samples": [
+            {
+              "phase": "baseline",
+              "cycle": 0,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 22192128,
+                "renderer": 40169472,
+                "gpu-process": 24768512,
+                "utility": 14303232
+              },
+              "privateDeltaMiB": {
+                "browser": 0.0,
+                "renderer": 0.0,
+                "gpu-process": 0.0,
+                "utility": 0.0
+              }
+            },
+            {
+              "phase": "cycle-1-close",
+              "cycle": 1,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 54763520,
+                "renderer": 105684992,
+                "gpu-process": 25243648,
+                "utility": 26464256
+              },
+              "privateDeltaMiB": {
+                "browser": 31.0625,
+                "renderer": 62.48046875,
+                "gpu-process": 0.453125,
+                "utility": 11.59765625
+              }
+            },
+            {
+              "phase": "cycle-2-close",
+              "cycle": 2,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 84496384,
+                "renderer": 79933440,
+                "gpu-process": 25264128,
+                "utility": 26779648
+              },
+              "privateDeltaMiB": {
+                "browser": 59.41796875,
+                "renderer": 37.921875,
+                "gpu-process": 0.47265625,
+                "utility": 11.8984375
+              }
+            },
+            {
+              "phase": "cycle-3-close",
+              "cycle": 3,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 113831936,
+                "renderer": 120528896,
+                "gpu-process": 25276416,
+                "utility": 26902528
+              },
+              "privateDeltaMiB": {
+                "browser": 87.39453125,
+                "renderer": 76.63671875,
+                "gpu-process": 0.484375,
+                "utility": 12.015625
+              }
+            },
+            {
+              "phase": "cycle-4-close",
+              "cycle": 4,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 143183872,
+                "renderer": 65253376,
+                "gpu-process": 25362432,
+                "utility": 26894336
+              },
+              "privateDeltaMiB": {
+                "browser": 115.38671875,
+                "renderer": 23.921875,
+                "gpu-process": 0.56640625,
+                "utility": 12.0078125
+              }
+            },
+            {
+              "phase": "cycle-5-close",
+              "cycle": 5,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 172404736,
+                "renderer": 79368192,
+                "gpu-process": 25370624,
+                "utility": 26984448
+              },
+              "privateDeltaMiB": {
+                "browser": 143.25390625,
+                "renderer": 37.3828125,
+                "gpu-process": 0.57421875,
+                "utility": 12.09375
+              }
+            },
+            {
+              "phase": "cycle-6-close",
+              "cycle": 6,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 201707520,
+                "renderer": 74739712,
+                "gpu-process": 25387008,
+                "utility": 26943488
+              },
+              "privateDeltaMiB": {
+                "browser": 171.19921875,
+                "renderer": 32.96875,
+                "gpu-process": 0.58984375,
+                "utility": 12.0546875
+              }
+            },
+            {
+              "phase": "forced-GC-final",
+              "cycle": 6,
+              "gc": "forced-diagnostic",
+              "privateBytes": {
+                "browser": 201715712,
+                "renderer": 63795200,
+                "gpu-process": 25387008,
+                "utility": 26943488
+              },
+              "privateDeltaMiB": {
+                "browser": 171.20703125,
+                "renderer": 22.53125,
+                "gpu-process": 0.58984375,
+                "utility": 12.0546875
+              }
+            }
+          ],
+          "network": {
+            "enabledBeforeNavigation": true,
+            "listenersDetached": true,
+            "sessionDetached": true,
+            "routingInstalled": true,
+            "httpCache": "disabled by Playwright routing",
+            "explicitCacheIntervention": false,
+            "duplicateRequestIds": 0,
+            "rangeRequests": 54,
+            "clientBlobBodyBytes": 153354816,
+            "expectedCiphertextRangeBytes": 153354816,
+            "cdpEncodedDataLength": 153397674,
+            "mseAppendedBytes": 145672536,
+            "backendGetRequests": 54,
+            "backendBodyBytes": null,
+            "backendCorrelationFailures": 0,
+            "firstRangeSanitizedHeaders": {
+              "content-range": "bytes 0-131071/9628928",
+              "content-length": "131072",
+              "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+            },
+            "absentCacheHeaders": {
+              "cache-control": null,
+              "etag": null,
+              "age": null
+            },
+            "servedFromCacheRequests": 0,
+            "diskCacheRequests": 0,
+            "serviceWorkerRequests": 0
+          },
+          "observedFinal": {
+            "initializeAttempts": 18,
+            "initializeSettled": 18,
+            "initializeFailures": 0,
+            "playbackStarted": 18,
+            "playbackCompleted": 18,
+            "playbackFailures": 0,
+            "destroyCalls": 18,
+            "componentsMounted": 36,
+            "componentsDestroyed": 36,
+            "rangeRequestsStarted": 54,
+            "rangeRequestsCompleted": 54,
+            "rangeRequestsAborted": 0,
+            "rangeRequestsFailed": 0,
+            "rangeBytesReceived": 153354816,
+            "activeRanges": 0,
+            "maxActiveRanges": 1,
+            "metadataRequests": 18,
+            "workersCreated": 36,
+            "workersTerminated": 36,
+            "workerMessagesSent": 72,
+            "workerMessagesReceived": 72,
+            "workerMessagesCancelled": 0,
+            "workerErrors": 0,
+            "detachedTransfers": 144,
+            "transferFailures": 0,
+            "mediaSourcesCreated": 18,
+            "mediaSourcesClosed": 18,
+            "sourceBuffersCreated": 18,
+            "sourceBuffersReleased": 18,
+            "objectUrlsCreated": 18,
+            "objectUrlsRevoked": 18,
+            "pendingOperations": 0,
+            "pendingAppends": 0,
+            "bytesAppended": 145672536,
+            "timersLive": 0,
+            "experimentalListeners": 0,
+            "unhandledRejections": 0,
+            "gcRemoveCalls": 0,
+            "storeLoadStarted": 1,
+            "storeLoadCompleted": 1,
+            "storeFileResolved": 18,
+            "storeEffectsSettled": 1,
+            "authAttempts": 1,
+            "authSuccesses": 1,
+            "http206Validated": 54,
+            "jwtRangesValidated": 54,
+            "backendFileIdMatches": 18,
+            "unexpectedPeripheralOperations": 0,
+            "outstandingSubscriptions": 0,
+            "directAuthorizedRanges": 0
+          },
+          "finalOwnership": {
+            "liveKnownArrayBufferBytes": 0,
+            "knownTransmuxInputBytes": 0,
+            "knownTransmuxOutputBytes": 0,
+            "pendingTransmuxMessages": 0,
+            "transmuxWorkersLive": 0,
+            "workerUrlsLive": 0,
+            "sourceBuffersLive": 0,
+            "mediaSourcesLive": 0,
+            "objectUrlsLive": 0,
+            "pendingAppends": 0,
+            "pendingFetches": 0,
+            "cryptoWorkersLive": 0,
+            "cryptoWorkerUrlsLive": 0,
+            "pendingDecrypts": 0,
+            "messagesPendingCrypto": 0,
+            "messagesPendingTransmux": 0,
+            "workersLive": 0,
+            "observedMediaSourcesLive": 0,
+            "observedSourceBuffersLive": 0,
+            "observedObjectUrlsLive": 0,
+            "componentsLive": 0,
+            "outstandingSubscriptions": 0,
+            "pendingOperations": 0,
+            "observedPendingAppends": 0,
+            "timersLive": 0,
+            "experimentalListeners": 0
+          },
+          "processExitAudit": {
+            "status": "PASS",
+            "ownedPids": [
+              8956,
+              20228,
+              20596,
+              31564,
+              32124
+            ],
+            "aliveOwnedPids": []
+          },
+          "functionalStatus": "PASS",
+          "cleanupStatus": "PASS"
+        }
+      ]
+    },
+    {
+      "condition": "r9-r2.1",
+      "stage": "triage",
+      "status": "VALID",
+      "classification": "TRANSMUX_MSE_DOES_NOT_REPRODUCE",
+      "rawPath": "triage/r9-r2.1/crypto-transmux-mse.raw.json",
+      "rawSha256": "dc7055c3ba062fc0b149c6a84b51adc7e720407058099c79bde0dbc41a2ec00b",
+      "runs": [
+        {
+          "runId": "triage-r9-r2.1-r1",
+          "classification": "TRANSMUX_MSE_DOES_NOT_REPRODUCE",
+          "browserDeltaMiB": 3.375,
+          "rendererDeltaMiB": 426.30859375,
+          "transportProof": {
+            "transport": "angular-fetch",
+            "xhrBackend": false,
+            "fetchBackend": true,
+            "originalRange": true,
+            "directRange": false,
+            "realAuth": true
+          },
+          "playbackSessions": 18,
+          "samples": [
+            {
+              "phase": "baseline",
+              "cycle": 0,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 22429696,
+                "renderer": 40202240,
+                "gpu-process": 24870912,
+                "utility": 14004224
+              },
+              "privateDeltaMiB": {
+                "browser": 0.0,
+                "renderer": 0.0,
+                "gpu-process": 0.0,
+                "utility": 0.0
+              }
+            },
+            {
+              "phase": "cycle-1-close",
+              "cycle": 1,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 29118464,
+                "renderer": 157274112,
+                "gpu-process": 25346048,
+                "utility": 26165248
+              },
+              "privateDeltaMiB": {
+                "browser": 6.37890625,
+                "renderer": 111.6484375,
+                "gpu-process": 0.453125,
+                "utility": 11.59765625
+              }
+            },
+            {
+              "phase": "cycle-2-close",
+              "cycle": 2,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 34643968,
+                "renderer": 251785216,
+                "gpu-process": 25374720,
+                "utility": 26370048
+              },
+              "privateDeltaMiB": {
+                "browser": 11.6484375,
+                "renderer": 201.78125,
+                "gpu-process": 0.48046875,
+                "utility": 11.79296875
+              }
+            },
+            {
+              "phase": "cycle-3-close",
+              "cycle": 3,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 34476032,
+                "renderer": 337092608,
+                "gpu-process": 25382912,
+                "utility": 26443776
+              },
+              "privateDeltaMiB": {
+                "browser": 11.48828125,
+                "renderer": 283.13671875,
+                "gpu-process": 0.48828125,
+                "utility": 11.86328125
+              }
+            },
+            {
+              "phase": "cycle-4-close",
+              "cycle": 4,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 42995712,
+                "renderer": 421539840,
+                "gpu-process": 25538560,
+                "utility": 26427392
+              },
+              "privateDeltaMiB": {
+                "browser": 19.61328125,
+                "renderer": 363.671875,
+                "gpu-process": 0.63671875,
+                "utility": 11.84765625
+              }
+            },
+            {
+              "phase": "cycle-5-close",
+              "cycle": 5,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 30683136,
+                "renderer": 447836160,
+                "gpu-process": 25563136,
+                "utility": 26554368
+              },
+              "privateDeltaMiB": {
+                "browser": 7.87109375,
+                "renderer": 388.75,
+                "gpu-process": 0.66015625,
+                "utility": 11.96875
+              }
+            },
+            {
+              "phase": "cycle-6-close",
+              "cycle": 6,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 25968640,
+                "renderer": 487219200,
+                "gpu-process": 25563136,
+                "utility": 26624000
+              },
+              "privateDeltaMiB": {
+                "browser": 3.375,
+                "renderer": 426.30859375,
+                "gpu-process": 0.66015625,
+                "utility": 12.03515625
+              }
+            },
+            {
+              "phase": "forced-GC-final",
+              "cycle": 6,
+              "gc": "forced-diagnostic",
+              "privateBytes": {
+                "browser": 26046464,
+                "renderer": 475144192,
+                "gpu-process": 25563136,
+                "utility": 26624000
+              },
+              "privateDeltaMiB": {
+                "browser": 3.44921875,
+                "renderer": 414.79296875,
+                "gpu-process": 0.66015625,
+                "utility": 12.03515625
+              }
+            }
+          ],
+          "network": {
+            "enabledBeforeNavigation": true,
+            "listenersDetached": true,
+            "sessionDetached": true,
+            "routingInstalled": true,
+            "httpCache": "disabled by Playwright routing",
+            "explicitCacheIntervention": false,
+            "duplicateRequestIds": 0,
+            "rangeRequests": 54,
+            "clientBlobBodyBytes": 153354816,
+            "expectedCiphertextRangeBytes": 153354816,
+            "cdpEncodedDataLength": 153397674,
+            "mseAppendedBytes": 145672536,
+            "backendGetRequests": 54,
+            "backendBodyBytes": null,
+            "backendCorrelationFailures": 0,
+            "firstRangeSanitizedHeaders": {
+              "content-range": "bytes 0-131071/9628928",
+              "content-length": "131072",
+              "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+            },
+            "absentCacheHeaders": {
+              "cache-control": null,
+              "etag": null,
+              "age": null
+            },
+            "servedFromCacheRequests": 0,
+            "diskCacheRequests": 0,
+            "serviceWorkerRequests": 0
+          },
+          "observedFinal": {
+            "initializeAttempts": 18,
+            "initializeSettled": 18,
+            "initializeFailures": 0,
+            "playbackStarted": 18,
+            "playbackCompleted": 18,
+            "playbackFailures": 0,
+            "destroyCalls": 18,
+            "componentsMounted": 36,
+            "componentsDestroyed": 36,
+            "rangeRequestsStarted": 54,
+            "rangeRequestsCompleted": 54,
+            "rangeRequestsAborted": 0,
+            "rangeRequestsFailed": 0,
+            "rangeBytesReceived": 153354816,
+            "activeRanges": 0,
+            "maxActiveRanges": 1,
+            "metadataRequests": 18,
+            "workersCreated": 36,
+            "workersTerminated": 36,
+            "workerMessagesSent": 72,
+            "workerMessagesReceived": 72,
+            "workerMessagesCancelled": 0,
+            "workerErrors": 0,
+            "detachedTransfers": 144,
+            "transferFailures": 0,
+            "mediaSourcesCreated": 18,
+            "mediaSourcesClosed": 18,
+            "sourceBuffersCreated": 18,
+            "sourceBuffersReleased": 18,
+            "objectUrlsCreated": 18,
+            "objectUrlsRevoked": 18,
+            "pendingOperations": 0,
+            "pendingAppends": 0,
+            "bytesAppended": 145672536,
+            "timersLive": 0,
+            "experimentalListeners": 0,
+            "unhandledRejections": 0,
+            "gcRemoveCalls": 0,
+            "storeLoadStarted": 1,
+            "storeLoadCompleted": 1,
+            "storeFileResolved": 18,
+            "storeEffectsSettled": 1,
+            "authAttempts": 1,
+            "authSuccesses": 1,
+            "http206Validated": 54,
+            "jwtRangesValidated": 54,
+            "backendFileIdMatches": 18,
+            "unexpectedPeripheralOperations": 0,
+            "outstandingSubscriptions": 0,
+            "directAuthorizedRanges": 0
+          },
+          "finalOwnership": {
+            "liveKnownArrayBufferBytes": 0,
+            "knownTransmuxInputBytes": 0,
+            "knownTransmuxOutputBytes": 0,
+            "pendingTransmuxMessages": 0,
+            "transmuxWorkersLive": 0,
+            "workerUrlsLive": 0,
+            "sourceBuffersLive": 0,
+            "mediaSourcesLive": 0,
+            "objectUrlsLive": 0,
+            "pendingAppends": 0,
+            "pendingFetches": 0,
+            "cryptoWorkersLive": 0,
+            "cryptoWorkerUrlsLive": 0,
+            "pendingDecrypts": 0,
+            "messagesPendingCrypto": 0,
+            "messagesPendingTransmux": 0,
+            "workersLive": 0,
+            "observedMediaSourcesLive": 0,
+            "observedSourceBuffersLive": 0,
+            "observedObjectUrlsLive": 0,
+            "componentsLive": 0,
+            "outstandingSubscriptions": 0,
+            "pendingOperations": 0,
+            "observedPendingAppends": 0,
+            "timersLive": 0,
+            "experimentalListeners": 0
+          },
+          "processExitAudit": {
+            "status": "PASS",
+            "ownedPids": [
+              9000,
+              18132,
+              24600,
+              33912,
+              34532
+            ],
+            "aliveOwnedPids": []
+          },
+          "functionalStatus": "PASS",
+          "cleanupStatus": "PASS"
+        }
+      ]
+    },
+    {
+      "condition": "r9-r2.1",
+      "stage": "formal",
+      "status": "VALID",
+      "classification": "TRANSMUX_MSE_DOES_NOT_REPRODUCE",
+      "rawPath": "formal/r9-r2.1/crypto-transmux-mse.raw.json",
+      "rawSha256": "c77125b800fd04273f9b13e94d1c0abaac69e166292b0a1380ddc0fb40206d81",
+      "runs": [
+        {
+          "runId": "formal-r9-r2.1-r1",
+          "classification": "TRANSMUX_MSE_DOES_NOT_REPRODUCE",
+          "browserDeltaMiB": 20.23046875,
+          "rendererDeltaMiB": 467.2265625,
+          "transportProof": {
+            "transport": "angular-fetch",
+            "xhrBackend": false,
+            "fetchBackend": true,
+            "originalRange": true,
+            "directRange": false,
+            "realAuth": true
+          },
+          "playbackSessions": 18,
+          "samples": [
+            {
+              "phase": "baseline",
+              "cycle": 0,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 22278144,
+                "renderer": 40808448,
+                "gpu-process": 24875008,
+                "utility": 14069760
+              },
+              "privateDeltaMiB": {
+                "browser": 0.0,
+                "renderer": 0.0,
+                "gpu-process": 0.0,
+                "utility": 0.0
+              }
+            },
+            {
+              "phase": "cycle-1-close",
+              "cycle": 1,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 30154752,
+                "renderer": 155815936,
+                "gpu-process": 25341952,
+                "utility": 26361856
+              },
+              "privateDeltaMiB": {
+                "browser": 7.51171875,
+                "renderer": 109.6796875,
+                "gpu-process": 0.4453125,
+                "utility": 11.72265625
+              }
+            },
+            {
+              "phase": "cycle-2-close",
+              "cycle": 2,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 34230272,
+                "renderer": 250081280,
+                "gpu-process": 25358336,
+                "utility": 26423296
+              },
+              "privateDeltaMiB": {
+                "browser": 11.3984375,
+                "renderer": 199.578125,
+                "gpu-process": 0.4609375,
+                "utility": 11.78125
+              }
+            },
+            {
+              "phase": "cycle-3-close",
+              "cycle": 3,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 43126784,
+                "renderer": 352309248,
+                "gpu-process": 25378816,
+                "utility": 26521600
+              },
+              "privateDeltaMiB": {
+                "browser": 19.8828125,
+                "renderer": 297.0703125,
+                "gpu-process": 0.48046875,
+                "utility": 11.875
+              }
+            },
+            {
+              "phase": "cycle-4-close",
+              "cycle": 4,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 30564352,
+                "renderer": 378523648,
+                "gpu-process": 25497600,
+                "utility": 26566656
+              },
+              "privateDeltaMiB": {
+                "browser": 7.90234375,
+                "renderer": 322.0703125,
+                "gpu-process": 0.59375,
+                "utility": 11.91796875
+              }
+            },
+            {
+              "phase": "cycle-5-close",
+              "cycle": 5,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 34930688,
+                "renderer": 454778880,
+                "gpu-process": 25505792,
+                "utility": 26669056
+              },
+              "privateDeltaMiB": {
+                "browser": 12.06640625,
+                "renderer": 394.79296875,
+                "gpu-process": 0.6015625,
+                "utility": 12.015625
+              }
+            },
+            {
+              "phase": "cycle-6-close",
+              "cycle": 6,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 43491328,
+                "renderer": 530731008,
+                "gpu-process": 25513984,
+                "utility": 26673152
+              },
+              "privateDeltaMiB": {
+                "browser": 20.23046875,
+                "renderer": 467.2265625,
+                "gpu-process": 0.609375,
+                "utility": 12.01953125
+              }
+            },
+            {
+              "phase": "forced-GC-final",
+              "cycle": 6,
+              "gc": "forced-diagnostic",
+              "privateBytes": {
+                "browser": 26603520,
+                "renderer": 472813568,
+                "gpu-process": 25513984,
+                "utility": 26673152
+              },
+              "privateDeltaMiB": {
+                "browser": 4.125,
+                "renderer": 411.9921875,
+                "gpu-process": 0.609375,
+                "utility": 12.01953125
+              }
+            }
+          ],
+          "network": {
+            "enabledBeforeNavigation": true,
+            "listenersDetached": true,
+            "sessionDetached": true,
+            "routingInstalled": true,
+            "httpCache": "disabled by Playwright routing",
+            "explicitCacheIntervention": false,
+            "duplicateRequestIds": 0,
+            "rangeRequests": 54,
+            "clientBlobBodyBytes": 153354816,
+            "expectedCiphertextRangeBytes": 153354816,
+            "cdpEncodedDataLength": 153397674,
+            "mseAppendedBytes": 145672536,
+            "backendGetRequests": 54,
+            "backendBodyBytes": null,
+            "backendCorrelationFailures": 0,
+            "firstRangeSanitizedHeaders": {
+              "content-range": "bytes 0-131071/9628928",
+              "content-length": "131072",
+              "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+            },
+            "absentCacheHeaders": {
+              "cache-control": null,
+              "etag": null,
+              "age": null
+            },
+            "servedFromCacheRequests": 0,
+            "diskCacheRequests": 0,
+            "serviceWorkerRequests": 0
+          },
+          "observedFinal": {
+            "initializeAttempts": 18,
+            "initializeSettled": 18,
+            "initializeFailures": 0,
+            "playbackStarted": 18,
+            "playbackCompleted": 18,
+            "playbackFailures": 0,
+            "destroyCalls": 18,
+            "componentsMounted": 36,
+            "componentsDestroyed": 36,
+            "rangeRequestsStarted": 54,
+            "rangeRequestsCompleted": 54,
+            "rangeRequestsAborted": 0,
+            "rangeRequestsFailed": 0,
+            "rangeBytesReceived": 153354816,
+            "activeRanges": 0,
+            "maxActiveRanges": 1,
+            "metadataRequests": 18,
+            "workersCreated": 36,
+            "workersTerminated": 36,
+            "workerMessagesSent": 72,
+            "workerMessagesReceived": 72,
+            "workerMessagesCancelled": 0,
+            "workerErrors": 0,
+            "detachedTransfers": 144,
+            "transferFailures": 0,
+            "mediaSourcesCreated": 18,
+            "mediaSourcesClosed": 18,
+            "sourceBuffersCreated": 18,
+            "sourceBuffersReleased": 18,
+            "objectUrlsCreated": 18,
+            "objectUrlsRevoked": 18,
+            "pendingOperations": 0,
+            "pendingAppends": 0,
+            "bytesAppended": 145672536,
+            "timersLive": 0,
+            "experimentalListeners": 0,
+            "unhandledRejections": 0,
+            "gcRemoveCalls": 0,
+            "storeLoadStarted": 1,
+            "storeLoadCompleted": 1,
+            "storeFileResolved": 18,
+            "storeEffectsSettled": 1,
+            "authAttempts": 1,
+            "authSuccesses": 1,
+            "http206Validated": 54,
+            "jwtRangesValidated": 54,
+            "backendFileIdMatches": 18,
+            "unexpectedPeripheralOperations": 0,
+            "outstandingSubscriptions": 0,
+            "directAuthorizedRanges": 0
+          },
+          "finalOwnership": {
+            "liveKnownArrayBufferBytes": 0,
+            "knownTransmuxInputBytes": 0,
+            "knownTransmuxOutputBytes": 0,
+            "pendingTransmuxMessages": 0,
+            "transmuxWorkersLive": 0,
+            "workerUrlsLive": 0,
+            "sourceBuffersLive": 0,
+            "mediaSourcesLive": 0,
+            "objectUrlsLive": 0,
+            "pendingAppends": 0,
+            "pendingFetches": 0,
+            "cryptoWorkersLive": 0,
+            "cryptoWorkerUrlsLive": 0,
+            "pendingDecrypts": 0,
+            "messagesPendingCrypto": 0,
+            "messagesPendingTransmux": 0,
+            "workersLive": 0,
+            "observedMediaSourcesLive": 0,
+            "observedSourceBuffersLive": 0,
+            "observedObjectUrlsLive": 0,
+            "componentsLive": 0,
+            "outstandingSubscriptions": 0,
+            "pendingOperations": 0,
+            "observedPendingAppends": 0,
+            "timersLive": 0,
+            "experimentalListeners": 0
+          },
+          "processExitAudit": {
+            "status": "PASS",
+            "ownedPids": [
+              14092,
+              26272,
+              27180,
+              29536,
+              31512
+            ],
+            "aliveOwnedPids": []
+          },
+          "functionalStatus": "PASS",
+          "cleanupStatus": "PASS"
+        },
+        {
+          "runId": "formal-r9-r2.1-r2",
+          "classification": "TRANSMUX_MSE_DOES_NOT_REPRODUCE",
+          "browserDeltaMiB": 4.375,
+          "rendererDeltaMiB": 420.3125,
+          "transportProof": {
+            "transport": "angular-fetch",
+            "xhrBackend": false,
+            "fetchBackend": true,
+            "originalRange": true,
+            "directRange": false,
+            "realAuth": true
+          },
+          "playbackSessions": 18,
+          "samples": [
+            {
+              "phase": "baseline",
+              "cycle": 0,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 22208512,
+                "renderer": 39972864,
+                "gpu-process": 24748032,
+                "utility": 13905920
+              },
+              "privateDeltaMiB": {
+                "browser": 0.0,
+                "renderer": 0.0,
+                "gpu-process": 0.0,
+                "utility": 0.0
+              }
+            },
+            {
+              "phase": "cycle-1-close",
+              "cycle": 1,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 29904896,
+                "renderer": 158052352,
+                "gpu-process": 25223168,
+                "utility": 26206208
+              },
+              "privateDeltaMiB": {
+                "browser": 7.33984375,
+                "renderer": 112.609375,
+                "gpu-process": 0.453125,
+                "utility": 11.73046875
+              }
+            },
+            {
+              "phase": "cycle-2-close",
+              "cycle": 2,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 34344960,
+                "renderer": 249335808,
+                "gpu-process": 25235456,
+                "utility": 26365952
+              },
+              "privateDeltaMiB": {
+                "browser": 11.57421875,
+                "renderer": 199.6640625,
+                "gpu-process": 0.46484375,
+                "utility": 11.8828125
+              }
+            },
+            {
+              "phase": "cycle-3-close",
+              "cycle": 3,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 34287616,
+                "renderer": 333041664,
+                "gpu-process": 25255936,
+                "utility": 26415104
+              },
+              "privateDeltaMiB": {
+                "browser": 11.51953125,
+                "renderer": 279.4921875,
+                "gpu-process": 0.484375,
+                "utility": 11.9296875
+              }
+            },
+            {
+              "phase": "cycle-4-close",
+              "cycle": 4,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 43220992,
+                "renderer": 432250880,
+                "gpu-process": 25436160,
+                "utility": 26513408
+              },
+              "privateDeltaMiB": {
+                "browser": 20.0390625,
+                "renderer": 374.10546875,
+                "gpu-process": 0.65625,
+                "utility": 12.0234375
+              }
+            },
+            {
+              "phase": "cycle-5-close",
+              "cycle": 5,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 30916608,
+                "renderer": 449236992,
+                "gpu-process": 25448448,
+                "utility": 26714112
+              },
+              "privateDeltaMiB": {
+                "browser": 8.3046875,
+                "renderer": 390.3046875,
+                "gpu-process": 0.66796875,
+                "utility": 12.21484375
+              }
+            },
+            {
+              "phase": "cycle-6-close",
+              "cycle": 6,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 26796032,
+                "renderer": 480702464,
+                "gpu-process": 25464832,
+                "utility": 26714112
+              },
+              "privateDeltaMiB": {
+                "browser": 4.375,
+                "renderer": 420.3125,
+                "gpu-process": 0.68359375,
+                "utility": 12.21484375
+              }
+            },
+            {
+              "phase": "forced-GC-final",
+              "cycle": 6,
+              "gc": "forced-diagnostic",
+              "privateBytes": {
+                "browser": 26804224,
+                "renderer": 467984384,
+                "gpu-process": 25464832,
+                "utility": 26714112
+              },
+              "privateDeltaMiB": {
+                "browser": 4.3828125,
+                "renderer": 408.18359375,
+                "gpu-process": 0.68359375,
+                "utility": 12.21484375
+              }
+            }
+          ],
+          "network": {
+            "enabledBeforeNavigation": true,
+            "listenersDetached": true,
+            "sessionDetached": true,
+            "routingInstalled": true,
+            "httpCache": "disabled by Playwright routing",
+            "explicitCacheIntervention": false,
+            "duplicateRequestIds": 0,
+            "rangeRequests": 54,
+            "clientBlobBodyBytes": 153354816,
+            "expectedCiphertextRangeBytes": 153354816,
+            "cdpEncodedDataLength": 153397674,
+            "mseAppendedBytes": 145672536,
+            "backendGetRequests": 54,
+            "backendBodyBytes": null,
+            "backendCorrelationFailures": 0,
+            "firstRangeSanitizedHeaders": {
+              "content-range": "bytes 0-131071/9628928",
+              "content-length": "131072",
+              "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+            },
+            "absentCacheHeaders": {
+              "cache-control": null,
+              "etag": null,
+              "age": null
+            },
+            "servedFromCacheRequests": 0,
+            "diskCacheRequests": 0,
+            "serviceWorkerRequests": 0
+          },
+          "observedFinal": {
+            "initializeAttempts": 18,
+            "initializeSettled": 18,
+            "initializeFailures": 0,
+            "playbackStarted": 18,
+            "playbackCompleted": 18,
+            "playbackFailures": 0,
+            "destroyCalls": 18,
+            "componentsMounted": 36,
+            "componentsDestroyed": 36,
+            "rangeRequestsStarted": 54,
+            "rangeRequestsCompleted": 54,
+            "rangeRequestsAborted": 0,
+            "rangeRequestsFailed": 0,
+            "rangeBytesReceived": 153354816,
+            "activeRanges": 0,
+            "maxActiveRanges": 1,
+            "metadataRequests": 18,
+            "workersCreated": 36,
+            "workersTerminated": 36,
+            "workerMessagesSent": 72,
+            "workerMessagesReceived": 72,
+            "workerMessagesCancelled": 0,
+            "workerErrors": 0,
+            "detachedTransfers": 144,
+            "transferFailures": 0,
+            "mediaSourcesCreated": 18,
+            "mediaSourcesClosed": 18,
+            "sourceBuffersCreated": 18,
+            "sourceBuffersReleased": 18,
+            "objectUrlsCreated": 18,
+            "objectUrlsRevoked": 18,
+            "pendingOperations": 0,
+            "pendingAppends": 0,
+            "bytesAppended": 145672536,
+            "timersLive": 0,
+            "experimentalListeners": 0,
+            "unhandledRejections": 0,
+            "gcRemoveCalls": 0,
+            "storeLoadStarted": 1,
+            "storeLoadCompleted": 1,
+            "storeFileResolved": 18,
+            "storeEffectsSettled": 1,
+            "authAttempts": 1,
+            "authSuccesses": 1,
+            "http206Validated": 54,
+            "jwtRangesValidated": 54,
+            "backendFileIdMatches": 18,
+            "unexpectedPeripheralOperations": 0,
+            "outstandingSubscriptions": 0,
+            "directAuthorizedRanges": 0
+          },
+          "finalOwnership": {
+            "liveKnownArrayBufferBytes": 0,
+            "knownTransmuxInputBytes": 0,
+            "knownTransmuxOutputBytes": 0,
+            "pendingTransmuxMessages": 0,
+            "transmuxWorkersLive": 0,
+            "workerUrlsLive": 0,
+            "sourceBuffersLive": 0,
+            "mediaSourcesLive": 0,
+            "objectUrlsLive": 0,
+            "pendingAppends": 0,
+            "pendingFetches": 0,
+            "cryptoWorkersLive": 0,
+            "cryptoWorkerUrlsLive": 0,
+            "pendingDecrypts": 0,
+            "messagesPendingCrypto": 0,
+            "messagesPendingTransmux": 0,
+            "workersLive": 0,
+            "observedMediaSourcesLive": 0,
+            "observedSourceBuffersLive": 0,
+            "observedObjectUrlsLive": 0,
+            "componentsLive": 0,
+            "outstandingSubscriptions": 0,
+            "pendingOperations": 0,
+            "observedPendingAppends": 0,
+            "timersLive": 0,
+            "experimentalListeners": 0
+          },
+          "processExitAudit": {
+            "status": "PASS",
+            "ownedPids": [
+              4180,
+              24660,
+              26356,
+              30920,
+              31460
+            ],
+            "aliveOwnedPids": []
+          },
+          "functionalStatus": "PASS",
+          "cleanupStatus": "PASS"
+        },
+        {
+          "runId": "formal-r9-r2.1-r3",
+          "classification": "TRANSMUX_MSE_DOES_NOT_REPRODUCE",
+          "browserDeltaMiB": 12.26171875,
+          "rendererDeltaMiB": 446.3671875,
+          "transportProof": {
+            "transport": "angular-fetch",
+            "xhrBackend": false,
+            "fetchBackend": true,
+            "originalRange": true,
+            "directRange": false,
+            "realAuth": true
+          },
+          "playbackSessions": 18,
+          "samples": [
+            {
+              "phase": "baseline",
+              "cycle": 0,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 22474752,
+                "renderer": 40185856,
+                "gpu-process": 24842240,
+                "utility": 13996032
+              },
+              "privateDeltaMiB": {
+                "browser": 0.0,
+                "renderer": 0.0,
+                "gpu-process": 0.0,
+                "utility": 0.0
+              }
+            },
+            {
+              "phase": "cycle-1-close",
+              "cycle": 1,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 29171712,
+                "renderer": 156147712,
+                "gpu-process": 25362432,
+                "utility": 26112000
+              },
+              "privateDeltaMiB": {
+                "browser": 6.38671875,
+                "renderer": 110.58984375,
+                "gpu-process": 0.49609375,
+                "utility": 11.5546875
+              }
+            },
+            {
+              "phase": "cycle-2-close",
+              "cycle": 2,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 33660928,
+                "renderer": 243167232,
+                "gpu-process": 25391104,
+                "utility": 26247168
+              },
+              "privateDeltaMiB": {
+                "browser": 10.66796875,
+                "renderer": 193.578125,
+                "gpu-process": 0.5234375,
+                "utility": 11.68359375
+              }
+            },
+            {
+              "phase": "cycle-3-close",
+              "cycle": 3,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 34680832,
+                "renderer": 327106560,
+                "gpu-process": 25399296,
+                "utility": 26308608
+              },
+              "privateDeltaMiB": {
+                "browser": 11.640625,
+                "renderer": 273.62890625,
+                "gpu-process": 0.53125,
+                "utility": 11.7421875
+              }
+            },
+            {
+              "phase": "cycle-4-close",
+              "cycle": 4,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 43356160,
+                "renderer": 418291712,
+                "gpu-process": 25518080,
+                "utility": 26275840
+              },
+              "privateDeltaMiB": {
+                "browser": 19.9140625,
+                "renderer": 360.58984375,
+                "gpu-process": 0.64453125,
+                "utility": 11.7109375
+              }
+            },
+            {
+              "phase": "cycle-5-close",
+              "cycle": 5,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 31010816,
+                "renderer": 447811584,
+                "gpu-process": 25534464,
+                "utility": 26370048
+              },
+              "privateDeltaMiB": {
+                "browser": 8.140625,
+                "renderer": 388.7421875,
+                "gpu-process": 0.66015625,
+                "utility": 11.80078125
+              }
+            },
+            {
+              "phase": "cycle-6-close",
+              "cycle": 6,
+              "gc": "natural",
+              "privateBytes": {
+                "browser": 35332096,
+                "renderer": 508235776,
+                "gpu-process": 25542656,
+                "utility": 26378240
+              },
+              "privateDeltaMiB": {
+                "browser": 12.26171875,
+                "renderer": 446.3671875,
+                "gpu-process": 0.66796875,
+                "utility": 11.80859375
+              }
+            },
+            {
+              "phase": "forced-GC-final",
+              "cycle": 6,
+              "gc": "forced-diagnostic",
+              "privateBytes": {
+                "browser": 26894336,
+                "renderer": 471437312,
+                "gpu-process": 25542656,
+                "utility": 26378240
+              },
+              "privateDeltaMiB": {
+                "browser": 4.21484375,
+                "renderer": 411.2734375,
+                "gpu-process": 0.66796875,
+                "utility": 11.80859375
+              }
+            }
+          ],
+          "network": {
+            "enabledBeforeNavigation": true,
+            "listenersDetached": true,
+            "sessionDetached": true,
+            "routingInstalled": true,
+            "httpCache": "disabled by Playwright routing",
+            "explicitCacheIntervention": false,
+            "duplicateRequestIds": 0,
+            "rangeRequests": 54,
+            "clientBlobBodyBytes": 153354816,
+            "expectedCiphertextRangeBytes": 153354816,
+            "cdpEncodedDataLength": 153397674,
+            "mseAppendedBytes": 145672536,
+            "backendGetRequests": 54,
+            "backendBodyBytes": null,
+            "backendCorrelationFailures": 0,
+            "firstRangeSanitizedHeaders": {
+              "content-range": "bytes 0-131071/9628928",
+              "content-length": "131072",
+              "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+            },
+            "absentCacheHeaders": {
+              "cache-control": null,
+              "etag": null,
+              "age": null
+            },
+            "servedFromCacheRequests": 0,
+            "diskCacheRequests": 0,
+            "serviceWorkerRequests": 0
+          },
+          "observedFinal": {
+            "initializeAttempts": 18,
+            "initializeSettled": 18,
+            "initializeFailures": 0,
+            "playbackStarted": 18,
+            "playbackCompleted": 18,
+            "playbackFailures": 0,
+            "destroyCalls": 18,
+            "componentsMounted": 36,
+            "componentsDestroyed": 36,
+            "rangeRequestsStarted": 54,
+            "rangeRequestsCompleted": 54,
+            "rangeRequestsAborted": 0,
+            "rangeRequestsFailed": 0,
+            "rangeBytesReceived": 153354816,
+            "activeRanges": 0,
+            "maxActiveRanges": 1,
+            "metadataRequests": 18,
+            "workersCreated": 36,
+            "workersTerminated": 36,
+            "workerMessagesSent": 72,
+            "workerMessagesReceived": 72,
+            "workerMessagesCancelled": 0,
+            "workerErrors": 0,
+            "detachedTransfers": 144,
+            "transferFailures": 0,
+            "mediaSourcesCreated": 18,
+            "mediaSourcesClosed": 18,
+            "sourceBuffersCreated": 18,
+            "sourceBuffersReleased": 18,
+            "objectUrlsCreated": 18,
+            "objectUrlsRevoked": 18,
+            "pendingOperations": 0,
+            "pendingAppends": 0,
+            "bytesAppended": 145672536,
+            "timersLive": 0,
+            "experimentalListeners": 0,
+            "unhandledRejections": 0,
+            "gcRemoveCalls": 0,
+            "storeLoadStarted": 1,
+            "storeLoadCompleted": 1,
+            "storeFileResolved": 18,
+            "storeEffectsSettled": 1,
+            "authAttempts": 1,
+            "authSuccesses": 1,
+            "http206Validated": 54,
+            "jwtRangesValidated": 54,
+            "backendFileIdMatches": 18,
+            "unexpectedPeripheralOperations": 0,
+            "outstandingSubscriptions": 0,
+            "directAuthorizedRanges": 0
+          },
+          "finalOwnership": {
+            "liveKnownArrayBufferBytes": 0,
+            "knownTransmuxInputBytes": 0,
+            "knownTransmuxOutputBytes": 0,
+            "pendingTransmuxMessages": 0,
+            "transmuxWorkersLive": 0,
+            "workerUrlsLive": 0,
+            "sourceBuffersLive": 0,
+            "mediaSourcesLive": 0,
+            "objectUrlsLive": 0,
+            "pendingAppends": 0,
+            "pendingFetches": 0,
+            "cryptoWorkersLive": 0,
+            "cryptoWorkerUrlsLive": 0,
+            "pendingDecrypts": 0,
+            "messagesPendingCrypto": 0,
+            "messagesPendingTransmux": 0,
+            "workersLive": 0,
+            "observedMediaSourcesLive": 0,
+            "observedSourceBuffersLive": 0,
+            "observedObjectUrlsLive": 0,
+            "componentsLive": 0,
+            "outstandingSubscriptions": 0,
+            "pendingOperations": 0,
+            "observedPendingAppends": 0,
+            "timersLive": 0,
+            "experimentalListeners": 0
+          },
+          "processExitAudit": {
+            "status": "PASS",
+            "ownedPids": [
+              13192,
+              16872,
+              26620,
+              31992,
+              34764
+            ],
+            "aliveOwnedPids": []
+          },
+          "functionalStatus": "PASS",
+          "cleanupStatus": "PASS"
+        }
+      ]
+    }
+  ],
+  "launchLedger": [
+    {
+      "browserLaunches": 1,
+      "condition": "r9-r2.0",
+      "launchAttempts": 1,
+      "rawSha256": "2d3673233599fc149b56484c9d5a429426390796b7c79c855d7818a9716c8233",
+      "reservedAttempts": 1,
+      "stage": "triage"
+    },
+    {
+      "browserLaunches": 1,
+      "condition": "r9-r2.1",
+      "launchAttempts": 1,
+      "rawSha256": "dc7055c3ba062fc0b149c6a84b51adc7e720407058099c79bde0dbc41a2ec00b",
+      "reservedAttempts": 1,
+      "stage": "triage"
+    },
+    {
+      "browserLaunches": 3,
+      "condition": "r9-r2.1",
+      "launchAttempts": 3,
+      "rawSha256": "c77125b800fd04273f9b13e94d1c0abaac69e166292b0a1380ddc0fb40206d81",
+      "reservedAttempts": 3,
+      "stage": "formal"
+    }
+  ],
+  "costs": {
+    "measurementChromium": 5,
+    "developmentChromium": 1,
+    "measurementMaximum": 6,
+    "measurementRetries": 0,
+    "measurementSessions": 90,
+    "measurementSamples": 40,
+    "measurementCyclesABC": 30,
+    "sourceBuffersCreatedReleased": 90,
+    "workersCreatedTerminated": 180,
+    "experimentalAngularBuilds": 1,
+    "nativeConfigure": 1,
+    "nativeBuild": 1,
+    "backendStarts": 1,
+    "postgresStarts": 1,
+    "fixtureUploads": 3,
+    "ffmpegGenerations": 3,
+    "kasumiEncryptions": 3,
+    "normalFrontendBuilds": 0,
+    "dockerStarts": 0,
+    "developmentRunnerCommands": 2,
+    "backendPreparationCommands": 2
+  },
+  "tests": {
+    "status": "PASS",
+    "node": {
+      "historicalIntegration": 18,
+      "directTransport": 6,
+      "passiveNetwork": 3,
+      "total": 27
+    },
+    "python": {
+      "historicalR8": 24,
+      "r9DecisionAndValidation": 6,
+      "durableAuthorities": 7,
+      "total": 37
+    },
+    "angularRealBrowser": {
+      "checks": 16,
+      "developmentChromium": 1
+    },
+    "backendRealApiChecks": 11,
+    "ffprobeFixtures": 3,
+    "kasumiFullRoundTrips": 3,
+    "experimentalAngularBuilds": 1,
+    "nativeConfigure": 1,
+    "nativeBuild": 1,
+    "diffCheck": "PASS",
+    "syntheticSecretScan": "PASS",
+    "normalFrontendBuilds": 0,
+    "heavyGeneralGates": 0
+  },
+  "persistence": {
+    "rootAlias": "AP06_AUTHORITY_ROOT: private sibling research directory / ap06 / r9-r2",
+    "publication": "PASS",
+    "readback": "PASS",
+    "independentReadback": {
+      "status": "PASS",
+      "verifiedPublications": 24,
+      "worktreeRequired": false
+    },
+    "rootOwnershipAndCurrentUserOnlyAcl": "PASS",
+    "reparseComponentsRejected": true,
+    "existingContentNeverOverwritten": true,
+    "rawSnapshotPolicy": "immutable snapshot after each closed browser, plus complete stage raw; ledger reserves all stage attempts before launch",
+    "corpusPublicationSha256": "b1260f20bfb46d261397e17b1866607dbf10b8359c45fc5526db2ffb6df5e6eb",
+    "implementationPublicationSha256": "ec11e57edef27d753817f041db8e9301faeadc139bd76f4ea0e98ea9690a840a",
+    "authoritiesPreservedAfterCleanup": true
+  },
+  "cleanup": {
+    "accounts": {
+      "status": "PASS",
+      "accounts": 2,
+      "results": [
+        {
+          "status": "PASS",
+          "fileIds": [],
+          "removedFileCount": 3
+        },
+        {
+          "status": "PASS",
+          "fileIds": [],
+          "removedFileCount": 0
+        }
+      ]
+    },
+    "backendPostgres": {
+      "status": "PASS",
+      "ownedServerStopped": true,
+      "ownedPostgresStopped": true,
+      "ownedClusterStorageAndDotenvRemoved": true,
+      "personalServicesTouched": false
+    },
+    "privateRuntime": {
+      "status": "PASS",
+      "syntheticFdkFilesRemoved": true,
+      "syntheticAccountAndBackendSecretsRemoved": true,
+      "authorityConfigurationRetainedWithoutSecrets": true,
+      "privateRuntimeDirectoryRemoved": true,
+      "persistentAuthoritiesRemoved": false,
+      "nativeOwnedPidAudit": {
+        "status": "PASS",
+        "ownedPids": [
+          26148,
+          28836
+        ],
+        "aliveOwnedPids": []
+      }
+    },
+    "chromium": {
+      "status": "PASS",
+      "ownedPids": [
+        4180,
+        8956,
+        9000,
+        13192,
+        14092,
+        16872,
+        18132,
+        20228,
+        20596,
+        24600,
+        24660,
+        26272,
+        26356,
+        26620,
+        27180,
+        29536,
+        30920,
+        31460,
+        31512,
+        31564,
+        31992,
+        32124,
+        33912,
+        34532,
+        34764
+      ],
+      "aliveOwnedPids": []
+    }
+  },
+  "limitations": [
+    "withFetch changes the experimental application HttpClient backend for login and Store as well as Range; login/Store finish before baseline.",
+    "The observed effect is a composed HTTP transport/provider boundary, not attribution to one function or a production leak fix.",
+    "Angular Fetch increases renderer private commit substantially; renderer-heavy does not imply lower total memory or bounded retention.",
+    "Passive CDP and Playwright routing are common to all conditions; routing disables HTTP cache. Missing headers/body metrics remain unavailable.",
+    "FDKs were ephemeral runtime secrets and removed at cleanup. Retained plaintext/ciphertext/manifests/raws permit integrity audit; future playback requires a new authorized key/corpus protocol.",
+    "Synthetic FDK injection, forced original Local playback and suppressed peripheral operations retain the R8 experimental boundary; normal vault/navigation were not reproduced.",
+    "N=1 for each triage and N=3 for the decisive formal condition; forced GC is diagnostic only."
+  ],
+  "nextBoundary": "RANGE_HTTP_BACKEND_RESPONSE_TO_BLOB_AND_RENDERER_OWNERSHIP",
+  "nextInvestigation": "Separate XHR versus Fetch response/Blob ownership and renderer natural versus forced-GC retention, controlling login/Store provider effects. No production fix or unconditional direct-fetch campaign."
+}

@@ -1,0 +1,160 @@
+{
+  "schemaVersion": 1,
+  "campaign": "AP-06 R12-R4",
+  "status": "R12R4_STOP",
+  "ap06Status": "OPEN",
+  "stop": {
+    "reason": "R9_AUTHORITY_HELPER_FAILED",
+    "stage": "triage",
+    "condition": "r12r2.1",
+    "failureStage": "close-audit",
+    "failureClass": "AP06_BROWSER_ATTESTATION_FAILED",
+    "functionalStatus": "PASS",
+    "cleanupStatus": "FAIL",
+    "closedHashVerified": true,
+    "rawPath": "triage/02-r12r2.1/crypto-transmux-mse.raw.json",
+    "rawSha256": "d0297fce3901ce13c938c148ec51db4d79d554e9cf2c847279db71e6dcc94ba1"
+  },
+  "implementation": {
+    "branch": "investigation/ap06-r12-r4",
+    "baseBranch": "investigation/ap06-r12-r3",
+    "baseHead": "bb3e34c85266765c83537243306c169385319168",
+    "head": "4422faa89e01a9d0b559b2410c1a1d5e2b719dfe",
+    "freezeSha256": "b1481677288d7c6ccb52779b2f5bb41794435515d3df183bd55ab9959f02377e",
+    "freezeBeforeMeasurements": true,
+    "implementationChangedAfterFreeze": false,
+    "productionUnchanged": true
+  },
+  "browserIdentity": {
+    "status": "PASS",
+    "browser": "Chromium headless shell",
+    "playwrightVersion": "1.62.1",
+    "chromiumVersion": "151.0.7922.34",
+    "revision": "1234",
+    "architecture": "x64",
+    "executableBytes": 211223552,
+    "executableSha256": "ce4635cd0e5dc0e21494542a701f347e91c1f1d821970578d97ed8df4ced50ef",
+    "identityPublicationManifestSha256": "b8f02540300498ec90bd04f8606f9fc9e024c811f9b075ddb4326f35ef86a73f",
+    "preflightReceiptSha256": "8d1dde9629bad9fab730e51d918d341757756db7690e54e00c3351e9d0800f70"
+  },
+  "offlineGates": {
+    "pythonTestsPassed": 156,
+    "nodeTestsPassed": 128,
+    "typescript": "PASS",
+    "angularBuild": "PASS",
+    "syntax": "PASS",
+    "diffCheck": "PASS",
+    "productionUnchanged": true,
+    "secretScan": {
+      "status": "PASS",
+      "publicFiles": 565,
+      "rawFiles": 3,
+      "actualPatterns": 22,
+      "matches": 0,
+      "plaintextFdksPersisted": false
+    },
+    "optionalExperimentalBackendSuite": "NOT_RUN_EXECUTABLE_UNAVAILABLE"
+  },
+  "backendCi": {
+    "headSha": "4422faa89e01a9d0b559b2410c1a1d5e2b719dfe",
+    "status": "completed",
+    "conclusion": "success",
+    "runId": "38990702846",
+    "url": "https://github.com/LViniciusk/SaveBox2/actions/runs/38990702846",
+    "jobs": [
+      "Backend / Windows MSVC",
+      "Backend / Linux GCC",
+      "Backend / Linux Coverage"
+    ]
+  },
+  "browserBudget": {
+    "maximum": 14,
+    "preflight": 1,
+    "triage": 2,
+    "formal": 0,
+    "nativeCapability": 0,
+    "nativeMeasurement": 0,
+    "observedTotal": 3,
+    "retries": 0,
+    "unusedBudgetAtStop": 11
+  },
+  "triage": [
+    {
+      "condition": "r12r2.0",
+      "status": "PASS",
+      "functionalStatus": "PASS",
+      "cleanupStatus": "PASS",
+      "rawSha256": "cef607942164c259f9f17ea5334054d5acb9260ed0f105c0e5037b37bcb38160"
+    },
+    {
+      "condition": "r12r2.1",
+      "status": "STOP",
+      "functionalStatus": "PASS",
+      "cleanupStatus": "FAIL",
+      "failureStage": "close-audit",
+      "failureClass": "AP06_BROWSER_ATTESTATION_FAILED",
+      "rawSha256": "d0297fce3901ce13c938c148ec51db4d79d554e9cf2c847279db71e6dcc94ba1"
+    },
+    {
+      "condition": "r12r2.2",
+      "status": "NOT_RUN"
+    },
+    {
+      "condition": "r12r2.3",
+      "status": "NOT_RUN"
+    }
+  ],
+  "factorial": {
+    "classification": "NOT_CLASSIFIED",
+    "validTriageCount": 1,
+    "validCondition": "r12r2.0",
+    "formal": "NOT_RUN"
+  },
+  "native": {
+    "status": "R12R4_NATIVE_NOT_RUN",
+    "reason": "R12R4_FACTORIAL_STOP",
+    "capabilityChromium": 0,
+    "measurementChromium": 0,
+    "retries": 0
+  },
+  "cleanup": {
+    "status": "PASS",
+    "ownedBrowserAndBackendPidsClosed": true,
+    "ownedRuntimeRemoved": true,
+    "profilesRemoved": true,
+    "runtimeCredentialsPlaintextRemoved": true,
+    "runtimeCredentialsDpapiReadback": "PASS",
+    "originalCustodyReadback": "PASS",
+    "plaintextFdksPersisted": false,
+    "foreignNativeProcessesUnchanged": true,
+    "measurementRunCleanupFailures": [
+      {
+        "runId": "triage-02-r12r2.1",
+        "failureStage": "close-audit",
+        "failureClass": "AP06_BROWSER_ATTESTATION_FAILED"
+      }
+    ],
+    "fixtureAccountCleanupExecuted": false,
+    "syntheticDatabaseRemovedByOwnedRuntimeTeardown": true,
+    "runtimeRecoveryHelperFailure": "AP06_REAL_PEER_SPOOF_GUARD_FAILED"
+  },
+  "preservation": {
+    "status": "PASS",
+    "priorPrivateManifestsUnchanged": 277,
+    "priorWorktreeFilesUnchanged": {
+      "SaveBox2-ap06-r10": 647,
+      "SaveBox2-ap06-r11": 399,
+      "SaveBox2-ap06-r12": 162,
+      "SaveBox2-ap06-r12-r2": 154,
+      "SaveBox2-ap06-r12-r3": 134
+    },
+    "priorPullRequestsUnchanged": [25, 27, 28, 29, 30],
+    "historicalDecisionsReclassified": false
+  },
+  "limitations": [
+    "The four-condition factorial was not completed and no scientific memory conclusion is supported.",
+    "The optional local nanika_ap06_tests.exe suite was unavailable; required Backend CI passed all three jobs.",
+    "The account fixture cleanup did not run; the owned disposable PostgreSQL/runtime was removed by the lifecycle helper and the recovery path is recorded."
+  ],
+  "merged": false
+}

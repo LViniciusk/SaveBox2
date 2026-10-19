@@ -78,3 +78,45 @@ TEST_CASE("DatabasePool - Resiliência contra Conexões Zumbis", "[database][poo
         w2.commit();
     }());
 }
+
+TEST_CASE("B.62 falha de reconnect preserva capacidade logica do DatabasePool",
+          "[database][pool][resilience][b62]") {
+    const std::string invalid_conn_str =
+        "nanika_invalid_connection_option=1";
+    DatabasePool pool(0, invalid_conn_str);
+
+    {
+        DatabasePool::ConnectionWrapper slot(&pool, nullptr);
+    }
+
+    REQUIRE(pool.get_available_count() == 1);
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        std::string error;
+        try {
+            auto connection = pool.acquire_connection();
+            (void)connection;
+        } catch (const std::runtime_error& exception) {
+            error = exception.what();
+        }
+
+        CHECK(error == "DATABASE_OFFLINE");
+        REQUIRE(pool.get_available_count() == 1);
+    }
+}
+
+TEST_CASE("B.62 shutdown continua impedindo novas aquisicoes",
+          "[database][pool][resilience][b62]") {
+    DatabasePool pool(1);
+    pool.close_all_connections();
+
+    std::string error;
+    try {
+        auto connection = pool.acquire_connection();
+        (void)connection;
+    } catch (const std::runtime_error& exception) {
+        error = exception.what();
+    }
+
+    CHECK(error == "SERVER_IS_SHUTTING_DOWN");
+}

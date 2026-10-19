@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     build-essential cmake git pkg-config \
-    libpq-dev libpqxx-dev libssl-dev libsodium-dev nlohmann-json3-dev libasio-dev libzip-dev libcurl4-openssl-dev
+    libpq-dev libpqxx-dev libssl-dev libsodium-dev nlohmann-json3-dev libasio-dev libcurl4-openssl-dev
 
 WORKDIR /src
 COPY . .
@@ -25,7 +25,7 @@ FROM ubuntu:24.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    libpq5 libpqxx-dev libssl3 libsodium23 libzip4 libcurl4 ca-certificates \
+    libpq5 libpqxx-dev libssl3 libsodium23 libcurl4 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Remove pacotes desnecessarios para reduzir superficie de ataque
@@ -35,10 +35,25 @@ WORKDIR /app
 
 COPY --from=builder /src/backend/build/savebox_server /app/savebox_server
 COPY --from=builder /src/docs /app/docs
+COPY --from=builder /src/config /app/config
 
-RUN mkdir -p /app/nanika_storage
-RUN useradd -m nanika && chown -R nanika:nanika /app
-USER nanika
+RUN groupadd \
+      --gid 10001 \
+      nanika \
+ && useradd \
+      --uid 10001 \
+      --gid 10001 \
+      --no-create-home \
+      --home-dir /nonexistent \
+      --shell /usr/sbin/nologin \
+      nanika \
+ && install \
+      -d \
+      -o 10001 \
+      -g 10001 \
+      -m 0750 \
+      /app/nanika_storage
+USER 10001:10001
 EXPOSE 8080
 
 CMD ["./savebox_server"]

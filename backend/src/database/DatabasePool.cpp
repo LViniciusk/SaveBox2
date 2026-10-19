@@ -63,43 +63,55 @@ DatabasePool::~DatabasePool() {
 }
 
 DatabasePool::ConnectionWrapper DatabasePool::acquire_connection() {
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_ptr<pqxx::connection> conn;
 
-    if (is_shutting_down_) {
-        throw std::runtime_error("SERVER_IS_SHUTTING_DOWN");
-    }
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
 
-    // Bloqueia a thread atual caso não haja conexões disponíveis no pool
-    condition_.wait(lock, [this]() { return !connections_.empty() || is_shutting_down_.load(); });
-
-    if (is_shutting_down_) {
-        throw std::runtime_error("SERVER_IS_SHUTTING_DOWN");
-    }
-
-    auto conn = std::move(connections_.front());
-    connections_.pop();
-
-    if (conn && !conn->is_open()) {
-        if (connection_string_.empty()) {
-            throw std::runtime_error("DATABASE_OFFLINE");
+        if (is_shutting_down_) {
+            throw std::runtime_error("SERVER_IS_SHUTTING_DOWN");
         }
 
-        try {
+        // Bloqueia a thread atual caso não haja conexões disponíveis no pool
+        condition_.wait(lock, [this]() { return !connections_.empty() || is_shutting_down_.load(); });
+
+        if (is_shutting_down_) {
+            throw std::runtime_error("SERVER_IS_SHUTTING_DOWN");
+        }
+
+        conn = std::move(connections_.front());
+        connections_.pop();
+    }
+
+    try {
+        if (conn && !conn->is_open()) {
+            if (connection_string_.empty()) {
+                throw std::runtime_error("DATABASE_OFFLINE");
+            }
+
             conn = std::make_unique<pqxx::connection>(connection_string_);
-        } catch (...) {
-            throw std::runtime_error("DATABASE_OFFLINE");
         }
-    }
 
-    if (!conn && !connection_string_.empty()) {
-        try {
+        if (!conn && !connection_string_.empty()) {
             conn = std::make_unique<pqxx::connection>(connection_string_);
-        } catch (...) {
-            throw std::runtime_error("DATABASE_OFFLINE");
         }
+    } catch (...) {
+        release_connection(std::move(conn));
+        throw std::runtime_error("DATABASE_OFFLINE");
     }
 
-    return ConnectionWrapper(this, std::move(conn));
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (is_shutting_down_) {
+            lock.unlock();
+            if (conn && conn->is_open()) {
+                conn->close();
+            }
+            throw std::runtime_error("SERVER_IS_SHUTTING_DOWN");
+        }
+
+        return ConnectionWrapper(this, std::move(conn));
+    }
 }
 
 size_t DatabasePool::get_available_count() const {

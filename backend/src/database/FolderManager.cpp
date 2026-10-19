@@ -35,8 +35,71 @@ void lock_user_pins(pqxx::work& txn, uint64_t user_id) {
 }
 
 void lock_user_folders(pqxx::work& txn, uint64_t user_id) {
-    // A single deterministic lock serializes individual and batch folder creates.
+    // A single transaction-scoped lock serializes same-user folder topology writes.
     txn.exec("SELECT pg_advisory_xact_lock($1::bigint)", pqxx::params{user_id});
+}
+
+std::optional<uint64_t> find_trash_tree_authority(
+    pqxx::work& txn,
+    uint64_t folder_id,
+    uint64_t user_id) {
+    const auto rows = txn.exec(
+        "WITH RECURSIVE ancestors AS ("
+        "  SELECT id, parent_id, deleted_at, 0 AS depth "
+        "  FROM folders WHERE id = $1 AND user_id = $2 "
+        "  UNION ALL "
+        "  SELECT parent.id, parent.parent_id, parent.deleted_at, ancestors.depth + 1 "
+        "  FROM folders parent "
+        "  INNER JOIN ancestors ON ancestors.parent_id = parent.id "
+        "  WHERE parent.user_id = $2 AND ancestors.deleted_at IS NOT NULL"
+        ") "
+        "SELECT id FROM ancestors "
+        "WHERE deleted_at IS NOT NULL "
+        "ORDER BY depth DESC LIMIT 1",
+        pqxx::params{folder_id, user_id});
+
+    if (rows.empty()) return std::nullopt;
+    return rows[0][0].as<uint64_t>();
+}
+
+uint64_t lock_trash_tree_authority(pqxx::work& txn, uint64_t folder_id, uint64_t user_id) {
+    const auto authority = find_trash_tree_authority(txn, folder_id, user_id);
+    if (!authority.has_value()) throw std::runtime_error("NOT_FOUND");
+
+    const auto locked = txn.exec(
+        "SELECT id FROM folders "
+        "WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL "
+        "FOR UPDATE",
+        pqxx::params{*authority, user_id});
+    if (locked.empty()) throw std::runtime_error("NOT_FOUND");
+
+    const auto target = txn.exec(
+        "WITH RECURSIVE ancestors AS ("
+        "  SELECT id, parent_id, deleted_at "
+        "  FROM folders WHERE id = $1 AND user_id = $2 "
+        "  UNION ALL "
+        "  SELECT parent.id, parent.parent_id, parent.deleted_at "
+        "  FROM folders parent "
+        "  INNER JOIN ancestors ON ancestors.parent_id = parent.id "
+        "  WHERE parent.user_id = $2 AND ancestors.deleted_at IS NOT NULL"
+        ") "
+        "SELECT 1 FROM ancestors "
+        "WHERE id = $3 AND deleted_at IS NOT NULL LIMIT 1",
+        pqxx::params{folder_id, user_id, *authority});
+    if (target.empty()) throw std::runtime_error("NOT_FOUND");
+
+    return *authority;
+}
+
+std::vector<uint64_t> normalize_folder_ids(const std::vector<int>& folder_ids) {
+    std::vector<uint64_t> normalized;
+    normalized.reserve(folder_ids.size());
+    for (const int folder_id : folder_ids) {
+        if (folder_id > 0) normalized.push_back(static_cast<uint64_t>(folder_id));
+    }
+    std::sort(normalized.begin(), normalized.end());
+    normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+    return normalized;
 }
 
 bool is_valid_client_ref(const std::string& value) {
@@ -238,19 +301,6 @@ std::vector<BatchCreateFolderResult> FolderManager::batch_create_folders(
         );
     };
 
-    auto find_deleted = [&](std::optional<uint64_t> parent_id, const std::string& hash) {
-        if (parent_id.has_value()) {
-            return txn.exec(
-                "SELECT id FROM folders WHERE user_id = $1 AND parent_id = $2 AND name_hash = $3 AND deleted_at IS NOT NULL",
-                pqxx::params{user_id, *parent_id, hash}
-            );
-        }
-        return txn.exec(
-            "SELECT id FROM folders WHERE user_id = $1 AND parent_id IS NULL AND name_hash = $2 AND deleted_at IS NOT NULL",
-            pqxx::params{user_id, hash}
-        );
-    };
-
     // Preflight all logical collisions before the first insert.
     for (const size_t index : order) {
         const auto& folder = folders[index];
@@ -278,8 +328,6 @@ std::vector<BatchCreateFolderResult> FolderManager::batch_create_folders(
         const auto active = find_active(parent_id, folder.name_hash);
         if (!active.empty()) {
             resolved_ids.emplace(folder.client_ref, active[0][0].as<uint64_t>());
-        } else if (!find_deleted(parent_id, folder.name_hash).empty()) {
-            throw std::runtime_error("FOLDER_ALREADY_EXISTS");
         }
     }
 
@@ -368,18 +416,6 @@ std::vector<std::string> FolderManager::delete_folder(uint64_t folder_id, uint64
 
     txn.commit();
     return external_files;
-}
-
-bool FolderManager::folder_exists(uint64_t folder_id) {
-    auto conn = pool_.acquire_connection();
-    pqxx::nontransaction N(*conn);
-
-    pqxx::result res = N.exec(
-        "SELECT count(*) FROM folders WHERE id = $1;",
-        pqxx::params{folder_id}
-    );
-
-    return res[0][0].as<int64_t>() > 0;
 }
 
 crow::json::wvalue FolderManager::get_folder_contents(int folder_id, int user_id) {
@@ -477,6 +513,10 @@ std::vector<crow::json::wvalue> FolderManager::get_all_folders(uint64_t user_id)
 crow::json::wvalue FolderManager::update_folder(uint64_t folder_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& parent_id) {
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
+
+    if (parent_id.has_value()) {
+        lock_user_folders(txn, user_id);
+    }
 
     auto result = txn.exec(
         "SELECT id FROM folders WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL",
@@ -584,8 +624,10 @@ std::vector<std::string> FolderManager::restore_folder(uint64_t folder_id, uint6
     auto conn = pool_.acquire_connection();
     pqxx::work txn(*conn);
 
+    lock_trash_tree_authority(txn, folder_id, user_id);
     auto check = txn.exec(
-        "SELECT id, parent_id, name_hash FROM folders WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL",
+        "SELECT id, parent_id, name_hash FROM folders "
+        "WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL FOR UPDATE",
         pqxx::params{folder_id, user_id}
     );
     if (check.empty()) throw std::runtime_error("NOT_FOUND");
@@ -692,67 +734,78 @@ std::vector<std::string> FolderManager::restore_folder(uint64_t folder_id, uint6
 
 
 std::vector<std::string> FolderManager::hard_delete_folder(uint64_t folder_id, uint64_t user_id, class FileChunker* chunker) {
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-
-    auto check = txn.exec(
-        "SELECT id FROM folders WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL",
-        pqxx::params{folder_id, user_id}
-    );
-    if (check.empty()) throw std::runtime_error("NOT_FOUND");
-
-    auto deleted_files_res = txn.exec(
-        "WITH RECURSIVE folder_tree AS ( "
-        "  SELECT id FROM folders WHERE id = $1 "
-        "  UNION ALL "
-        "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
-        "), "
-        "deleted_files AS ("
-        "  DELETE FROM files WHERE folder_id IN (SELECT id FROM folder_tree) "
-        "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
-        ") "
-        "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files;",
-        pqxx::params{folder_id}
-    );
-
-    uint64_t freed_bytes = 0;
     std::vector<std::string> external_files;
+    std::vector<uint64_t> local_file_ids;
 
-    for (const auto& row : deleted_files_res) {
-        auto fid = row[0].as<uint64_t>();
-        std::string provider = row[1].as<std::string>();
-        uint64_t size = row[2].as<uint64_t>();
-        
-        freed_bytes += (provider == "local") ? size : 2048;
-        
-        if (provider == "google_drive") {
-            if (!row[3].is_null() && !row[4].is_null()) {
-                std::string ext_file_id = row[3].as<std::string>();
-                external_files.push_back(ext_file_id);
-                txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
-                         pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+
+        lock_trash_tree_authority(txn, folder_id, user_id);
+        auto check = txn.exec(
+            "SELECT id FROM folders "
+            "WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL FOR UPDATE",
+            pqxx::params{folder_id, user_id}
+        );
+        if (check.empty()) throw std::runtime_error("NOT_FOUND");
+
+        auto deleted_files_res = txn.exec(
+            "WITH RECURSIVE folder_tree AS ( "
+            "  SELECT id FROM folders WHERE id = $1 "
+            "  UNION ALL "
+            "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
+            "), "
+            "deleted_files AS ("
+            "  DELETE FROM files WHERE folder_id IN (SELECT id FROM folder_tree) "
+            "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
+            ") "
+            "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files;",
+            pqxx::params{folder_id}
+        );
+
+        uint64_t freed_bytes = 0;
+        for (const auto& row : deleted_files_res) {
+            const auto fid = row[0].as<uint64_t>();
+            const std::string provider = row[1].as<std::string>();
+            const uint64_t size = row[2].as<uint64_t>();
+
+            freed_bytes += (provider == "local") ? size : 2048;
+
+            if (provider == "google_drive") {
+                if (!row[3].is_null() && !row[4].is_null()) {
+                    const std::string ext_file_id = row[3].as<std::string>();
+                    external_files.push_back(ext_file_id);
+                    txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
+                             pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+                }
+            } else {
+                local_file_ids.push_back(fid);
             }
-        } else {
-            if (chunker) chunker->delete_file(fid);
+        }
+
+        if (freed_bytes > 0) {
+            txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
+                     pqxx::params{freed_bytes, user_id});
+        }
+
+        txn.exec(
+            "WITH RECURSIVE folder_tree AS ( "
+            "  SELECT id FROM folders WHERE id = $1 "
+            "  UNION ALL "
+            "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
+            ") "
+            "DELETE FROM folders WHERE id IN (SELECT id FROM folder_tree);",
+            pqxx::params{folder_id}
+        );
+
+        txn.commit();
+    }
+
+    if (chunker) {
+        for (const auto file_id : local_file_ids) {
+            chunker->delete_file(file_id);
         }
     }
-
-    if (freed_bytes > 0) {
-        txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
-                 pqxx::params{freed_bytes, user_id});
-    }
-
-    txn.exec(
-        "WITH RECURSIVE folder_tree AS ( "
-        "  SELECT id FROM folders WHERE id = $1 "
-        "  UNION ALL "
-        "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
-        ") "
-        "DELETE FROM folders WHERE id IN (SELECT id FROM folder_tree);",
-        pqxx::params{folder_id}
-    );
-
-    txn.commit();
     return external_files;
 }
 
@@ -821,88 +874,121 @@ BatchDeleteFolderResult FolderManager::batch_delete_folders(uint64_t user_id, co
 }
 
 BatchHardDeleteFolderResult FolderManager::batch_hard_delete_folders(uint64_t user_id, const std::vector<int>& folder_ids, FileChunker* chunker) {
-    if (folder_ids.empty()) return {};
-
-    auto conn = pool_.acquire_connection();
-    pqxx::work txn(*conn);
-
-    std::string arr_str = "{";
-    for (size_t i = 0; i < folder_ids.size(); ++i) {
-        arr_str += std::to_string(folder_ids[i]);
-        if (i < folder_ids.size() - 1) arr_str += ",";
-    }
-    arr_str += "}";
-
-    auto check_res = txn.exec(
-        "SELECT id FROM folders WHERE id = ANY($1::int[]) AND user_id = $2 AND deleted_at IS NOT NULL",
-        pqxx::params{arr_str, user_id}
-    );
-
-    if (check_res.empty()) return {};
-
-    std::string actual_arr = "{";
-    int count = 0;
-    for (const auto& row : check_res) {
-        if (count > 0) actual_arr += ",";
-        actual_arr += row[0].as<std::string>();
-        count++;
-    }
-    actual_arr += "}";
-
-    auto deleted_files_res = txn.exec(
-        "WITH RECURSIVE folder_tree AS ( "
-        "  SELECT id FROM folders WHERE id = ANY($1::int[]) "
-        "  UNION ALL "
-        "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
-        "), "
-        "deleted_files AS ("
-        "  DELETE FROM files WHERE folder_id IN (SELECT id FROM folder_tree) "
-        "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
-        ") "
-        "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files;",
-        pqxx::params{actual_arr}
-    );
+    const auto normalized_ids = normalize_folder_ids(folder_ids);
+    if (normalized_ids.empty()) return {};
 
     BatchHardDeleteFolderResult result;
-    result.deleted_count = count;
-    uint64_t total_freed_bytes = 0;
+    std::vector<uint64_t> local_file_ids;
 
-    for (const auto& row : deleted_files_res) {
-        auto fid = row[0].as<uint64_t>();
-        std::string provider = row[1].as<std::string>();
-        uint64_t size = row[2].as<uint64_t>();
-        
-        uint64_t freed_bytes = (provider == "local") ? size : 2048;
-        total_freed_bytes += freed_bytes;
-        
-        if (provider == "google_drive") {
-            if (!row[3].is_null() && !row[4].is_null()) {
-                std::string ext_file_id = row[3].as<std::string>();
-                result.external_files.push_back(ext_file_id);
-                txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
-                         pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+    {
+        auto conn = pool_.acquire_connection();
+        pqxx::work txn(*conn);
+
+        const auto arr_str = to_pg_bigint_array(normalized_ids);
+
+        auto check_res = txn.exec(
+            "SELECT id FROM folders WHERE id = ANY($1::bigint[]) AND user_id = $2 "
+            "AND deleted_at IS NOT NULL ORDER BY id",
+            pqxx::params{arr_str, user_id}
+        );
+
+        if (check_res.empty()) return {};
+
+        std::vector<uint64_t> candidate_ids;
+        candidate_ids.reserve(check_res.size());
+        for (const auto& row : check_res) {
+            candidate_ids.push_back(row[0].as<uint64_t>());
+        }
+
+        std::vector<uint64_t> authorities;
+        authorities.reserve(candidate_ids.size());
+        for (const auto candidate_id : candidate_ids) {
+            if (const auto authority = find_trash_tree_authority(txn, candidate_id, user_id)) {
+                authorities.push_back(*authority);
             }
-        } else {
-            if (chunker) chunker->delete_file(fid);
+        }
+        std::sort(authorities.begin(), authorities.end());
+        authorities.erase(std::unique(authorities.begin(), authorities.end()), authorities.end());
+        for (const auto authority : authorities) {
+            txn.exec(
+                "SELECT id FROM folders "
+                "WHERE id = $1 AND user_id = $2 AND deleted_at IS NOT NULL FOR UPDATE",
+                pqxx::params{authority, user_id});
+        }
+
+        check_res = txn.exec(
+            "SELECT id FROM folders WHERE id = ANY($1::bigint[]) AND user_id = $2 "
+            "AND deleted_at IS NOT NULL ORDER BY id",
+            pqxx::params{arr_str, user_id}
+        );
+        if (check_res.empty()) return {};
+
+        std::vector<uint64_t> actual_ids;
+        actual_ids.reserve(check_res.size());
+        for (const auto& row : check_res) {
+            actual_ids.push_back(row[0].as<uint64_t>());
+        }
+        const auto actual_arr = to_pg_bigint_array(actual_ids);
+
+        auto deleted_files_res = txn.exec(
+            "WITH RECURSIVE folder_tree AS ( "
+            "  SELECT id FROM folders WHERE id = ANY($1::bigint[]) "
+            "  UNION ALL "
+            "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
+            "), "
+            "deleted_files AS ("
+            "  DELETE FROM files WHERE folder_id IN (SELECT id FROM folder_tree) "
+            "  RETURNING id, storage_provider, size_bytes, external_file_id, external_storage_id"
+            ") "
+            "SELECT id, storage_provider, size_bytes, external_file_id, external_storage_id FROM deleted_files;",
+            pqxx::params{actual_arr}
+        );
+
+        result.deleted_count = static_cast<int>(actual_ids.size());
+        uint64_t total_freed_bytes = 0;
+        for (const auto& row : deleted_files_res) {
+            const auto fid = row[0].as<uint64_t>();
+            const std::string provider = row[1].as<std::string>();
+            const uint64_t size = row[2].as<uint64_t>();
+
+            const uint64_t freed_bytes = (provider == "local") ? size : 2048;
+            total_freed_bytes += freed_bytes;
+
+            if (provider == "google_drive") {
+                if (!row[3].is_null() && !row[4].is_null()) {
+                    const std::string ext_file_id = row[3].as<std::string>();
+                    result.external_files.push_back(ext_file_id);
+                    txn.exec("INSERT INTO pending_external_deletions (external_file_id, external_storage_id) VALUES ($1, $2)",
+                             pqxx::params{ext_file_id, row[4].as<uint64_t>()});
+                }
+            } else {
+                local_file_ids.push_back(fid);
+            }
+        }
+
+        if (total_freed_bytes > 0) {
+            txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
+                     pqxx::params{total_freed_bytes, user_id});
+        }
+
+        txn.exec(
+            "WITH RECURSIVE folder_tree AS ( "
+            "  SELECT id FROM folders WHERE id = ANY($1::bigint[]) "
+            "  UNION ALL "
+            "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
+            ") "
+            "DELETE FROM folders WHERE id IN (SELECT id FROM folder_tree);",
+            pqxx::params{actual_arr}
+        );
+
+        txn.commit();
+    }
+
+    if (chunker) {
+        for (const auto file_id : local_file_ids) {
+            chunker->delete_file(file_id);
         }
     }
-
-    if (total_freed_bytes > 0) {
-        txn.exec("UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1) WHERE id = $2",
-                 pqxx::params{total_freed_bytes, user_id});
-    }
-
-    txn.exec(
-        "WITH RECURSIVE folder_tree AS ( "
-        "  SELECT id FROM folders WHERE id = ANY($1::int[]) "
-        "  UNION ALL "
-        "  SELECT f.id FROM folders f INNER JOIN folder_tree ft ON f.parent_id = ft.id "
-        ") "
-        "DELETE FROM folders WHERE id IN (SELECT id FROM folder_tree);",
-        pqxx::params{actual_arr}
-    );
-
-    txn.commit();
     return result;
 }
 

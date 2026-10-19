@@ -1,10 +1,13 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute } from '@angular/router';
 import { ShareService, EncryptedFileMetadata } from '../drive/services/share.service';
 import { KasumiCryptoService } from '../../core/crypto/kasumi-crypto.service';
 import { PublicMediaPlayerComponent } from './public-media-player.component';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFromAbortable } from '../drive/upload/abortable-observable';
+
+const SHARE_FDK_BYTES = 32;
+const CANONICAL_SHARE_FDK = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 
 @Component({
   selector: 'app-shared-file',
@@ -53,8 +56,7 @@ import { firstValueFrom } from 'rxjs';
           [filename]="decryptedName()"
           [sizeBytes]="sizeBytes()"
           [isVideo]="isVideo()"
-          [isImage]="isImage()"
-          [storageProvider]="metadata()?.storage_provider || 'local'">
+          [isImage]="isImage()">
         </app-public-media-player>
       }
     </div>
@@ -148,97 +150,15 @@ import { firstValueFrom } from 'rxjs';
       @keyframes spin {
         to { transform: rotate(360deg); }
       }
-      .file-details-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        text-align: center;
-      }
-      .file-icon-wrapper {
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        background: #eff6ff;
-        color: #3b82f6;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin-bottom: 20px;
-      }
-      .file-large-icon {
-        font-size: 40px;
-      }
-      .file-name {
-        font-size: 18px;
-        font-weight: 600;
-        color: #0f172a;
-        margin: 0 0 6px;
-        word-break: break-all;
-        max-width: 100%;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-        overflow: hidden;
-      }
-      .file-size {
-        font-size: 14px;
-        color: #64748b;
-        margin: 0 0 28px;
-      }
-      .actions-container {
-        width: 100%;
-      }
-      .download-btn {
-        width: 100%;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        background: #2563eb;
-        color: white;
-        border: none;
-        padding: 12px 24px;
-        border-radius: 8px;
-        font-weight: 500;
-        cursor: pointer;
-        font-size: 15px;
-        transition: background 0.2s;
-      }
-      .download-btn:hover {
-        background: #1d4ed8;
-      }
-      .btn-icon {
-        font-size: 20px;
-      }
-      .download-progress-container {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 10px;
-        padding: 12px;
-        background: #f1f5f9;
-        border-radius: 8px;
-        color: #475569;
-        font-size: 14px;
-      }
-      .spinner-small {
-        width: 18px;
-        height: 18px;
-        border: 2px solid rgba(0, 0, 0, 0.1);
-        border-top-color: #2563eb;
-        border-radius: 50%;
-        animation: spin 0.8s linear infinite;
-      }
     `
   ]
 })
-export class SharedFileComponent implements OnInit {
+export class SharedFileComponent implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly shareService = inject(ShareService);
   private readonly kasumi = inject(KasumiCryptoService);
 
   readonly loading = signal(true);
-  readonly downloading = signal(false);
   readonly error = signal<string | null>(null);
   readonly securityError = signal<string | null>(null);
 
@@ -247,7 +167,9 @@ export class SharedFileComponent implements OnInit {
   readonly metadata = signal<EncryptedFileMetadata | null>(null);
 
   shareId = '';
+  // A página é o owner explícito da FDK raiz do compartilhamento.
   fdkUint8: Uint8Array | null = null;
+  private readonly lifecycleController = new AbortController();
 
   ngOnInit() {
     this.shareId = this.route.snapshot.paramMap.get('id') || '';
@@ -260,9 +182,8 @@ export class SharedFileComponent implements OnInit {
     }
 
     try {
-      this.fdkUint8 = this.decodeBase64UrlSafe(hash);
-    } catch (e) {
-      console.error('Falha ao decodificar FDK do hash', e);
+      this.fdkUint8 = this.decodeShareFdk(hash);
+    } catch {
       this.securityError.set('Link invalido (Chave ausente)');
       this.loading.set(false);
       return;
@@ -271,40 +192,65 @@ export class SharedFileComponent implements OnInit {
     this.loadMetadata();
   }
 
-  decodeBase64UrlSafe(base64Url: string): Uint8Array {
-    let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    while (base64.length % 4) {
-      base64 += '=';
+  private decodeShareFdk(fragment: string): Uint8Array {
+    if (!CANONICAL_SHARE_FDK.test(fragment)) {
+      throw new Error('Formato de chave de compartilhamento invalido.');
     }
-    const binaryString = atob(base64);
-    const len = binaryString.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
+
+    const base64 = fragment.replace(/-/g, '+').replace(/_/g, '/') + '=';
+    let binary: string;
+    try {
+      binary = atob(base64);
+    } catch {
+      throw new Error('Formato de chave de compartilhamento invalido.');
     }
-    return bytes;
+
+    if (binary.length !== SHARE_FDK_BYTES) {
+      throw new Error('Tamanho de chave de compartilhamento invalido.');
+    }
+
+    const fdk = new Uint8Array(SHARE_FDK_BYTES);
+    for (let i = 0; i < SHARE_FDK_BYTES; i++) {
+      fdk[i] = binary.charCodeAt(i);
+    }
+    return fdk;
   }
 
   async loadMetadata() {
+    if (this.lifecycleController.signal.aborted) return;
     this.loading.set(true);
     this.error.set(null);
+    let decryptingName = false;
 
     try {
-      const meta = await firstValueFrom(this.shareService.getSharedFileMetadata(this.shareId));
-      if (!this.fdkUint8) {
+      const meta = await firstValueFromAbortable(
+        this.shareService.getSharedFileMetadata(this.shareId),
+        this.lifecycleController.signal,
+      );
+      this.throwIfAborted();
+      const rootFdk = this.fdkUint8;
+      if (!rootFdk) {
         throw new Error('Chave FDK ausente no escopo.');
       }
+      const operationFdk = rootFdk.slice();
+      let name: string;
+      decryptingName = true;
+      try {
+        name = await this.kasumi.decryptName(meta.encrypted_name, operationFdk);
+      } finally {
+        operationFdk.fill(0);
+      }
+      decryptingName = false;
+      this.throwIfAborted();
       this.metadata.set(meta);
-      const name = await this.kasumi.decryptName(meta.encrypted_name, this.fdkUint8);
       this.decryptedName.set(name);
       this.sizeBytes.set(meta.size_bytes);
       this.loading.set(false);
     } catch (err: any) {
-      if (err instanceof Error && err.message === 'Chave FDK ausente no escopo.') {
-        console.error('Erro ao descriptografar nome do arquivo', err);
+      if (this.isLifecycleAbort(err)) return;
+      if ((err instanceof Error && err.message === 'Chave FDK ausente no escopo.') || decryptingName) {
         this.error.set('Nao foi possivel descriptografar os metadados do arquivo com a chave fornecida.');
       } else {
-        console.error('Erro ao buscar metadados do compartilhamento', err);
         const msg = err?.error?.error || 'Link de compartilhamento expirou ou nao existe mais.';
         this.error.set(msg);
       }
@@ -312,37 +258,23 @@ export class SharedFileComponent implements OnInit {
     }
   }
 
-  async downloadAndDecryptFile() {
-    if (this.downloading() || !this.fdkUint8) return;
-    this.downloading.set(true);
-    this.error.set(null);
+  ngOnDestroy() {
+    this.lifecycleController.abort();
+    const rootFdk = this.fdkUint8;
+    this.fdkUint8 = null;
+    rootFdk?.fill(0);
+  }
 
-    try {
-      const encryptedBlob = await firstValueFrom(this.shareService.downloadSharedFile(this.shareId));
-      if (!this.fdkUint8) return;
-      
-      try {
-        const rawDecrypted = await this.kasumi.decryptFile(encryptedBlob, this.fdkUint8);
-        const url = URL.createObjectURL(rawDecrypted);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = this.decryptedName();
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        this.downloading.set(false);
-      } catch (e: any) {
-        console.error('Erro ao descriptografar arquivo', e);
-        this.error.set('Falha na descriptografia do arquivo. A chave pode estar incorreta.');
-        this.downloading.set(false);
-      }
-    } catch (err: any) {
-      console.error('Erro ao descarregar arquivo compartilhado', err);
-      const msg = err?.error?.error || 'Nao foi possivel descarregar o arquivo do servidor.';
-      this.error.set(msg);
-      this.downloading.set(false);
+  private throwIfAborted(): void {
+    if (this.lifecycleController.signal.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
     }
+  }
+
+  private isLifecycleAbort(error: unknown): boolean {
+    return this.lifecycleController.signal.aborted ||
+      (error instanceof DOMException && error.name === 'AbortError') ||
+      (typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError');
   }
 
   isImage(): boolean {
@@ -355,39 +287,4 @@ export class SharedFileComponent implements OnInit {
     return /\.(mp4|webm|ogv|mov|mkv)$/.test(name);
   }
 
-  isMedia(): boolean {
-    return this.isImage() || this.isVideo();
-  }
-
-  getFileIcon(): string {
-    const name = this.decryptedName().toLowerCase();
-    if (this.isImage()) {
-      return 'image';
-    }
-    if (this.isVideo()) {
-      return 'movie';
-    }
-    if (/\.(mp3|wav|ogg|flac|m4a)$/.test(name)) {
-      return 'audiotrack';
-    }
-    if (/\.(pdf)$/.test(name)) {
-      return 'picture_as_pdf';
-    }
-    if (/\.(zip|rar|7z|tar|gz)$/.test(name)) {
-      return 'zip_box';
-    }
-    if (/\.(txt|md|rtf|docx|doc|pdf|xlsx|xls|csv|pptx|ppt)$/.test(name)) {
-      return 'description';
-    }
-    return 'insert_drive_file';
-  }
-
-  getFormattedSize(): string {
-    const bytes = this.sizeBytes();
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  }
 }

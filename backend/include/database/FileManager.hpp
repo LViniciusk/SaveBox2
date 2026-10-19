@@ -26,6 +26,7 @@ struct BatchInitItem {
 
 struct BatchInitResult {
     uint64_t file_id;
+    std::optional<uint64_t> folder_id;
     std::string enc_name;
     std::string name_hash;
     std::string storage_provider;
@@ -37,6 +38,12 @@ struct BatchInitResult {
 struct ExternalSyncFile {
     uint64_t id;
     std::string external_file_id;
+};
+
+struct PendingGoogleRecoveryFile {
+    uint64_t external_storage_id;
+    std::string name_hash;
+    uint64_t size_bytes;
 };
 
 struct BatchHardDeleteResult {
@@ -57,29 +64,30 @@ public:
                     bool is_hidden = false);
     std::vector<BatchInitResult> batch_init_uploads(uint64_t user_id, const std::vector<BatchInitItem>& files);
     crow::json::wvalue get_user_quota(uint64_t user_id);
-    void mark_upload_complete(uint64_t file_id, uint64_t user_id);
-    bool is_upload_complete(uint64_t file_id, uint64_t user_id);
-    int get_total_chunks(uint64_t file_id, uint64_t user_id);
+    bool store_local_chunk(uint64_t file_id, uint64_t user_id, int chunk_index,
+                           const std::string& binary_data, class FileChunker& chunker);
     bool can_user_download(uint64_t file_id, uint64_t user_id);
     std::string get_file_name(uint64_t file_id, uint64_t user_id);
     std::vector<crow::json::wvalue> get_user_files_paginated(uint64_t user_id, int limit, int offset);
     std::vector<crow::json::wvalue> get_pending_uploads(uint64_t user_id);
+    PendingGoogleRecoveryFile get_pending_google_recovery_file(uint64_t file_id, uint64_t user_id);
+    PendingGoogleRecoveryFile mark_pending_google_upload_cancelled(uint64_t file_id, uint64_t user_id);
+    void require_pending_local_recovery_file(uint64_t file_id, uint64_t user_id);
+    crow::json::wvalue get_storage_tree(uint64_t user_id,
+                                        const std::string& provider,
+                                        std::optional<uint64_t> external_storage_id,
+                                        std::optional<uint64_t> folder_id,
+                                        int limit, int offset);
     std::vector<int> get_uploaded_chunks(uint64_t file_id, uint64_t user_id);
-    void record_chunk_saved(uint64_t file_id, int chunk_index);
-    int count_uploaded_chunks(uint64_t file_id);
     std::optional<std::string> delete_file(uint64_t file_id, uint64_t user_id);
     std::optional<std::string> hard_delete_file(uint64_t file_id, uint64_t user_id, class FileChunker* chunker);
     BatchHardDeleteResult batch_hard_delete_files(uint64_t user_id, const std::vector<int>& file_ids, class FileChunker* chunker);
     int batch_delete_files(uint64_t user_id, const std::vector<int>& file_ids);
     crow::json::wvalue update_file(uint64_t file_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& folder_id);
-    std::string share_file(uint64_t file_id, uint64_t user_id, const std::string& encrypted_name_fdk = "");
-    std::pair<std::string, std::string> get_file_storage_info(uint64_t file_id, uint64_t user_id);
-    std::pair<std::string, std::string> get_share_storage_info(const std::string& share_uuid, uint64_t user_id);
+    std::string share_file(uint64_t file_id, uint64_t user_id, const std::string& encrypted_name_fdk);
     struct SharedFileInfo {
         uint64_t file_id;
         std::string encrypted_name;
-        std::string storage_provider;
-        std::string external_file_id;
         size_t size_bytes;
     };
     SharedFileInfo get_shared_file_info(const std::string& uuid);
@@ -103,6 +111,28 @@ public:
     std::string get_storage_provider(uint64_t file_id, uint64_t user_id);
     std::vector<ExternalSyncFile> get_external_sync_map(uint64_t user_id, uint64_t external_storage_id);
     void cleanup_external_sync(uint64_t user_id, uint64_t external_storage_id, const std::vector<std::string>& missing_external_ids);
+    crow::json::wvalue start_storage_move(uint64_t user_id, uint64_t file_id,
+                                          const std::string& target_provider,
+                                          std::optional<uint64_t> target_external_storage_id,
+                                          std::optional<uint64_t> target_available_bytes);
+    crow::json::wvalue get_storage_move(uint64_t user_id, uint64_t move_id);
+    crow::json::wvalue get_active_storage_moves(uint64_t user_id);
+    void set_storage_move_status(uint64_t user_id, uint64_t move_id, const std::string& status);
+    uint64_t record_storage_move_chunk(uint64_t user_id, uint64_t move_id, uint64_t item_id,
+                                       int chunk_index, uint64_t size_bytes);
+    void update_storage_move_progress(uint64_t user_id, uint64_t move_id, uint64_t item_id, uint64_t transferred_bytes);
+    void mark_storage_move_item_uploaded(uint64_t user_id, uint64_t move_id, uint64_t item_id,
+                                         std::optional<std::string> target_external_file_id);
+    void record_storage_move_failure(uint64_t user_id, uint64_t move_id,
+                                    const std::string& error_code, const std::string& failure_stage,
+                                    bool retryable,
+                                    const std::vector<std::string>& additional_external_file_ids = {},
+                                    class FileChunker* chunker = nullptr);
+    void clear_storage_move(uint64_t user_id, uint64_t move_id);
+    crow::json::wvalue cancel_storage_move(uint64_t user_id, uint64_t move_id,
+                                           const std::vector<std::string>& additional_external_file_ids = {},
+                                           class FileChunker* chunker = nullptr);
+    crow::json::wvalue complete_storage_move(uint64_t user_id, uint64_t move_id, class FileChunker& chunker);
 
 private:
     DatabasePool& pool_;

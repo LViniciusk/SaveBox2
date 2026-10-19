@@ -1,19 +1,17 @@
-import { type HttpInterceptorFn, HttpContextToken } from '@angular/common/http';
+import { type HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { tap } from 'rxjs';
 import { AuthService } from '../auth/auth.service';
 import { AppStateService } from '../state/app-state.service';
-
-/**
- * Token para ignorar o redirect global de logout em chamadas específicas (ex: restoreSession).
- */
-export const BYPASS_LOGOUT = new HttpContextToken<boolean>(() => false);
+import { BYPASS_LOGOUT } from './http-context-tokens';
+import { environment } from '../../../environments/environment';
+import { isUrlWithinBase } from './request-authority';
 
 /**
  * HTTP error interceptor for centralized error handling:
  *
- * - 401 Unauthorized → Forces logout and redirects to /login.
- * - 403 Forbidden    → Forces vault lock state.
+ * - Nanika backend 401 → Forces logout and redirects to /login.
+ * - Nanika backend 403 → Forces vault lock state.
  */
 export const errorInterceptor: HttpInterceptorFn = (req, next) => {
   const authService = inject(AuthService);
@@ -22,6 +20,11 @@ export const errorInterceptor: HttpInterceptorFn = (req, next) => {
   return next(req).pipe(
     tap({
       error: (error) => {
+        const isNanikaBackendRequest =
+          isUrlWithinBase(req.url, environment.apiUrl) ||
+          isUrlWithinBase(req.url, environment.uploadApiUrl);
+        if (!isNanikaBackendRequest) return;
+
         const isPublicShare = req.url.includes('/share/');
         if (error.status === 401 && !req.context.get(BYPASS_LOGOUT) && !isPublicShare) {
           authService.logout();

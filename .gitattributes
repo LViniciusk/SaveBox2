@@ -1,2 +1,17 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Keep experimental source hashes reproducible across Windows checkouts.
+frontend/tools/ap06-*.mjs text eol=lf
+frontend/tools/browser-memory-probe.mjs text eol=lf
+frontend/e2e-video/video-fixtures.ts text eol=lf
+frontend/experiments/ap06-r7/** text eol=lf
+tools/quality/*ap06*probe.py text eol=lf
+tools/quality/run_readiness_wave1.py text eol=lf
+
+# Preserve the supplied R9 authority bytes, including Markdown hard breaks.
+quality/ap06-r12-r9.md -text whitespace=-blank-at-eol
+quality/ap06-r12-r10.md -text whitespace=-blank-at-eol
+
+quality/ap06-r12-r11.md -text whitespace=-blank-at-eol
+quality/ap06-r12-r12.md -text whitespace=-blank-at-eol

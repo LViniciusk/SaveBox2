@@ -1,7 +1,6 @@
 import { Component, inject, signal, OnInit, effect, HostListener, ElementRef, ViewChild } from '@angular/core';
 import { DialogService } from '../../../../core/dialog/dialog.service';
 import { AppStateService, AppStatus } from '../../../../core/state/app-state.service';
-import { AuthService } from '../../../../core/auth/auth.service';
 import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { DriveStore, DriveFile } from '../../state/drive.store';
 import { UnlockModalComponent } from '../../components/unlock-modal/unlock-modal.component';
@@ -15,6 +14,12 @@ import { DriveView } from '../../state/drive.types';
 import { CommonModule } from '@angular/common';
 import { PinnedFoldersStore } from '../../state/pinned-folders.store';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
+import { FilePreviewRequest } from '../../services/file-preview-resolver';
+import { getPublicShareAvailability } from '../../policies/public-share-policy';
+import { ComputerStore } from '../../state/computer.store';
+import { StorageMoveEngineService } from '../../storage-move/storage-move-engine.service';
+import { StorageTargetPickerComponent } from '../../components/storage-target-picker/storage-target-picker.component';
+import { StorageTarget } from '../../state/drive.types';
 
 /**
  * Main vault page — Google Drive clone layout.
@@ -26,8 +31,8 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
  * │ Sidebar  │  Content Area                        │
  * │ [+ Novo] │  Breadcrumb: Meu Drive               │
  * │ Meu Drive│  ┌──────────────────────────────┐    │
- * │ Comparti.│  │  File List (with obfuscation) │    │
- * │ Recentes │  │  + Lock Overlay when Locked   │    │
+ * │           │  │  File List                    │    │
+ * │           │  │  + Lock Overlay when Locked   │    │
  * │ Lixeira  │  └──────────────────────────────┘    │
  * │          │                                      │
  * │ Storage  │                                      │
@@ -37,34 +42,35 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
   selector: 'app-vault-home',
   standalone: true,
   providers: [PinnedFoldersStore],
-  imports: [GDriveShellComponent, DefaultShellComponent, UnlockModalComponent, VideoPlayerComponent, ImagePlayerComponent, ShareModalComponent, CommonModule],
+  imports: [GDriveShellComponent, DefaultShellComponent, UnlockModalComponent, VideoPlayerComponent, ImagePlayerComponent, ShareModalComponent, StorageTargetPickerComponent, CommonModule],
   template: `
     @if (themeService.theme() === 'default') {
       <app-default-shell
         [currentView]="currentView()"
-        [currentFolderId]="driveStore.currentFolderId()"
-        [currentPath]="driveStore.currentPath()"
-        [canGoBack]="driveStore.canGoBack()"
-        [canGoForward]="driveStore.canGoForward()"
-        [canGoUp]="driveStore.canGoUp()"
+        [currentFolderId]="currentView() === 'computer' ? computerStore.currentFolderId() : driveStore.currentFolderId()"
+        [currentPath]="currentView() === 'computer' ? computerStore.currentPath() : driveStore.currentPath()"
+        [canGoBack]="currentView() === 'computer' ? computerStore.canGoBack() : driveStore.canGoBack()"
+        [canGoForward]="currentView() === 'computer' ? computerStore.canGoForward() : driveStore.canGoForward()"
+        [canGoUp]="currentView() === 'computer' ? computerStore.canGoUp() : driveStore.canGoUp()"
         [locked]="appState.isLocked()"
         [quota]="driveStore.quota()"
+        [movingFileIds]="storageMoveEngine.activeFileIds()"
         (viewChange)="onViewChange($event)"
         (createFolderRequested)="createNewFolder()"
         (uploadFileRequested)="openFilePicker()"
         (uploadFolderRequested)="openFolderPicker()"
         (unlockRequested)="isUnlockModalOpen.set(true)"
         (lockRequested)="lockDrive()"
-        (backRequested)="driveStore.goBack()"
-        (forwardRequested)="driveStore.goForward()"
-        (upRequested)="driveStore.navigateUp()"
+        (backRequested)="navigateBack()"
+        (forwardRequested)="navigateForward()"
+        (upRequested)="navigateUp()"
         (addressNavigate)="onAddressNavigate($event)"
         (dropStarted)="onDropStarted()"
         (externalDrop)="onDropped($event)"
         (dropError)="onDropError($event)"
-        (videoSelected)="activeVideoFile.set($event)"
-        (imageSelected)="onImageSelected($event)"
+        (previewRequested)="onPreviewRequested($event)"
         (shareRequested)="onShareRequested($event)"
+        (storageMoveRequested)="onStorageMoveRequested($event)"
         (pinnedFolderNavigate)="onPinnedFolderNavigate($event)"
         (emptyTrashRequested)="onEmptyTrash()">
         <ng-container *ngTemplateOutlet="shellContent"></ng-container>
@@ -75,17 +81,19 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
         [currentFolderId]="driveStore.currentFolderId()"
         [locked]="appState.isLocked()"
         [quota]="driveStore.quota()"
+        [movingFileIds]="storageMoveEngine.activeFileIds()"
         (viewChange)="onViewChange($event)"
         (createFolderRequested)="createNewFolder()"
         (uploadFileRequested)="openFilePicker()"
         (uploadFolderRequested)="openFolderPicker()"
         (unlockRequested)="isUnlockModalOpen.set(true)"
+        (lockRequested)="lockDrive()"
         (dropStarted)="onDropStarted()"
         (externalDrop)="onDropped($event)"
         (dropError)="onDropError($event)"
-        (videoSelected)="activeVideoFile.set($event)"
-        (imageSelected)="onImageSelected($event)"
+        (previewRequested)="onPreviewRequested($event)"
         (shareRequested)="onShareRequested($event)"
+        (storageMoveRequested)="onStorageMoveRequested($event)"
         (pinnedFolderNavigate)="onPinnedFolderNavigate($event)"
         (emptyTrashRequested)="onEmptyTrash()">
         <ng-container *ngTemplateOutlet="shellContent"></ng-container>
@@ -93,8 +101,8 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
     }
 
     <ng-template #shellContent>
-      <input type="file" #fileInput multiple style="display: none" (change)="onFilesSelected($event)" />
-      <input type="file" #folderInput multiple webkitdirectory directory style="display: none" (change)="onFolderSelected($event)" />
+      <input type="file" #fileInput data-testid="drive-file-input" multiple style="display: none" (change)="onFilesSelected($event)" />
+      <input type="file" #folderInput data-testid="drive-folder-input" multiple webkitdirectory directory style="display: none" (change)="onFolderSelected($event)" />
       
                 <!-- Unlock Modal (visible when unlocked requested) -->
                 @if (isUnlockModalOpen()) {
@@ -154,6 +162,16 @@ import { DroppedItems } from '../../services/data-transfer-reader.service';
                 <!-- Share Modal -->
                 @if (shareFile()) {
                   <app-share-modal [file]="shareFile()!" (close)="shareFile.set(null)" />
+                }
+                @if (moveFile(); as file) {
+                  <app-storage-target-picker
+                    [file]="file"
+                    [targets]="computerStore.targets()"
+                    [busy]="moveSubmitting()"
+                    [loadingTargets]="moveTargetsLoading()"
+                    [error]="moveError()"
+                    (cancelled)="cancelStorageMove()"
+                    (confirmed)="startStorageMove(file, $event)" />
                 }
     </ng-template>
   `,
@@ -302,17 +320,23 @@ export class VaultHomeComponent implements OnInit {
   @ViewChild('fileInput') private fileInput?: ElementRef<HTMLInputElement>;
   @ViewChild('folderInput') private folderInput?: ElementRef<HTMLInputElement>;
   protected readonly appState = inject(AppStateService);
-  protected readonly authService = inject(AuthService);
   protected readonly cryptoService = inject(CryptoService);
   protected readonly driveStore = inject(DriveStore);
   protected readonly themeService = inject(ThemeService);
   protected readonly pinnedFoldersStore = inject(PinnedFoldersStore);
+  protected readonly computerStore = inject(ComputerStore);
+  protected readonly storageMoveEngine = inject(StorageMoveEngineService);
   readonly dialogService = inject(DialogService);
   readonly AppStatus = AppStatus;
 
   readonly isUnlockModalOpen = signal(false);
   readonly currentView = signal<DriveView>('drive');
   readonly isVideoReady = signal(false);
+  readonly moveFile = signal<DriveFile | null>(null);
+  readonly moveTargetsLoading = signal(false);
+  readonly moveSubmitting = signal(false);
+  readonly moveError = signal<string | null>(null);
+  private readonly reconciledMoveIds = new Set<number>();
 
   constructor() {
     effect(() => {
@@ -320,11 +344,32 @@ export class VaultHomeComponent implements OnInit {
         this.driveStore.reDecryptAll();
       }
     });
+    effect(() => {
+      const theme = this.themeService.theme();
+      const view = this.currentView();
+      if (theme === 'default' && view === 'storage') this.currentView.set('computer');
+      if (theme === 'gdrive' && view === 'computer') this.currentView.set('storage');
+    });
+    effect(() => {
+      for (const move of this.storageMoveEngine.jobs()) {
+        if ((move.status === 'cleanup_pending' || move.status === 'completed') && !this.reconciledMoveIds.has(move.id)) {
+          this.reconciledMoveIds.add(move.id);
+          void this.driveStore.loadTree();
+          void this.computerStore.refresh();
+          void this.computerStore.loadTargets();
+        }
+      }
+    });
   }
 
-  ngOnInit() {
-    this.driveStore.loadQuota();
-    this.driveStore.loadTree();
+  async ngOnInit() {
+    await Promise.all([
+      this.driveStore.loadQuota(),
+      this.driveStore.loadTree(),
+      this.driveStore.loadLinkedAccounts(),
+      this.computerStore.loadTargets(),
+    ]);
+    await this.storageMoveEngine.loadActive(this.computerStore.targets(), this.driveStore.files());
     void this.pinnedFoldersStore.load();
   }
 
@@ -337,9 +382,28 @@ export class VaultHomeComponent implements OnInit {
   }
 
   onViewChange(view: DriveView): void {
+    if (view === 'computer') {
+      this.currentView.set('computer');
+      void this.computerStore.openHome();
+      return;
+    }
     this.currentView.set(view);
-    if (view === 'drive') this.driveStore.navigateTo(null);
     if (view === 'trash') this.driveStore.loadTrash();
+  }
+
+  navigateBack(): void {
+    if (this.currentView() === 'computer') void this.computerStore.goBack();
+    else this.driveStore.goBack();
+  }
+
+  navigateForward(): void {
+    if (this.currentView() === 'computer') void this.computerStore.goForward();
+    else this.driveStore.goForward();
+  }
+
+  navigateUp(): void {
+    if (this.currentView() === 'computer') void this.computerStore.goUp();
+    else this.driveStore.navigateUp();
   }
 
   onPinnedFolderNavigate(folderId: number): void {
@@ -354,13 +418,22 @@ export class VaultHomeComponent implements OnInit {
     const parts = value
       .split(/[>/\\]/)
       .map(part => part.trim())
-      .filter(Boolean)
-      .filter(part => !['este computador', 'nanika', 'meu drive'].includes(part.toLowerCase()));
+      .filter(Boolean);
 
+    if (parts[0]?.toLowerCase() === 'nanika') parts.shift();
+
+    if (this.currentView() === 'computer' || parts[0]?.toLowerCase() === 'este computador') {
+      this.currentView.set('computer');
+      void this.computerStore.navigateAddress(value);
+      return;
+    }
+
+    const files = this.driveStore.files();
     let parentId: number | null = null;
     for (const part of parts) {
-      const folder = this.driveStore.files().find(file =>
-        file.isFolder && (file.parentId ?? null) === parentId && file.decryptedName?.toLowerCase() === part.toLowerCase()
+      const name = part.toLowerCase();
+      const folder = files.find(file =>
+        file.isFolder && (file.parentId ?? null) === parentId && file.decryptedName?.toLowerCase() === name
       );
       if (!folder) return;
       parentId = folder.id;
@@ -372,9 +445,25 @@ export class VaultHomeComponent implements OnInit {
 
   lockDrive(): void {
     this.cryptoService.lockVault();
-    this.driveStore.clearDecryptedNames();
+    this.dialogService.cancelActive();
+    this.clearDecryptedPresentation();
+    this.driveStore.clearDecryptedPresentationData();
+    this.computerStore.clearDecryptedPresentationData();
+    this.storageMoveEngine.clearDecryptedPresentationData();
     this.driveStore.navigateTo(null);
+    this.driveStore.resetDownloadRuntimeState();
     this.appState.lock();
+  }
+
+  private clearDecryptedPresentation(): void {
+    this.activeImageFile.set(null);
+    this.activeImagePlaylist.set([]);
+    this.activeVideoFile.set(null);
+    this.isVideoReady.set(false);
+    this.shareFile.set(null);
+    this.moveFile.set(null);
+    this.moveTargetsLoading.set(false);
+    this.moveError.set(null);
   }
 
   readonly activeVideoFile = signal<DriveFile | null>(null);
@@ -383,12 +472,55 @@ export class VaultHomeComponent implements OnInit {
   readonly shareFile = signal<DriveFile | null>(null);
 
   onShareRequested(file: DriveFile) {
+    if (!getPublicShareAvailability(file).allowed) {
+      this.shareFile.set(null);
+      return;
+    }
     this.shareFile.set(file);
   }
 
-  onImageSelected(payload: { file: DriveFile, playlist: DriveFile[] }) {
-    this.activeImagePlaylist.set(payload.playlist);
-    this.activeImageFile.set(payload.file);
+  async onStorageMoveRequested(file: DriveFile): Promise<void> {
+    if (this.appState.isLocked() || file.isFolder || file.isHidden || file.id === -9999) return;
+    if (this.storageMoveEngine.activeFileIds().has(file.id)) return;
+    this.moveError.set(null);
+    this.moveFile.set(file);
+    this.moveTargetsLoading.set(true);
+    try {
+      await this.computerStore.loadTargets();
+    } catch (error) {
+      console.error('Erro ao carregar destinos de armazenamento', error);
+      this.moveError.set('Não foi possível carregar os destinos de armazenamento.');
+    } finally {
+      this.moveTargetsLoading.set(false);
+    }
+  }
+
+  cancelStorageMove(): void {
+    if (this.moveSubmitting()) return;
+    this.moveFile.set(null);
+    this.moveTargetsLoading.set(false);
+    this.moveError.set(null);
+  }
+
+  async startStorageMove(file: DriveFile, target: StorageTarget): Promise<void> {
+    if (this.moveSubmitting() || this.moveTargetsLoading() || this.storageMoveEngine.activeFileIds().has(file.id)) return;
+    this.moveSubmitting.set(true);
+    this.moveError.set(null);
+    try {
+      await this.storageMoveEngine.start(file, target);
+      this.moveFile.set(null);
+    } catch (error) {
+      console.error('Erro ao iniciar movimentação de armazenamento', error);
+      this.moveError.set('Não foi possível iniciar a movimentação. Tente novamente.');
+    } finally {
+      this.moveSubmitting.set(false);
+    }
+  }
+
+  onPreviewRequested(request: FilePreviewRequest): void {
+    this.activeImagePlaylist.set([...request.playlist]);
+    this.activeVideoFile.set(null);
+    this.activeImageFile.set(request.file);
   }
 
   @HostListener('document:contextmenu', ['$event'])
@@ -430,7 +562,7 @@ export class VaultHomeComponent implements OnInit {
       }
     } catch (e) {
       console.error(e);
-      alert('Erro no upload');
+      alert(this.uploadErrorMessage(e, 'Erro no upload'));
     }
   }
 
@@ -445,7 +577,7 @@ export class VaultHomeComponent implements OnInit {
       await this.driveStore.uploadFolder(files, rootParentId);
     } catch (error) {
       console.error(error);
-      alert('Erro no upload da pasta');
+      alert(this.uploadErrorMessage(error, 'Erro no upload da pasta'));
     }
   }
 
@@ -459,7 +591,7 @@ export class VaultHomeComponent implements OnInit {
         else await this.driveStore.uploadFiles(drop.files, folderId, 'drop-files');
       } catch (error) {
         console.error(error);
-        alert('Erro no upload dos arquivos arrastados');
+        alert(this.uploadErrorMessage(error, 'Erro no upload dos arquivos arrastados'));
       }
     }
     if (drop.folders.length > 0 && !this.appState.isLocked()) {
@@ -467,9 +599,14 @@ export class VaultHomeComponent implements OnInit {
         await this.driveStore.uploadFolderSources(drop.folders, folderId, 'drop-folders');
       } catch (error) {
         console.error(error);
-        alert('Erro no upload das pastas arrastadas');
+        alert(this.uploadErrorMessage(error, 'Erro no upload das pastas arrastadas'));
       }
     }
+  }
+
+  private uploadErrorMessage(error: unknown, fallback: string): string {
+    const message = error instanceof Error ? error.message : '';
+    return message.includes('Google Drive') ? message : fallback;
   }
 
   onDropStarted(): void {
@@ -512,7 +649,4 @@ export class VaultHomeComponent implements OnInit {
     this.dialogService.activeDialog.set(null);
   }
 
-  onLogout(): void {
-    this.authService.logout();
-  }
 }

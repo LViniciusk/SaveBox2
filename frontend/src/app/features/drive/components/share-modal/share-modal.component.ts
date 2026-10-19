@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Output, inject, input, output, OnInit, signal } from '@angular/core';
+import { Component, computed, inject, input, OnDestroy, output, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DriveService } from '../../services/drive.service';
@@ -6,6 +6,7 @@ import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { KasumiCryptoService } from '../../../../core/crypto/kasumi-crypto.service';
 import { DriveFile } from '../../state/drive.store';
 import { firstValueFrom } from 'rxjs';
+import { getPublicShareAvailability } from '../../policies/public-share-policy';
 @Component({
   selector: 'app-share-modal',
   standalone: true,
@@ -14,13 +15,16 @@ import { firstValueFrom } from 'rxjs';
     <div class="modal-backdrop" (click)="onBackdropClick($event)">
       <div class="modal-content">
         <div class="modal-header">
-          <h2>Gerenciar Compartilhamento</h2>
+          <h2>{{ unavailableMessage() ? 'Compartilhamento indisponível' : 'Gerenciar Compartilhamento' }}</h2>
           <button class="close-btn" (click)="closeModal()">
             <span class="material-symbols-outlined">close</span>
           </button>
         </div>
 
         <div class="modal-body">
+          @if (unavailableMessage(); as message) {
+            <div class="unavailable-state">{{ message }}</div>
+          } @else {
           <p class="file-info">
             Arquivo: {{ file().decryptedName || file().encryptedName }}
           </p>
@@ -88,6 +92,7 @@ import { firstValueFrom } from 'rxjs';
               </div>
             }
           }
+          }
 
           <div class="modal-actions">
             <button type="button" class="cancel-btn" (click)="closeModal()">Fechar</button>
@@ -108,7 +113,7 @@ import { firstValueFrom } from 'rxjs';
         display: flex;
         align-items: center;
         justify-content: center;
-        z-index: 1000;
+        z-index: 4000;
         animation: fadeIn 0.2s ease-out;
       }
       .modal-content {
@@ -335,10 +340,15 @@ import { firstValueFrom } from 'rxjs';
       .cancel-btn:hover {
         background: #e8eaed;
       }
+      .unavailable-state {
+        padding: 24px 0;
+        text-align: center;
+        color: #5f6368;
+      }
     `
   ]
 })
-export class ShareModalComponent implements OnInit {
+export class ShareModalComponent implements OnInit, OnDestroy {
   readonly file = input.required<DriveFile>();
   readonly close = output<void>();
 
@@ -352,16 +362,33 @@ export class ShareModalComponent implements OnInit {
   readonly generatedLink = signal<string | null>(null);
   readonly activeShares = signal<{ id: number, share_id: string, created_at: string }[]>([]);
   readonly copySuccess = signal(false);
+  readonly unavailableMessage = computed(() => {
+    const availability = getPublicShareAvailability(this.file());
+    return availability.allowed ? null : availability.message;
+  });
+  private lifecycleGeneration = 0;
+
+  ngOnDestroy(): void {
+    this.lifecycleGeneration++;
+  }
 
   ngOnInit() {
     this.loadActiveShares();
   }
 
   async loadActiveShares() {
+    const generation = this.lifecycleGeneration;
+    if (this.unavailableMessage()) {
+      this.loading.set(false);
+      this.generatedLink.set(null);
+      this.activeShares.set([]);
+      return;
+    }
     this.loading.set(true);
     this.error.set(null);
     try {
       const shares = await firstValueFrom(this.driveService.listShares(this.file().id));
+      if (generation !== this.lifecycleGeneration) return;
       this.activeShares.set(shares);
       if (shares.length > 0) {
         // A share already exists, rebuild the final URL with the decrypted FDK
@@ -369,8 +396,10 @@ export class ShareModalComponent implements OnInit {
       } else {
         this.generatedLink.set(null);
       }
+      if (generation !== this.lifecycleGeneration) return;
       this.loading.set(false);
     } catch (err: any) {
+      if (generation !== this.lifecycleGeneration) return;
       console.error('Erro ao buscar compartilhamentos', err);
       this.error.set(err?.error?.error || 'Nao foi possivel carregar a lista de compartilhamentos.');
       this.loading.set(false);
@@ -378,6 +407,12 @@ export class ShareModalComponent implements OnInit {
   }
 
   async generateLink() {
+    const generation = this.lifecycleGeneration;
+    if (this.unavailableMessage()) {
+      this.loading.set(false);
+      this.generatedLink.set(null);
+      return;
+    }
     this.loading.set(true);
     this.error.set(null);
 
@@ -386,76 +421,109 @@ export class ShareModalComponent implements OnInit {
       if (!encryptedFdk) {
         throw new Error('Chave de criptografia do ficheiro ausente.');
       }
-      const decryptedFdkBase64 = await this.cryptoService.decryptName(encryptedFdk);
-      const fdkString = atob(decryptedFdkBase64);
-      const fdkArray = new Uint8Array(fdkString.length);
-      for (let i = 0; i < fdkString.length; i++) {
-        fdkArray[i] = fdkString.charCodeAt(i);
-      }
-
       const filename = this.file().decryptedName || this.file().encryptedName;
-      const encryptedNameFdk = await this.kasumi.encryptName(filename, fdkArray);
+      const { encryptedNameFdk, fragment } = await this.prepareShareMaterial(encryptedFdk, filename);
+      if (generation !== this.lifecycleGeneration) return;
 
       try {
         const res = await firstValueFrom(this.driveService.createShareLink(this.file().id, encryptedNameFdk));
-        await this.buildShareUrl(res.share_id);
+        if (generation !== this.lifecycleGeneration) return;
+        this.generatedLink.set(`${window.location.origin}/share/${res.share_id}#${fragment}`);
         
         try {
           const shares = await firstValueFrom(this.driveService.listShares(this.file().id));
+          if (generation !== this.lifecycleGeneration) return;
           this.activeShares.set(shares);
           this.loading.set(false);
         } catch {
           this.loading.set(false);
         }
       } catch (err: any) {
+        if (generation !== this.lifecycleGeneration) return;
         console.error('Erro ao gerar link de compartilhamento', err);
         this.error.set(err?.error?.error || 'Nao foi possivel gerar o link de compartilhamento.');
         this.loading.set(false);
       }
     } catch (e: any) {
-      console.error('Erro ao preparar FDK ou nome criptografado', e);
+      if (generation !== this.lifecycleGeneration) return;
+      console.error('Erro ao preparar dados de compartilhamento');
       this.error.set(e?.message || 'Falha ao descriptografar chave do arquivo.');
       this.loading.set(false);
     }
   }
 
+  private async prepareShareMaterial(
+    encryptedFdk: string,
+    filename: string,
+  ): Promise<{ encryptedNameFdk: string; fragment: string }> {
+    const decryptedFdkBase64 = this.requireFdkBase64(
+      await this.cryptoService.decryptName(encryptedFdk),
+    );
+    const fragment = this.toBase64Url(decryptedFdkBase64);
+    const fdkArray = this.decodeFdkBytes(decryptedFdkBase64);
+
+    try {
+      return {
+        encryptedNameFdk: await this.kasumi.encryptName(filename, fdkArray),
+        fragment,
+      };
+    } finally {
+      fdkArray.fill(0);
+    }
+  }
+
+  private decodeFdkBytes(value: string): Uint8Array {
+    const binary = atob(value);
+    return Uint8Array.from(binary, character => character.charCodeAt(0));
+  }
+
+  private toBase64Url(value: string): string {
+    return value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  private requireFdkBase64(value: string): string {
+    if (!/^[A-Za-z0-9+/]{43}=$/.test(value)) {
+      throw new Error('Chave de criptografia do arquivo invalida.');
+    }
+    return value;
+  }
+
   async buildShareUrl(shareId: string) {
+    const generation = this.lifecycleGeneration;
+    if (this.unavailableMessage()) {
+      this.generatedLink.set(null);
+      return;
+    }
     try {
       const encryptedFdk = this.file().encryptedFdk;
       if (!encryptedFdk) {
         throw new Error('Chave de criptografia do ficheiro ausente.');
       }
-      const decryptedFdkBase64 = await this.cryptoService.decryptName(encryptedFdk);
-      const fdkString = atob(decryptedFdkBase64);
-      const fdkArray = new Uint8Array(fdkString.length);
-      for (let i = 0; i < fdkString.length; i++) {
-        fdkArray[i] = fdkString.charCodeAt(i);
-      }
-
-      // Convert standard Base64 to Base64 URL-Safe (replacing + with -, / with _, and removing trailing =)
-      const binString = String.fromCharCode(...fdkArray);
-      const fdkBase64UrlSafe = btoa(binString)
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
-
-      const shareUrl = `${window.location.origin}/share/${shareId}#${fdkBase64UrlSafe}`;
+      const decryptedFdkBase64 = this.requireFdkBase64(
+        await this.cryptoService.decryptName(encryptedFdk),
+      );
+      if (generation !== this.lifecycleGeneration) return;
+      const shareUrl = `${window.location.origin}/share/${shareId}#${this.toBase64Url(decryptedFdkBase64)}`;
       this.generatedLink.set(shareUrl);
     } catch (e: any) {
-      console.error('Erro ao descriptografar FDK', e);
+      if (generation !== this.lifecycleGeneration) return;
+      console.error('Erro ao preparar a chave do compartilhamento');
       this.error.set(e?.message || 'Falha ao descriptografar chave do arquivo.');
     }
   }
 
   async revokeShare(shareId: string) {
+    const generation = this.lifecycleGeneration;
     this.revokingId.set(shareId);
     this.error.set(null);
     try {
       await firstValueFrom(this.driveService.revokeShare(shareId));
+      if (generation !== this.lifecycleGeneration) return;
       this.generatedLink.set(null);
       this.activeShares.update(shares => shares.filter(s => s.share_id !== shareId));
       this.revokingId.set(null);
     } catch (err: any) {
+      if (generation !== this.lifecycleGeneration) return;
       console.error('Erro ao revogar compartilhamento', err);
       this.error.set(err?.error?.error || 'Nao foi possivel revogar o link de compartilhamento.');
       this.revokingId.set(null);

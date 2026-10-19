@@ -49,7 +49,6 @@ public:
         std::optional<uint64_t> root_parent_id,
         const std::vector<BatchCreateFolderItem>& folders);
     std::vector<std::string> delete_folder(uint64_t folder_id, uint64_t user_id);
-    bool folder_exists(uint64_t folder_id);
     crow::json::wvalue get_folder_contents(int folder_id, int user_id);
     std::vector<crow::json::wvalue> get_all_folders(uint64_t user_id);
     crow::json::wvalue update_folder(uint64_t folder_id, uint64_t user_id, const std::optional<std::string>& enc_name, const std::optional<std::string>& name_hash, const std::optional<uint64_t>& parent_id);

@@ -1,110 +1,21 @@
 name: Backend CI
-
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
-
+    branches: [ main, frontend ]
 permissions:
   contents: read
-
 jobs:
-  Savebox_Backend_Tests:
-    runs-on: windows-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: UCRT64
-          update: true
-          cache: true
-          install: >-
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-make
-            mingw-w64-ucrt-x86_64-pkgconf
-            mingw-w64-ucrt-x86_64-openssl
-            mingw-w64-ucrt-x86_64-catch
-            mingw-w64-ucrt-x86_64-libpqxx
-            mingw-w64-ucrt-x86_64-nlohmann-json
-            mingw-w64-ucrt-x86_64-libsodium
-            mingw-w64-ucrt-x86_64-libzip
-            mingw-w64-ucrt-x86_64-cpr
-            mingw-w64-ucrt-x86_64-asio
-            mingw-w64-ucrt-x86_64-ccache
-            mingw-w64-ucrt-x86_64-postgresql
-
-      - name: Setup e Start PostgreSQL
-        shell: msys2 {0}
-        run: |
-          echo "Inicializando o cluster do banco na memória..."
-          initdb -D /tmp/pgdata -U postgres --auth=trust
-          
-          echo "Ligando o servidor PostgreSQL..."
-          pg_ctl -D /tmp/pgdata -l /tmp/pgdata/logfile start
-          
-          echo "Aguardando 2 segundos para o banco respirar..."
-          sleep 2
-          
-          echo "Criando usuário e banco de dados..."
-          psql -U postgres -c "CREATE ROLE test_role LOGIN PASSWORD 'test_pass';"
-          createdb -U postgres -O test_role test_db
-
-      - name: Create .env
-        shell: bash
-        run: |
-          cat << 'EOF' > .env
-          DB_USER=test_role
-          DB_PASSWORD=test_pass
-          DB_NAME=test_db
-          DB_HOST=localhost
-          DB_PORT=5432
-
-          PASS_PEPPER=lalala
-          SAVEBOX_JWT_SECRET=minha_cabeca_ta
-          RESEND_API_KEY=piscano
-          EMAIL_VALIDATION_API_KEY=lalalaaa
-
-          SAVEBOX_STORAGE_PATH=./savebox_storage/
-          EOF
-
-      - name: Configure C++ Cache
-        uses: actions/cache@v4
-        with:
-          path: .ccache
-          key: ccache-windows-${{ github.sha }}
-          restore-keys: |
-            ccache-windows-
-
-      - name: Configure CMake
-        shell: msys2 {0}
-        run: |
-          export CCACHE_DIR=$GITHUB_WORKSPACE/.ccache
-          cd backend
-          cmake -B build -G "MinGW Makefiles" -DCMAKE_CXX_COMPILER_LAUNCHER=ccache .
-
-      - name: Build
-        shell: msys2 {0}
-        run: |
-          export CCACHE_DIR=$GITHUB_WORKSPACE/.ccache
-          cd backend/build
-          cmake --build . --parallel
-
-      - name: Run all tests
-        shell: msys2 {0}
-        run: |
-          cd backend/build
-          mkdir -p savebox_storage
-          ./savebox_tests.exe --order rand --rng-seed time
-
-  Savebox_Backend_Coverage:
-    runs-on: ubuntu-latest
-
+  backend-linux-gcc:
+    name: Backend / Linux GCC
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC: gcc
+      CXX: g++
     services:
       postgres:
         image: postgres:16
@@ -119,20 +30,19 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install coverage dependencies
+      - name: Install Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential cmake pkg-config git gcovr \
-            libasio-dev libssl-dev libsodium-dev libzip-dev \
+            build-essential cmake pkg-config git \
+            libasio-dev libssl-dev libsodium-dev \
             libcurl4-openssl-dev libpq-dev postgresql-client \
             nlohmann-json3-dev catch2
-
+      - name: Validate native CI architecture
+        run: python3 -m unittest tools.quality.test_ci_native_portability
       - name: Create .env
         run: |
           cat > .env <<'EOF'
@@ -145,34 +55,269 @@ jobs:
           NANIKA_JWT_SECRET=test-jwt-secret
           RESEND_API_KEY=test-resend
           EMAIL_VALIDATION_API_KEY=test-email
+          IMGUR_CLIENT_ID=test-imgur-client-id
           NANIKA_STORAGE_PATH=./savebox_storage/
           EOF
+      - name: Configure Linux GCC
+        run: |
+          cmake -S backend -B backend/build-linux-ci \
+            -DBUILD_TESTS=ON \
+            -DENABLE_COVERAGE=OFF \
+            -DCMAKE_BUILD_TYPE=Debug
+          compiler_file=$(find backend/build-linux-ci -name CMakeCXXCompiler.cmake -print -quit)
+          test -n "$compiler_file"
+          grep -Eq 'CMAKE_CXX_COMPILER_ID.*GNU' "$compiler_file"
+      - name: Build backend targets
+        run: |
+          cmake --build backend/build-linux-ci \
+            --target savebox_server savebox_tests nanika_e2e_fixture \
+            --parallel 2
+      - name: Run backend tests
+        working-directory: backend/build-linux-ci
+        run: |
+          mkdir -p savebox_storage
+          ./savebox_tests --order rand --rng-seed 60101
 
+  backend-windows-msvc:
+    name: Backend / Windows MSVC
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      # Also available during the CMake toolchain's manifest install.
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-binary-cache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Configure vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-msvc-x64-windows-${{ hashFiles('backend/vcpkg.json', 'backend/vcpkg-configuration.json') }}
+          restore-keys: |
+            vcpkg-msvc-x64-windows-
+      - name: Prepare vcpkg binary cache
+        shell: pwsh
+        run: |
+          if (-not $env:VCPKG_INSTALLATION_ROOT) {
+            throw "VCPKG_INSTALLATION_ROOT is not available on the runner"
+          }
+          $toolchain = Join-Path $env:VCPKG_INSTALLATION_ROOT 'scripts\buildsystems\vcpkg.cmake'
+          if (-not (Test-Path $toolchain)) {
+            throw "vcpkg toolchain is missing: $toolchain"
+          }
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+          vsversion: '2022'
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.16.0"
+          disable_annotations: "true"
+      - name: Setup native PostgreSQL
+        shell: pwsh
+        run: |
+          $pgRoot = Get-ChildItem -Path (Join-Path $env:ProgramFiles "PostgreSQL") -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            Where-Object {
+              (Test-Path (Join-Path $_.FullName "bin\initdb.exe")) -and
+              (Test-Path (Join-Path $_.FullName "bin\pg_ctl.exe")) -and
+              (Test-Path (Join-Path $_.FullName "bin\pg_isready.exe")) -and
+              (Test-Path (Join-Path $_.FullName "bin\psql.exe")) -and
+              (Test-Path (Join-Path $_.FullName "bin\createdb.exe"))
+            } |
+            Select-Object -First 1
+          if (-not $pgRoot) {
+            throw "A native PostgreSQL installation was not found"
+          }
+          $pgBin = Join-Path $pgRoot.FullName "bin"
+          $pgData = Join-Path $env:RUNNER_TEMP "nanika-pgdata"
+          $pgLog = Join-Path $env:RUNNER_TEMP "nanika-postgres.log"
+          if (Get-NetTCPConnection -LocalPort 5432 -State Listen -ErrorAction SilentlyContinue) {
+            throw "TCP port 5432 is already in use"
+          }
+          & (Join-Path $pgBin "initdb.exe") -D $pgData -U postgres --auth=trust --encoding=UTF8
+          if ($LASTEXITCODE -ne 0) { throw "initdb failed" }
+          & (Join-Path $pgBin "pg_ctl.exe") -D $pgData -l $pgLog -o "-p 5432" start
+          if ($LASTEXITCODE -ne 0) { throw "pg_ctl start failed" }
+          "NANIKA_PG_BIN=$pgBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "NANIKA_PGDATA=$pgData" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $ready = $false
+          for ($attempt = 1; $attempt -le 30; $attempt++) {
+            & (Join-Path $pgBin "pg_isready.exe") -h 127.0.0.1 -p 5432 -U postgres
+            if ($LASTEXITCODE -eq 0) {
+              $ready = $true
+              break
+            }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $ready) { throw "PostgreSQL did not become ready" }
+          & (Join-Path $pgBin "psql.exe") -h 127.0.0.1 -p 5432 -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE test_role LOGIN PASSWORD 'test_pass';"
+          if ($LASTEXITCODE -ne 0) { throw "test role creation failed" }
+          & (Join-Path $pgBin "createdb.exe") -h 127.0.0.1 -p 5432 -U postgres -O test_role test_db
+          if ($LASTEXITCODE -ne 0) { throw "test database creation failed" }
+      - name: Create .env
+        shell: pwsh
+        run: |
+          @"
+          DB_USER=test_role
+          DB_PASSWORD=test_pass
+          DB_NAME=test_db
+          DB_HOST=127.0.0.1
+          DB_PORT=5432
+          PASS_PEPPER=test-pepper
+          NANIKA_JWT_SECRET=test-jwt-secret
+          RESEND_API_KEY=test-resend
+          EMAIL_VALIDATION_API_KEY=test-email
+          IMGUR_CLIENT_ID=test-imgur-client-id
+          NANIKA_STORAGE_PATH=./savebox_storage/
+          "@ | Set-Content -Path .env -NoNewline
+      - name: Configure MSVC
+        shell: pwsh
+        run: |
+          if (-not $env:ACTIONS_RESULTS_URL -or -not $env:ACTIONS_RUNTIME_TOKEN) {
+            throw "GitHub Actions cache authentication is unavailable"
+          }
+          cmake -S backend -B backend/build-msvc `
+            -G "Ninja Multi-Config" `
+            -DCMAKE_CXX_COMPILER=cl `
+            -DBUILD_TESTS=ON `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
+            -DCMAKE_POLICY_DEFAULT_CMP0141=NEW `
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+          if ($LASTEXITCODE -ne 0) { throw "MSVC CMake configuration failed" }
+          $compilerFile = Get-ChildItem backend/build-msvc -Filter CMakeCXXCompiler.cmake -Recurse | Select-Object -First 1
+          if (-not $compilerFile) { throw "CMake compiler metadata was not generated" }
+          if (-not (Select-String -Path $compilerFile.FullName -Pattern 'CMAKE_CXX_COMPILER_ID.*MSVC')) {
+            throw "CMake did not select the MSVC compiler"
+          }
+          $commands = ninja -C backend/build-msvc -f build-Debug.ninja -t commands savebox_server savebox_tests nanika_e2e_fixture
+          if ($LASTEXITCODE -ne 0 -or -not ($commands -match 'sccache.*cl\.exe')) {
+            throw "Ninja does not launch MSVC through sccache"
+          }
+          $debugRules = Get-Content backend/build-msvc/CMakeFiles/impl-Debug.ninja -Raw
+          if ($debugRules -notmatch '(?m)^  FLAGS = .* [-/]Z7(?:\s|$)' -or $debugRules -cmatch '(?:^|\s)[-/]Z[iI](?:\s|$)') {
+            throw "MSVC Debug objects must use embedded /Z7 symbols"
+          }
+      - name: Build native MSVC targets
+        id: msvc-build
+        shell: pwsh
+        run: |
+          sccache --zero-stats
+          if ($LASTEXITCODE -ne 0) { throw "Could not reset sccache statistics" }
+          $timer = [Diagnostics.Stopwatch]::StartNew()
+          cmake --build backend/build-msvc --config Debug --target savebox_server savebox_tests nanika_e2e_fixture --parallel 2
+          $buildExitCode = $LASTEXITCODE
+          $timer.Stop()
+          Write-Output ("MSVC build wall seconds: {0:N3}" -f $timer.Elapsed.TotalSeconds)
+          if ($buildExitCode -ne 0) { throw "MSVC native build failed" }
+      - name: Run backend tests
+        shell: pwsh
+        working-directory: backend/build-msvc
+        run: |
+          $vcpkgRoot = "$env:GITHUB_WORKSPACE\backend\build-msvc\vcpkg_installed\x64-windows"
+          $env:Path = "$vcpkgRoot\debug\bin;$vcpkgRoot\bin;$env:Path"
+          New-Item -ItemType Directory -Force savebox_storage | Out-Null
+          .\Debug\savebox_tests.exe --order rand --rng-seed 60102
+          if ($LASTEXITCODE -ne 0) { throw "MSVC backend tests failed with exit code $LASTEXITCODE" }
+      - name: Show sccache stats
+        if: always()
+        shell: pwsh
+        run: |
+          if (Get-Command sccache -ErrorAction SilentlyContinue) {
+            $statsJson = sccache --show-stats --stats-format=json
+            if ($LASTEXITCODE -ne 0) { throw "Could not read sccache statistics" }
+            $stats = ($statsJson | ConvertFrom-Json).stats
+            # Only counters/durations: the outer JSON can contain cache service metadata.
+            $stats | ConvertTo-Json -Depth 5
+            if ('${{ steps.msvc-build.outcome }}' -eq 'success' -and $stats.compile_requests -le 0) {
+              throw "MSVC build did not use sccache"
+            }
+          }
+      - name: Stop native PostgreSQL
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:NANIKA_PG_BIN -and $env:NANIKA_PGDATA -and (Test-Path $env:NANIKA_PGDATA)) {
+            & (Join-Path $env:NANIKA_PG_BIN "pg_ctl.exe") -D $env:NANIKA_PGDATA -m fast stop
+          }
+
+  backend-linux-coverage:
+    name: Backend / Linux Coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC: gcc
+      CXX: g++
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test_role
+          POSTGRES_PASSWORD: test_pass
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd "pg_isready -U test_role -d test_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install coverage dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake pkg-config git gcovr \
+            libasio-dev libssl-dev libsodium-dev \
+            libcurl4-openssl-dev libpq-dev postgresql-client \
+            nlohmann-json3-dev catch2
+      - name: Create .env
+        run: |
+          cat > .env <<'EOF'
+          DB_USER=test_role
+          DB_PASSWORD=test_pass
+          DB_NAME=test_db
+          DB_HOST=127.0.0.1
+          DB_PORT=5432
+          PASS_PEPPER=test-pepper
+          NANIKA_JWT_SECRET=test-jwt-secret
+          RESEND_API_KEY=test-resend
+          EMAIL_VALIDATION_API_KEY=test-email
+          IMGUR_CLIENT_ID=test-imgur-client-id
+          NANIKA_STORAGE_PATH=./savebox_storage/
+          EOF
       - name: Configure backend coverage
-        working-directory: ./backend
-        run: cmake -S . -B build-coverage -DBUILD_TESTS=ON -DENABLE_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug
-
+        run: cmake -S backend -B backend/build-coverage -DBUILD_TESTS=ON -DENABLE_COVERAGE=ON -DCMAKE_BUILD_TYPE=Debug
       - name: Build backend coverage
-        working-directory: ./backend
-        run: cmake --build build-coverage --parallel
-
+        run: cmake --build backend/build-coverage --parallel 2
       - name: Run backend tests with reproducible seed
-        working-directory: ./backend/build-coverage
-        run: ./savebox_tests --order rand --rng-seed 12345
-
+        working-directory: backend/build-coverage
+        run: |
+          mkdir -p savebox_storage
+          ./savebox_tests --order rand --rng-seed 60103
       - name: Generate and enforce backend coverage
-        working-directory: ./backend
+        working-directory: backend
         run: |
           gcovr --root . \
             --gcov-ignore-parse-errors=negative_hits.warn_once_per_file \
             --filter 'src/' \
             --exclude 'src/main.cpp' \
             --txt --html-details coverage.html \
+            --json-summary coverage-summary.json \
             --fail-under-line 50
-
       - name: Upload backend coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
-          path: backend/coverage.html
+          path: |
+            backend/coverage.html
+            backend/coverage-summary.json
