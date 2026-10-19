@@ -1,4 +1,4 @@
-﻿# AP-06 R16 — Hardened Native Profiling Capability & Cryptographic Authorization
+# AP-06 R16 — Hardened Native Profiling Capability & Cryptographic Authorization
 
 **Classificação:** `R16_ENGINEERING_READY_AWAITING_AUTHORIZATION` — Engenharia e infraestrutura concluídas, verificação Ed25519 estrita com âncora independente (SPKI DER SHA-256), máquina de estados durável contra concorrência e preservação de evidências, parser JSON estrito RFC 8259, suíte de 25 contratos íntegra (25/25 PASS), validações verdes; nenhuma execução de Chromium científico autorizada ou realizada. Lançamento operacional bloqueado até o provisionamento da âncora de confiança pelo Diretor Científico.
 
@@ -240,15 +240,15 @@ Executado sob Python 3.12 (Windows x64) com aquecimento prévio descartado, proc
 | **Segurança** | Gitleaks e verificações | **PASS** | Gitleaks: 0 segredos; `git diff --check`: 0 erros |
 | **Desempenho** | Benchmark comparável, 8 repetições | **PASS** | Protocolo de 8 repetições concluído e tabelado |
 
-### 7.2 Resultados no GitHub Actions (Commit `27666091`)
+### 7.2 Resultados no GitHub Actions (Commit `fcb7022b`)
 
 | Workflow | Job | Status | Duração | URL |
 |---|---|---|---|---|
-| **Backend CI** | Linux Coverage | **PASS** | 6m58s | [Run 39265973350](https://github.com/LViniciusk/SaveBox2/actions/runs/39265973350/job/118105510119) |
-| **Backend CI** | Linux GCC | **PASS** | 5m34s | [Run 39265973350](https://github.com/LViniciusk/SaveBox2/actions/runs/39265973350/job/118105510785) |
-| **Backend CI** | Windows MSVC | **PASS** | 6m38s | [Run 39265973350](https://github.com/LViniciusk/SaveBox2/actions/runs/39265973350/job/118105509646) |
-| **Quality Baseline** | e2e | **PASS** | 2m53s | [Run 39265973405](https://github.com/LViniciusk/SaveBox2/actions/runs/39265973405/job/118105514197) |
-| **Quality Baseline** | quality-report | **PASS** | 1m53s | [Run 39265973405](https://github.com/LViniciusk/SaveBox2/actions/runs/39265973405/job/118105513648) |
+| **Backend CI** | Linux Coverage | **PASS** | 7m04s | [Run 39273227645](https://github.com/LViniciusk/SaveBox2/actions/runs/39273227645/job/118130728673) |
+| **Backend CI** | Linux GCC | **PASS** | 6m01s | [Run 39273227645](https://github.com/LViniciusk/SaveBox2/actions/runs/39273227645/job/118130728022) |
+| **Backend CI** | Windows MSVC | **PASS** | 6m22s | [Run 39273227645](https://github.com/LViniciusk/SaveBox2/actions/runs/39273227645/job/118130728789) |
+| **Quality Baseline** | e2e | **PASS** | 2m53s | [Run 39273227578](https://github.com/LViniciusk/SaveBox2/actions/runs/39273227578/job/118130729519) |
+| **Quality Baseline** | quality-report | **PASS** | 2m03s | [Run 39273227578](https://github.com/LViniciusk/SaveBox2/actions/runs/39273227578/job/118130729096) |
 
 ---
 
