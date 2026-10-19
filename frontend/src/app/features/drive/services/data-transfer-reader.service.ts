@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import type { FolderUploadSourceFile } from '../upload/upload.models';
+import { FolderUploadSourceFile } from '../upload/upload.models';
 
 export interface DroppedItems {
   files: readonly File[];
@@ -20,14 +20,6 @@ interface DataTransferItemLike {
   webkitGetAsEntry?(): FileSystemEntryLike | null;
 }
 
-interface DropReadState {
-  readonly files: File[];
-  readonly folders: FolderUploadSourceFile[];
-  readonly folderPaths: Set<string>;
-  readonly filePaths: Set<string>;
-  usedEntryApi: boolean;
-}
-
 const MAX_FOLDERS = 1000;
 const MAX_DEPTH = 128;
 
@@ -38,43 +30,39 @@ export class DataTransferReaderService {
       .filter(item => item.kind === 'file');
     if (!items.length) return { files: Array.from(dataTransfer.files ?? []), folders: [] };
 
-    const state: DropReadState = {
-      files: [],
-      folders: [],
-      folderPaths: new Set<string>(),
-      filePaths: new Set<string>(),
-      usedEntryApi: false,
-    };
+    const files: File[] = [];
+    const folders: FolderUploadSourceFile[] = [];
+    const folderPaths = new Set<string>();
+    const filePaths = new Set<string>();
+    let usedEntryApi = false;
+    let unreadableItem = false;
 
-    for (const item of items) await this.readItem(item, state);
-    return this.finalizeRead(dataTransfer, state);
-  }
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry?.() ?? null;
+      if (entry) {
+        usedEntryApi = true;
+        if (entry.isDirectory) {
+          await this.readDirectory(entry, entry.name, folders, folderPaths, filePaths);
+        } else if (entry.isFile) {
+          const file = await this.readFile(entry);
+          files.push(file);
+        }
+        continue;
+      }
 
-  private async readItem(item: DataTransferItemLike, state: DropReadState): Promise<void> {
-    const entry = item.webkitGetAsEntry?.() ?? null;
-    if (!entry) {
       const file = item.getAsFile();
-      if (file) state.files.push(file);
-      return;
+      if (file) files.push(file);
+      else unreadableItem = true;
     }
 
-    state.usedEntryApi = true;
-    if (entry.isDirectory) {
-      await this.readDirectory(entry, entry.name, state.folders, state.folderPaths, state.filePaths);
-      return;
-    }
-
-    if (entry.isFile) state.files.push(await this.readFile(entry));
-  }
-
-  private finalizeRead(dataTransfer: DataTransfer, state: DropReadState): DroppedItems {
-    if (!state.folders.length && dataTransfer.files.length) {
+    if (!usedEntryApi && !files.length && dataTransfer.files.length) {
       return { files: Array.from(dataTransfer.files), folders: [] };
     }
-    if (!state.usedEntryApi && !state.files.length) {
-      throw new Error('Não foi possível ler o item arrastado');
+    if (!usedEntryApi && !files.length && unreadableItem) throw new Error('Não foi possível ler o item arrastado');
+    if (!folders.length && dataTransfer.files?.length) {
+      return { files: Array.from(dataTransfer.files), folders: [] };
     }
-    return { files: state.files, folders: state.folders };
+    return { files, folders };
   }
 
   private async readDirectory(

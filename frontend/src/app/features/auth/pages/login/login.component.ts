@@ -477,6 +477,7 @@ export class LoginComponent implements OnInit {
   protected readonly authService = inject(AuthService);
   private readonly appState = inject(AppStateService);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
 
   readonly cardVisible = signal(false);
 

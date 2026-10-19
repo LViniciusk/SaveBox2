@@ -1,9 +1,7 @@
 import { Injectable } from '@angular/core';
 import _sodium from 'libsodium-wrappers-sumo';
-import {
-  KASUMI_CHUNK_SIZE,
-  KASUMI_MAX_METADATA_SIZE,
-} from './kasumi-format';
+
+const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
 const NONCE_SIZE = 24;
 const MAC_SIZE = 16;
 const KEY_SIZE = 32;
@@ -124,31 +122,31 @@ export class KasumiCryptoService {
     return decoder.decode(plaintext);
   }
 
-  async *encryptFileParts(
-    file: File,
-    key: Uint8Array,
-    baseNonce: Uint8Array,
-    metadata?: string,
-    signal?: AbortSignal,
-  ): AsyncGenerator<Blob> {
-    this.throwIfAborted(signal);
+  /**
+   * Encrypts a File into a Blob using Kasumi XChaCha20-Poly1305 stream format.
+   * @param file The file to encrypt
+   * @param key 32-byte FDK (File Data Key)
+   * @param fixedBaseNonce Optional fixed base nonce
+   * @param metadata Optional metadata string to embed in the Kasumi v2 header
+   */
+  async encryptFile(file: File, key: Uint8Array, fixedBaseNonce?: Uint8Array, metadata?: string): Promise<Blob> {
     await _sodium.ready;
-    this.throwIfAborted(signal);
 
     if (key.length !== KEY_SIZE) {
       throw new Error(`Key must be ${KEY_SIZE} bytes`);
     }
 
+    const baseNonce = fixedBaseNonce || this.generateBaseNonce();
     const fileSize = file.size;
+
+    // Encrypted chunks
+    const encryptedChunks: Blob[] = [];
 
     if (metadata) {
       // Kasumi v2 Header
       const encoder = new TextEncoder();
       const metaBytes = encoder.encode(metadata);
-      if (metaBytes.length > KASUMI_MAX_METADATA_SIZE) {
-        throw new Error('Kasumi metadata is too large');
-      }
-
+      
       const headerBuffer = new ArrayBuffer(NONCE_SIZE + 8 + 4 + 4);
       const headerView = new DataView(headerBuffer);
       const headerUint8 = new Uint8Array(headerBuffer);
@@ -157,11 +155,11 @@ export class KasumiCryptoService {
       headerUint8.set(baseNonce, 0);
       // Original Size (uint64)
       headerView.setBigUint64(NONCE_SIZE, BigInt(fileSize), true);
-
+      
       // Magic 'KAS2'
       const magicBytes = encoder.encode('KAS2');
       headerUint8.set(magicBytes, NONCE_SIZE + 8);
-
+      
       // Meta Size (uint32)
       headerView.setUint32(NONCE_SIZE + 12, metaBytes.length, true);
 
@@ -171,11 +169,11 @@ export class KasumiCryptoService {
         metaBytes, null, null, metaNonce, key
       );
 
-      yield new Blob([
+      encryptedChunks.push(new Blob([
         headerBuffer,
         new Uint8Array(metaEncrypted.mac),
         new Uint8Array(metaEncrypted.ciphertext)
-      ]);
+      ]));
     } else {
       // Kasumi v1 Header
       const headerBuffer = new ArrayBuffer(NONCE_SIZE + 8);
@@ -184,18 +182,16 @@ export class KasumiCryptoService {
 
       headerUint8.set(baseNonce, 0);
       headerView.setBigUint64(NONCE_SIZE, BigInt(fileSize), true);
-
-      yield new Blob([headerBuffer]);
+      
+      encryptedChunks.push(new Blob([headerBuffer]));
     }
 
     let offset = 0;
     let chunkIndex = 0;
 
     while (offset < fileSize) {
-      this.throwIfAborted(signal);
-      const slice = file.slice(offset, offset + KASUMI_CHUNK_SIZE);
+      const slice = file.slice(offset, offset + CHUNK_SIZE);
       const chunkBuffer = await slice.arrayBuffer();
-      this.throwIfAborted(signal);
       const chunkUint8 = new Uint8Array(chunkBuffer);
 
       const chunkNonce = this.deriveChunkNonce(baseNonce, chunkIndex);
@@ -210,57 +206,25 @@ export class KasumiCryptoService {
       );
 
       // Push MAC first (16 bytes), then Ciphertext
-      yield new Blob([new Uint8Array(encrypted.mac), new Uint8Array(encrypted.ciphertext)]);
+      encryptedChunks.push(new Blob([new Uint8Array(encrypted.mac), new Uint8Array(encrypted.ciphertext)]));
 
-      offset += KASUMI_CHUNK_SIZE;
+      offset += CHUNK_SIZE;
       chunkIndex++;
     }
-  }
 
-  async extractBaseNonce(encryptedBlob: Blob): Promise<Uint8Array> {
-    const minimumHeaderSize = NONCE_SIZE + 8;
-    if (encryptedBlob.size < minimumHeaderSize) {
-      throw new Error('Encrypted file is too small');
-    }
-    return new Uint8Array(await encryptedBlob.slice(0, NONCE_SIZE).arrayBuffer());
-  }
-
-  calculateEncryptedSize(plaintextSize: number, metadata?: string): number {
-    if (!Number.isSafeInteger(plaintextSize) || plaintextSize < 0) {
-      throw new Error('Invalid plaintext size');
-    }
-
-    const chunkCount = plaintextSize === 0 ? 0 : Math.ceil(plaintextSize / KASUMI_CHUNK_SIZE);
-    let headerSize = NONCE_SIZE + 8;
-    if (metadata) {
-      const metadataSize = new TextEncoder().encode(metadata).length;
-      if (metadataSize > KASUMI_MAX_METADATA_SIZE) throw new Error('Kasumi metadata is too large');
-      headerSize += 8 + MAC_SIZE + metadataSize;
-    }
-
-    const encryptedSize = headerSize + plaintextSize + chunkCount * MAC_SIZE;
-    if (!Number.isSafeInteger(encryptedSize)) throw new Error('Encrypted size is too large');
-    return encryptedSize;
-  }
-
-  private throwIfAborted(signal?: AbortSignal): void {
-    if (signal?.aborted) throw new DOMException('Operation aborted', 'AbortError');
+    return new Blob(encryptedChunks);
   }
 
   /**
    * Decrypts a Blob previously encrypted with the Kasumi XChaCha20-Poly1305 format.
    * @param encryptedBlob The encrypted blob from the backend
    * @param key 32-byte FDK
-   * @param expectedEncryptedSize Trusted ciphertext size persisted for the file
    */
-  async decryptFile(encryptedBlob: Blob, key: Uint8Array, expectedEncryptedSize: number): Promise<Blob> {
+  async decryptFile(encryptedBlob: Blob, key: Uint8Array): Promise<Blob> {
     await _sodium.ready;
 
     if (key.length !== KEY_SIZE) {
       throw new Error(`Key must be ${KEY_SIZE} bytes`);
-    }
-    if (!Number.isSafeInteger(expectedEncryptedSize) || expectedEncryptedSize < 0 || encryptedBlob.size !== expectedEncryptedSize) {
-      throw new Error('File corrupted or truncated');
     }
 
     if (encryptedBlob.size < NONCE_SIZE + 8) {
@@ -288,34 +252,11 @@ export class KasumiCryptoService {
         const metaSizeSlice = encryptedBlob.slice(initialHeaderSize + 4, initialHeaderSize + 8);
         const metaSizeBuffer = await metaSizeSlice.arrayBuffer();
         const metaSize = new DataView(metaSizeBuffer).getUint32(0, true);
-        if (metaSize > KASUMI_MAX_METADATA_SIZE) {
-          throw new Error('File corrupted or truncated');
-        }
 
         // offset now starts after the metadata chunk (MAC + Ciphertext)
         offset = initialHeaderSize + 8 + MAC_SIZE + metaSize;
-        if (offset > encryptedBlob.size) {
-          throw new Error('File corrupted or truncated');
-        }
-
-        const metaChunk = new Uint8Array(await encryptedBlob.slice(initialHeaderSize + 8, offset).arrayBuffer());
-        const metaNonce = this.deriveChunkNonce(baseNonce, 0xFFFFFFFF);
-        try {
-          _sodium.crypto_aead_xchacha20poly1305_ietf_decrypt_detached(
-            null,
-            metaChunk.subarray(MAC_SIZE),
-            metaChunk.subarray(0, MAC_SIZE),
-            null,
-            metaNonce,
-            key
-          );
-        } catch (e) {
-          throw new Error('Failed to authenticate or decrypt KAS2 metadata');
-        }
       }
     }
-
-    this.assertContainerSize(offset, expectedSize, expectedEncryptedSize);
 
     const decryptedChunks: Blob[] = [];
     let chunkIndex = 0;
@@ -324,14 +265,14 @@ export class KasumiCryptoService {
     // Start reading chunks after the header
     while (offset < encryptedBlob.size) {
       // Each encrypted chunk is MAC (16 bytes) + Ciphertext
-      // The ciphertext is at most KASUMI_CHUNK_SIZE. So the total chunk is at most MAC_SIZE + KASUMI_CHUNK_SIZE.
+      // The ciphertext is at most CHUNK_SIZE. So the total chunk is at most MAC_SIZE + CHUNK_SIZE.
       // But the last chunk could be smaller.
       
       // Calculate how many bytes are left in the encrypted blob
       const remainingBytes = encryptedBlob.size - offset;
       
-      // The expected chunk size (excluding MAC) is either KASUMI_CHUNK_SIZE or the rest of the original file size
-      const expectedPlaintextSize = Math.min(KASUMI_CHUNK_SIZE, expectedSize - totalDecrypted);
+      // The expected chunk size (excluding MAC) is either CHUNK_SIZE or the rest of the original file size
+      const expectedPlaintextSize = Math.min(CHUNK_SIZE, expectedSize - totalDecrypted);
       const expectedEncryptedChunkSize = MAC_SIZE + expectedPlaintextSize;
 
       if (remainingBytes < expectedEncryptedChunkSize) {
@@ -342,8 +283,8 @@ export class KasumiCryptoService {
       const chunkBuffer = await chunkSlice.arrayBuffer();
       const chunkUint8 = new Uint8Array(chunkBuffer);
 
-      const mac = chunkUint8.subarray(0, MAC_SIZE);
-      const ciphertext = chunkUint8.subarray(MAC_SIZE);
+      const mac = chunkUint8.slice(0, MAC_SIZE);
+      const ciphertext = chunkUint8.slice(MAC_SIZE);
 
       const chunkNonce = this.deriveChunkNonce(baseNonce, chunkIndex);
 
@@ -401,10 +342,9 @@ export class KasumiCryptoService {
   /**
    * Extracts metadata from a Kasumi v2 encrypted Blob.
    * Useful when only downloading a partial file (e.g. via Range request).
-   * @param expectedEncryptedSize Trusted full ciphertext size persisted for the file
    * Returns { metadata: string | null, dataOffset: number }
    */
-  async extractMetadata(partialBlob: Blob, key: Uint8Array, expectedEncryptedSize: number): Promise<{ metadata: string | null, dataOffset: number, expectedSize: number }> {
+  async extractMetadata(partialBlob: Blob, key: Uint8Array): Promise<{ metadata: string | null, dataOffset: number, expectedSize: number }> {
     await _sodium.ready;
     if (key.length !== KEY_SIZE) throw new Error('Key must be 32 bytes');
 
@@ -431,9 +371,6 @@ export class KasumiCryptoService {
         const metaSizeSlice = partialBlob.slice(initialHeaderSize + 4, initialHeaderSize + 8);
         const metaSizeBuffer = await metaSizeSlice.arrayBuffer();
         const metaSize = new DataView(metaSizeBuffer).getUint32(0, true);
-        if (metaSize > KASUMI_MAX_METADATA_SIZE) {
-          throw new Error('File corrupted or truncated');
-        }
 
         const expectedTotalHeader = initialHeaderSize + 8 + MAC_SIZE + metaSize;
         if (partialBlob.size < expectedTotalHeader) {
@@ -461,24 +398,6 @@ export class KasumiCryptoService {
       }
     }
 
-    this.assertContainerSize(dataOffset, expectedSize, expectedEncryptedSize);
-
     return { metadata, dataOffset, expectedSize };
-  }
-
-  private assertContainerSize(dataOffset: number, plaintextSize: number, expectedEncryptedSize: number): void {
-    if (
-      !Number.isSafeInteger(dataOffset) || dataOffset < 0 ||
-      !Number.isSafeInteger(plaintextSize) || plaintextSize < 0 ||
-      !Number.isSafeInteger(expectedEncryptedSize) || expectedEncryptedSize < 0
-    ) {
-      throw new Error('File corrupted or truncated');
-    }
-
-    const chunkCount = plaintextSize === 0 ? 0 : Math.ceil(plaintextSize / KASUMI_CHUNK_SIZE);
-    const computedSize = dataOffset + plaintextSize + chunkCount * MAC_SIZE;
-    if (!Number.isSafeInteger(computedSize) || computedSize !== expectedEncryptedSize) {
-      throw new Error('File corrupted or truncated');
-    }
   }
 }

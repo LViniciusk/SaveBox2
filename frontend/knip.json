@@ -1,9 +1,0 @@
-{
-  "$schema": "https://unpkg.com/knip@6/schema.json",
-  "ignoreFiles": [
-    "public/ffmpeg-core.js",
-    "public/ffmpeg/**",
-    "e2e/support/fixtures.ts",
-    "e2e/support/session.ts"
-  ]
-}

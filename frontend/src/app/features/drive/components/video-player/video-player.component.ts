@@ -3,13 +3,11 @@ import { CommonModule } from '@angular/common';
 import { VideoStreamService } from '../../services/video-stream.service';
 import { DriveFile } from '../../state/drive.store';
 import { FileIconComponent } from '../../../../shared/ui/file-icon/file-icon.component';
-import { ShareModalComponent } from '../share-modal/share-modal.component';
-import { getPublicShareAvailability } from '../../policies/public-share-policy';
 
 @Component({
   selector: 'app-video-player',
   standalone: true,
-  imports: [CommonModule, FileIconComponent, ShareModalComponent],
+  imports: [CommonModule, FileIconComponent],
   template: `
     <div #playerBackdrop
          class="player-backdrop" 
@@ -35,15 +33,9 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
             @if (isPublicShare()) {
               <span class="file-size-badge">{{ file().sizeFormatted }}</span>
             } @else {
-              @if (shareAvailability().allowed) {
-                <button class="share-btn" (click)="openShare($event)">
-                  <span class="material-symbols-outlined">group</span> Compartilhar
-                </button>
-              } @else {
-                <button class="share-btn" disabled aria-disabled="true" title="Compartilhamento público indisponível para Google Drive">
-                  <span class="material-symbols-outlined">group_off</span> Compartilhamento indisponível
-                </button>
-              }
+              <button class="share-btn">
+                <span class="material-symbols-outlined">group</span> Compartilhar
+              </button>
             }
           </div>
         </div>
@@ -100,7 +92,7 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
 
         <!-- Error Alert Overlay -->
         @if (streamService.error()) {
-          <div class="error-overlay" (click)="$event.stopPropagation()">
+          <div class="error-overlay">
             <span class="material-symbols-outlined error-icon">error</span>
             <div class="error-text">{{ streamService.error() }}</div>
             <button class="retry-btn" (click)="retryPlayback()">Tentar Novamente</button>
@@ -158,7 +150,7 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
                 <div class="time-display">
                   <span class="current-time">{{ formatTime(currentTime()) }}</span>
                   <span class="time-separator">/</span>
-                  <span class="total-time">{{ formatDuration(duration()) }}</span>
+                  <span class="total-time">{{ formatTime(duration()) }}</span>
                 </div>
               </div>
 
@@ -178,14 +170,8 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
                                 (click)="setSpeed(speed)">
                           {{ speed === 1 ? 'Normal' : speed + 'x' }}
                         </button>
-      }
-
-      @if (isShareOpen() && shareAvailability().allowed) {
-        <div class="player-share-modal" (click)="$event.stopPropagation()">
-          <app-share-modal [file]="file()" (close)="isShareOpen.set(false)" />
-        </div>
-      }
-    </div>
+                      }
+                    </div>
                   }
                   <button class="control-btn" (click)="isSpeedMenuOpen.set(!isSpeedMenuOpen())" title="Configurações / Velocidade">
                     <span class="material-symbols-outlined">settings</span>
@@ -432,10 +418,6 @@ import { getPublicShareAvailability } from '../../policies/public-share-policy';
         color: #f1f5f9;
         z-index: 10;
         font-family: 'Inter', sans-serif;
-      }
-
-      .error-overlay {
-        pointer-events: auto;
       }
 
       .spinner {
@@ -789,8 +771,6 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
   readonly isSpeedMenuOpen = signal(false);
   readonly centerFlashIcon = signal<string | null>(null);
   readonly videoRenderedWidth = signal<number | null>(null);
-  readonly isShareOpen = signal(false);
-  readonly shareAvailability = computed(() => getPublicShareAvailability(this.file()));
 
   private idleTimer: any = null;
   private flashTimeout: any = null;
@@ -872,6 +852,10 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
         this.changeVolume(-0.1);
         break;
     }
+  }
+
+  onVideoPlay() {
+    this.isPlaying.set(true);
   }
 
   @HostListener('document:fullscreenchange')
@@ -1079,10 +1063,6 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
     return `${m}:${sStr}`;
   }
 
-  protected formatDuration(val: number): string {
-    return Number.isFinite(val) && val > 0 ? this.formatTime(val) : '--:--';
-  }
-
   private startStream() {
     if (this.videoElement) {
       this.streamService.initializeStream(
@@ -1098,11 +1078,6 @@ export class VideoPlayerComponent implements OnInit, OnDestroy, AfterViewInit {
 
   protected downloadVideo() {
     this.download.emit();
-  }
-
-  protected openShare(event: Event): void {
-    event.stopPropagation();
-    if (this.shareAvailability().allowed) this.isShareOpen.set(true);
   }
 
   protected onClose() {

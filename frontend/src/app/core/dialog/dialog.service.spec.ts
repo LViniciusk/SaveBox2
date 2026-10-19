@@ -76,15 +76,4 @@ describe('DialogService', () => {
       expect(result).toBeFalse();
     });
   });
-
-  it('A19-LOCK-C01..C02 cancels a plaintext dialog and clears its value immediately', async () => {
-    const pending = service.prompt('Renomear', 'segredo.txt');
-
-    expect((service as any).cancelActive).toBeDefined();
-    (service as any).cancelActive();
-
-    await expectAsync(pending).toBeResolvedTo(null);
-    expect(service.activeDialog()).toBeNull();
-    expect(service.dialogValue()).toBe('');
-  });
 });

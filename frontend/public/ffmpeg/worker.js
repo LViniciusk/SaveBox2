@@ -1,24 +1,32 @@
 /// <reference no-default-lib="true" />
 /// <reference lib="esnext" />
 /// <reference lib="webworker" />
-import { FFMessageType } from "./const.js";
+import { CORE_URL, CORE_VERSION, FFMessageType } from "./const.js";
 import { ERROR_UNKNOWN_MESSAGE_TYPE, ERROR_NOT_LOADED, ERROR_IMPORT_FAILURE, } from "./errors.js";
 let ffmpeg;
-const trustedSameOriginUrl = (value, fallback) => {
+const trustedUrl = (value, fallback) => {
     const url = new URL(value || fallback, self.location.origin);
-    if (url.origin !== self.location.origin) {
+    const fallbackUrl = new URL(fallback, self.location.origin);
+    const sameOrigin = url.origin === self.location.origin;
+    const ffmpegCdn = url.origin === fallbackUrl.origin &&
+        url.hostname === fallbackUrl.hostname &&
+        url.pathname.startsWith(`/@ffmpeg/core@${CORE_VERSION}/dist/`);
+    if (!sameOrigin && !ffmpegCdn) {
         throw new Error("Untrusted FFmpeg URL");
     }
     return url.href;
 };
 const load = async ({ coreURL: _coreURL, wasmURL: _wasmURL, workerURL: _workerURL, }) => {
     const first = !ffmpeg;
-    _coreURL = trustedSameOriginUrl(_coreURL, "/ffmpeg-core.js");
+    _coreURL = trustedUrl(_coreURL, CORE_URL);
     try {
         // when web worker type is `classic`.
         importScripts(_coreURL);
     }
     catch {
+        if (_coreURL === CORE_URL)
+            _coreURL = CORE_URL.replace('/umd/', '/esm/');
+        _coreURL = trustedUrl(_coreURL, CORE_URL);
         // when web worker type is `module`.
         self.createFFmpegCore = (await import(
         /* @vite-ignore */ _coreURL)).default;
@@ -27,8 +35,8 @@ const load = async ({ coreURL: _coreURL, wasmURL: _wasmURL, workerURL: _workerUR
         }
     }
     const coreURL = _coreURL;
-    const wasmURL = trustedSameOriginUrl(_wasmURL, "/ffmpeg-core.wasm");
-    const workerURL = trustedSameOriginUrl(_workerURL, _coreURL.replace(/\.js$/, ".worker.js"));
+    const wasmURL = trustedUrl(_wasmURL, _coreURL.replace(/.js$/g, ".wasm"));
+    const workerURL = trustedUrl(_workerURL, _coreURL.replace(/.js$/g, ".worker.js"));
     ffmpeg = await self.createFFmpegCore({
         // Fix `Overload resolution failed.` when using multi-threaded ffmpeg-core.
         // Encoded wasmURL and workerURL in the URL as a hack to fix locateFile issue.

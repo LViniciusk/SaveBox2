@@ -6,13 +6,11 @@ import { DriveView } from '../../state/drive.types';
 import { DriveDropZoneDirective } from '../../directives/drive-drop-zone.directive';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
 import { ThemeService } from '../../../../core/theme/theme.service';
-import { FilePreviewRequest } from '../../services/file-preview-resolver';
-import { ComputerViewComponent } from '../computer-view/computer-view.component';
 
 @Component({
   selector: 'app-drive-workspace',
   standalone: true,
-  imports: [FileListComponent, TransferPanelComponent, DriveDropZoneDirective, ComputerViewComponent],
+  imports: [FileListComponent, TransferPanelComponent, DriveDropZoneDirective],
   template: `
     <div class="workspace-drop-zone" appDriveDropZone [dropZoneEnabled]="currentView() === 'drive'" [dropZoneLocked]="locked()" (dropStarted)="dropStarted.emit()" (dropped)="externalDrop.emit($event)" (dropError)="dropError.emit($event)">
     <div class="breadcrumb">
@@ -49,7 +47,7 @@ import { ComputerViewComponent } from '../computer-view/computer-view.component'
       }
     </div>
 
-    @if (themeService.theme() === 'default' && (currentView() === 'drive' || currentView() === 'trash' || currentView() === 'computer')) {
+    @if (themeService.theme() === 'default' && (currentView() === 'drive' || currentView() === 'trash')) {
       <div class="view-mode-toggle default-view-mode-toggle">
         <button [class.active]="driveStore.displayMode() === 'list'" (click)="driveStore.setDisplayMode('list')" title="Modo Lista">
           <span class="material-symbols-outlined">view_list</span>
@@ -67,14 +65,8 @@ import { ComputerViewComponent } from '../computer-view/computer-view.component'
       </div>
     }
 
-    @if (currentView() === 'computer') {
-      <app-computer-view
-        [movingFileIds]="movingFileIds()"
-        (previewRequested)="previewRequested.emit($event)"
-        (storageMoveRequested)="storageMoveRequested.emit($event)"
-        (shareRequested)="shareRequested.emit($event)" />
-    } @else if (currentView() === 'trash') {
-      <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" (previewRequested)="previewRequested.emit($event)" />
+    @if (currentView() === 'trash') {
+      <app-file-list [files]="driveStore.currentTrashFolderFiles()" [viewMode]="'trash'" [quota]="driveStore.quota()" (videoSelected)="videoSelected.emit($event)" (imageSelected)="imageSelected.emit($event)" />
     } @else if (currentView() === 'transfers') {
       <app-transfer-panel [currentView]="currentView()" />
     } @else {
@@ -82,12 +74,11 @@ import { ComputerViewComponent } from '../computer-view/computer-view.component'
         [files]="currentView() === 'storage' ? currentStorageFiles() : driveStore.currentFolderFiles()"
         [viewMode]="currentView() === 'storage' ? 'storage' : 'drive'"
         [quota]="driveStore.quota()"
-        [movingFileIds]="movingFileIds()"
         (createFolderRequested)="createFolderRequested.emit()"
         (uploadFileRequested)="uploadFileRequested.emit()"
-        (previewRequested)="previewRequested.emit($event)"
-        (shareRequested)="shareRequested.emit($event)"
-        (storageMoveRequested)="storageMoveRequested.emit($event)" />
+        (videoSelected)="videoSelected.emit($event)"
+        (imageSelected)="imageSelected.emit($event)"
+        (shareRequested)="shareRequested.emit($event)" />
     }
 
     @if (currentView() !== 'transfers') {
@@ -96,18 +87,8 @@ import { ComputerViewComponent } from '../computer-view/computer-view.component'
     </div>
   `,
   styles: [`
-    :host { display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
-    .workspace-drop-zone { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
-    .workspace-drop-zone > app-transfer-panel {
-      display: flex;
-      flex: 1 1 auto;
-      width: 100%;
-      max-width: none;
-      min-width: 0;
-      min-height: 0;
-      box-sizing: border-box;
-      overflow: hidden;
-    }
+    :host { display: flex; flex: 1; flex-direction: column; min-height: 0; width: 100%; }
+    .workspace-drop-zone { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; }
     .workspace-drop-zone.drop-zone-active::after { content: 'Solte para enviar'; position: absolute; inset: 8px; z-index: 40; display: grid; place-items: center; border: 2px dashed var(--accent-color, #1a73e8); border-radius: 12px; background: color-mix(in srgb, var(--accent-color, #1a73e8) 10%, transparent); color: var(--accent-color, #1a73e8); font-size: 18px; font-weight: 500; pointer-events: none; }
     .breadcrumb { display: flex; align-items: center; gap: 10px; padding: 20px 24px 12px; font-size: 18px; font-weight: 400; color: #202124; }
     .breadcrumb-icon { font-size: 22px; color: #5f6368; font-variation-settings: 'FILL' 1; }
@@ -132,6 +113,21 @@ import { ComputerViewComponent } from '../computer-view/computer-view.component'
     :host-context(:root[data-theme='default']) .workspace-drop-zone { background: var(--default-workspace-bg); isolation: isolate; }
     :host-context(:root[data-theme='default']) .workspace-drop-zone.drop-zone-active::after { inset: 0; border-radius: 0; border-color: var(--default-workspace-selected-border); background: color-mix(in srgb, var(--default-workspace-selected) 80%, transparent); color: var(--default-workspace-text); }
     :host-context(:root[data-theme='default']) .breadcrumb { display: none; }
+    :host-context(:root[data-theme='default']) .breadcrumb { min-height: 38px; gap: 6px; padding: 5px 12px; border-bottom: 1px solid var(--default-workspace-border); color: var(--default-workspace-text); font-size: 13px; }
+    :host-context(:root[data-theme='default']) .breadcrumb-icon { color: var(--default-folder); font-size: 18px; }
+    :host-context(:root[data-theme='default']) .breadcrumb-text,
+    :host-context(:root[data-theme='default']) .breadcrumb-path,
+    :host-context(:root[data-theme='default']) .breadcrumb-link { font: 13px 'Segoe UI', sans-serif; }
+    :host-context(:root[data-theme='default']) .breadcrumb-link { color: var(--default-workspace-muted); padding: 2px 4px; }
+    :host-context(:root[data-theme='default']) .breadcrumb-link:hover:not(:disabled) { color: var(--default-workspace-text); background: var(--default-workspace-hover); text-decoration: none; }
+    :host-context(:root[data-theme='default']) .breadcrumb-link:disabled { color: var(--default-workspace-text); }
+    :host-context(:root[data-theme='default']) .breadcrumb-separator { color: var(--default-workspace-muted); }
+    :host-context(:root[data-theme='default']) .view-mode-toggle { border-color: var(--default-context-border); border-radius: var(--default-workspace-radius); }
+    :host-context(:root[data-theme='default']) .view-mode-toggle button { min-width: 34px; padding: 3px 7px; color: var(--default-workspace-muted); }
+    :host-context(:root[data-theme='default']) .view-mode-toggle button:first-child { border-color: var(--default-context-border); }
+    :host-context(:root[data-theme='default']) .view-mode-toggle button:hover { background: var(--default-workspace-hover); color: var(--default-workspace-text); }
+    :host-context(:root[data-theme='default']) .view-mode-toggle button.active,
+    :host-context(:root[data-theme='default']) .view-mode-toggle button.active:hover { background: var(--default-workspace-selected); color: var(--default-workspace-text); }
     :host-context(:root[data-theme='default']) .trash-banner { margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--default-workspace-border); border-radius: 0; background: var(--default-workspace-surface-alt); }
     :host-context(:root[data-theme='default']) .trash-banner-text { color: var(--default-workspace-muted); font-family: inherit; }
     :host-context(:root[data-theme='default']) .empty-trash-btn { border-radius: var(--default-workspace-radius); background: transparent; color: #8fc8f4; font-family: inherit; }
@@ -141,14 +137,13 @@ import { ComputerViewComponent } from '../computer-view/computer-view.component'
 export class DriveWorkspaceComponent {
   readonly currentView = input.required<DriveView>();
   readonly locked = input(false);
-  readonly movingFileIds = input<ReadonlySet<number>>(new Set<number>());
   readonly driveStore = inject(DriveStore);
   readonly themeService = inject(ThemeService);
   readonly createFolderRequested = output<void>();
   readonly uploadFileRequested = output<void>();
-  readonly previewRequested = output<FilePreviewRequest>();
+  readonly videoSelected = output<DriveFile>();
+  readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
   readonly shareRequested = output<DriveFile>();
-  readonly storageMoveRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
   readonly externalDrop = output<DroppedItems>();
   readonly dropStarted = output<void>();

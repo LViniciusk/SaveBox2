@@ -7,9 +7,6 @@ bool DatabaseMigration::run(DatabasePool& pool) {
         auto conn_wrapper = pool.acquire_connection();
         pqxx::work w(*conn_wrapper);
 
-        // Development policy: structural schema changes require a fresh database.
-        // This function defines the canonical schema and intentionally has no legacy upgrades.
-
         // TABELA DE USUÁRIOS
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS users (
@@ -53,7 +50,8 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 encrypted_name TEXT NOT NULL,
                 name_hash VARCHAR(128) NOT NULL,
                 deleted_at TIMESTAMP NULL,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT unique_folder_name UNIQUE (user_id, parent_id, name_hash)
             );
         )");
 
@@ -76,23 +74,11 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 provider VARCHAR(20) NOT NULL DEFAULT 'google_drive',
                 account_email VARCHAR(255) NULL,
-                account_picture TEXT NULL,
+                account_picture VARCHAR(255) NULL,
                 refresh_token TEXT NOT NULL,
                 root_folder_id VARCHAR(255) NULL,
-                is_unlinking BOOLEAN NOT NULL DEFAULT FALSE,
+                is_unlinking BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-        )");
-
-        // CLAIM DURÁVEL DE COORDENAÇÃO DO VÍNCULO GOOGLE (SEM CREDENCIAIS)
-        w.exec(R"(
-            CREATE TABLE IF NOT EXISTS google_link_claims (
-                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                account_email VARCHAR(255) NOT NULL,
-                claim_id VARCHAR(36) NOT NULL,
-                expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (user_id, account_email)
             );
         )");
 
@@ -108,14 +94,9 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 physical_path TEXT UNIQUE,
                 size_bytes BIGINT NOT NULL DEFAULT 0,
                 total_chunks INTEGER NOT NULL DEFAULT 1,
-                uploaded_chunks_count INTEGER NOT NULL DEFAULT 0,
-                CONSTRAINT chk_files_uploaded_chunks_count CHECK (
-                    uploaded_chunks_count >= 0 AND uploaded_chunks_count <= total_chunks
-                ),
                 is_upload_complete BOOLEAN NOT NULL DEFAULT FALSE,
                 is_hidden BOOLEAN NOT NULL DEFAULT FALSE,
-                is_external_cleanup_pending BOOLEAN NOT NULL DEFAULT FALSE,
-                storage_provider VARCHAR(20) NOT NULL DEFAULT 'local' CHECK (storage_provider IN ('local', 'google_drive')),
+                storage_provider VARCHAR(20) DEFAULT 'local',
                 external_file_id VARCHAR(255) NULL,
                 external_storage_id BIGINT REFERENCES user_external_storages(id) ON DELETE CASCADE,
                 proxy_external_file_id VARCHAR(255) NULL,
@@ -123,18 +104,8 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 proxy_size_bytes BIGINT NULL,
                 proxy_encrypted_fdk TEXT NULL,
                 deleted_at TIMESTAMP NULL,
-                CONSTRAINT chk_files_external_cleanup_pending CHECK (
-                    NOT is_external_cleanup_pending
-                    OR (
-                        storage_provider = 'google_drive'
-                        AND is_upload_complete = FALSE
-                        AND deleted_at IS NOT NULL
-                        AND external_file_id IS NULL
-                        AND external_storage_id IS NOT NULL
-                        AND folder_id IS NULL
-                    )
-                ),
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT unique_file_name UNIQUE (user_id, folder_id, name_hash)
             );
         )");
 
@@ -142,12 +113,12 @@ bool DatabaseMigration::run(DatabasePool& pool) {
         w.exec(R"(
             CREATE TABLE IF NOT EXISTS shared_links (
                 id SERIAL PRIMARY KEY,
-                file_id BIGINT UNIQUE NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+                file_id BIGINT UNIQUE REFERENCES files(id) ON DELETE CASCADE,
                 share_uuid VARCHAR(7) UNIQUE NOT NULL,
-                encrypted_name_fdk TEXT NOT NULL CHECK (encrypted_name_fdk <> ''),
-                hourly_changes INT NOT NULL DEFAULT 1,
-                last_changed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                encrypted_name_fdk TEXT DEFAULT '',
+                hourly_changes INT DEFAULT 1,
+                last_changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         )");
 
@@ -159,57 +130,6 @@ bool DatabaseMigration::run(DatabasePool& pool) {
                 chunk_index INTEGER NOT NULL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(file_id, chunk_index)
-            );
-        )");
-
-        w.exec(R"(
-            CREATE TABLE IF NOT EXISTS storage_move_jobs (
-                id BIGSERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                file_id BIGINT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                status VARCHAR(24) NOT NULL DEFAULT 'prepared' CHECK (status IN (
-                    'prepared', 'transferring', 'paused', 'target_uploaded', 'committing',
-                    'cleanup_pending', 'completed', 'cancelled', 'failed'
-                )),
-                source_provider VARCHAR(20) NOT NULL CHECK (source_provider IN ('local', 'google_drive')),
-                source_external_storage_id BIGINT REFERENCES user_external_storages(id),
-                target_provider VARCHAR(20) NOT NULL CHECK (target_provider IN ('local', 'google_drive')),
-                target_external_storage_id BIGINT REFERENCES user_external_storages(id),
-                total_bytes BIGINT NOT NULL CHECK (total_bytes >= 0),
-                transferred_bytes BIGINT NOT NULL DEFAULT 0 CHECK (transferred_bytes >= 0),
-                reserved_bytes BIGINT NOT NULL DEFAULT 0 CHECK (reserved_bytes >= 0),
-                error_code VARCHAR(64),
-                error_detail VARCHAR(255),
-                is_retryable BOOLEAN NOT NULL DEFAULT FALSE,
-                failure_stage VARCHAR(24) CHECK (failure_stage IS NULL OR failure_stage IN (
-                    'prepare', 'source_metadata', 'source_read', 'target_session',
-                    'target_write', 'target_ack', 'commit', 'cleanup'
-                )),
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                completed_at TIMESTAMP WITH TIME ZONE
-            );
-        )");
-        w.exec(R"(
-            CREATE TABLE IF NOT EXISTS storage_move_items (
-                id BIGSERIAL PRIMARY KEY,
-                move_job_id BIGINT NOT NULL REFERENCES storage_move_jobs(id) ON DELETE CASCADE,
-                file_id BIGINT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-                role VARCHAR(16) NOT NULL CHECK (role IN ('original', 'proxy')),
-                source_external_file_id VARCHAR(255),
-                target_external_file_id VARCHAR(255),
-                total_bytes BIGINT NOT NULL CHECK (total_bytes >= 0),
-                transferred_bytes BIGINT NOT NULL DEFAULT 0 CHECK (transferred_bytes >= 0),
-                status VARCHAR(24) NOT NULL DEFAULT 'prepared' CHECK (status IN ('prepared', 'transferring', 'target_uploaded', 'completed', 'cancelled', 'failed')),
-                UNIQUE(move_job_id, role)
-            );
-        )");
-        w.exec(R"(
-            CREATE TABLE IF NOT EXISTS storage_move_chunks (
-                move_item_id BIGINT NOT NULL REFERENCES storage_move_items(id) ON DELETE CASCADE,
-                chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
-                size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
-                PRIMARY KEY(move_item_id, chunk_index)
             );
         )");
 
@@ -227,37 +147,7 @@ bool DatabaseMigration::run(DatabasePool& pool) {
             CREATE TABLE IF NOT EXISTS pending_external_deletions (
                 id SERIAL PRIMARY KEY,
                 external_file_id VARCHAR(255) NOT NULL,
-                external_storage_id BIGINT NOT NULL,
-                move_job_id BIGINT REFERENCES storage_move_jobs(id) ON DELETE CASCADE,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                next_retry_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                last_error VARCHAR(255),
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(external_file_id, external_storage_id)
-            );
-        )");
-
-        w.exec(R"(
-            CREATE TABLE IF NOT EXISTS pending_local_deletions (
-                id BIGSERIAL PRIMARY KEY,
-                move_job_id BIGINT NOT NULL REFERENCES storage_move_jobs(id) ON DELETE CASCADE,
-                attempts INTEGER NOT NULL DEFAULT 0,
-                next_retry_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                last_error VARCHAR(255),
-                UNIQUE(move_job_id)
-            );
-        )");
-
-        // Targets Google podem ser materializados depois de o browser perder a resposta final.
-        w.exec(R"(
-            CREATE TABLE IF NOT EXISTS pending_storage_move_reconciliations (
-                move_job_id BIGINT PRIMARY KEY REFERENCES storage_move_jobs(id) ON DELETE CASCADE,
-                external_storage_id BIGINT NOT NULL REFERENCES user_external_storages(id) ON DELETE CASCADE,
-                attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-                next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-                last_error VARCHAR(255),
-                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+                external_storage_id BIGINT NOT NULL
             );
         )");
 
@@ -272,13 +162,6 @@ bool DatabaseMigration::run(DatabasePool& pool) {
         // ÍNDICES DE PERFORMANCE
         w.exec("CREATE INDEX IF NOT EXISTS idx_folders_user_parent ON folders(user_id, parent_id);");
         w.exec("CREATE INDEX IF NOT EXISTS idx_files_folder ON files(folder_id);");
-        w.exec("CREATE INDEX IF NOT EXISTS idx_files_storage_projection ON files(user_id, storage_provider, external_storage_id, folder_id, id) WHERE deleted_at IS NULL AND is_upload_complete = TRUE AND is_hidden = FALSE;");
-        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_external_storage_one_active_account ON user_external_storages(user_id, provider, account_email) WHERE is_unlinking = FALSE AND account_email IS NOT NULL;");
-        w.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_move_one_active_file ON storage_move_jobs(file_id) WHERE status IN ('prepared', 'transferring', 'paused', 'target_uploaded', 'committing', 'cleanup_pending');");
-        w.exec("CREATE INDEX IF NOT EXISTS idx_storage_move_active_user ON storage_move_jobs(user_id, updated_at) WHERE status IN ('prepared', 'transferring', 'paused', 'target_uploaded', 'committing', 'cleanup_pending');");
-        w.exec("CREATE INDEX IF NOT EXISTS idx_storage_move_target_account ON storage_move_jobs(target_external_storage_id, status);");
-        w.exec("CREATE INDEX IF NOT EXISTS idx_storage_move_reconcile_due ON pending_storage_move_reconciliations(external_storage_id, next_attempt_at);");
-
         w.commit();
         return true;
     } catch (const std::exception& e) {

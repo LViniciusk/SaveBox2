@@ -22,13 +22,6 @@ export class DialogService {
 
   readonly dialogValue = signal('');
 
-  cancelActive(): void {
-    const dialog = this.activeDialog();
-    this.activeDialog.set(null);
-    this.dialogValue.set('');
-    dialog?.resolve(false);
-  }
-
   prompt(title: string, defaultValue = '', placeholder = '', confirmText = 'OK'): Promise<string | null> {
     this.dialogValue.set(defaultValue);
     return new Promise((resolve) => {

@@ -56,25 +56,16 @@ describe('GDriveSidebarComponent', () => {
     expect(component.isNewMenuOpen()).toBeFalse();
   });
 
-  it('emits real view changes and omits removed placeholder navigation', () => {
+  it('emits real view changes and keeps placeholder navigation inert', () => {
     const changed = jasmine.createSpy('changed');
     component.viewChange.subscribe(changed);
     fixture.detectChanges();
 
     (fixture.nativeElement.querySelector('#nav-trash') as HTMLButtonElement).click();
+    (fixture.nativeElement.querySelector('.nav-item:nth-of-type(2)') as HTMLButtonElement).click();
+
     expect(changed).toHaveBeenCalledWith('trash');
     expect(changed).toHaveBeenCalledTimes(1);
-    expect(fixture.nativeElement.querySelector('#nav-shared')).toBeNull();
-    expect(fixture.nativeElement.querySelector('#nav-recent')).toBeNull();
-
-    for (const [id, view] of [['nav-my-vault', 'drive'], ['nav-trash', 'trash']] as const) {
-      (fixture.nativeElement.querySelector(`#${id}`) as HTMLButtonElement).click();
-      expect(changed).toHaveBeenCalledWith(view);
-    }
-    (fixture.nativeElement.querySelectorAll('.nav-item')[2] as HTMLButtonElement).click();
-    expect(changed).toHaveBeenCalledWith('transfers');
-    (fixture.nativeElement.querySelectorAll('.nav-item')[3] as HTMLButtonElement).click();
-    expect(changed).toHaveBeenCalledWith('storage');
   });
 
   it('disables New while locked and shows Google Drive quota when available', () => {

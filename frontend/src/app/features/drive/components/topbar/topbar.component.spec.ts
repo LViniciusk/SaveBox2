@@ -3,7 +3,7 @@ import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { TopbarComponent } from './topbar.component';
 import { AppStateService } from '../../../../core/state/app-state.service';
 import { AuthService } from '../../../../core/auth/auth.service';
-import { CryptoService, SecurityPhraseChangeError } from '../../../../core/crypto/crypto.service';
+import { CryptoService } from '../../../../core/crypto/crypto.service';
 import { DialogService } from '../../../../core/dialog/dialog.service';
 import { DriveStore } from '../../state/drive.store';
 import { ThemeService } from '../../../../core/theme/theme.service';
@@ -12,7 +12,6 @@ import { THEME_STORAGE_KEY } from '../../../../core/theme/theme.types';
 describe('TopbarComponent theme selector', () => {
   let fixture: ComponentFixture<TopbarComponent>;
   let themeService: ThemeService;
-  let anchorClickSpy: jasmine.Spy;
   const appState = {
     isLocked: signal(false),
     user: signal({ email: 'user@example.com', name: 'Usuário', picture: '' }),
@@ -67,15 +66,11 @@ describe('TopbarComponent theme selector', () => {
 
     fixture = TestBed.createComponent(TopbarComponent);
     themeService = TestBed.inject(ThemeService);
-    anchorClickSpy = spyOn(HTMLAnchorElement.prototype, 'click').and.stub();
     fixture.componentInstance.openSettings();
     fixture.detectChanges();
   });
 
   afterEach(() => {
-    cryptoService.changeSecurityPhrase.calls.reset();
-    cryptoService.changeSecurityPhrase.and.resolveTo();
-    driveStore.linkedAccounts.set([]);
     localStorage.removeItem(THEME_STORAGE_KEY);
     delete document.documentElement.dataset['theme'];
   });
@@ -171,134 +166,22 @@ describe('TopbarComponent theme selector', () => {
     expect(component.changePhraseSuccess()).toContain('alterada com sucesso');
   });
 
-  it('blocks double submit and re-enables the flow after completion', async () => {
-    const component = fixture.componentInstance;
-    cryptoService.changeSecurityPhrase.calls.reset();
-    component.oldPhrase.set('old phrase');
-    component.newPhrase.set('new phrase');
-    component.confirmPhrase.set('new phrase');
-    let release!: () => void;
-    const pending = new Promise<void>(resolve => release = resolve);
-    cryptoService.changeSecurityPhrase.and.returnValue(pending);
-
-    const first = component.changeSecurityPhrase();
-    const second = component.changeSecurityPhrase();
-    expect(cryptoService.changeSecurityPhrase).toHaveBeenCalledOnceWith('old phrase', 'new phrase');
-    expect(component.isChangingPhrase()).toBeTrue();
-
-    release();
-    await Promise.all([first, second]);
-    expect(component.isChangingPhrase()).toBeFalse();
-  });
-
-  it('reports backend failure without claiming success', async () => {
-    const component = fixture.componentInstance;
-    cryptoService.changeSecurityPhrase.calls.reset();
-    component.oldPhrase.set('old phrase');
-    component.newPhrase.set('new phrase');
-    component.confirmPhrase.set('new phrase');
-    cryptoService.changeSecurityPhrase.and.rejectWith(new SecurityPhraseChangeError('SERVER_UNAVAILABLE'));
-
-    await component.changeSecurityPhrase();
-
-    expect(cryptoService.changeSecurityPhrase).toHaveBeenCalledOnceWith('old phrase', 'new phrase');
-    expect(component.changePhraseSuccess()).toBe('');
-    expect(component.changePhraseError()).toContain('temporariamente indisponível');
-    expect(component.isChangingPhrase()).toBeFalse();
-  });
-
-  it('keeps phrase success and warns when the new recovery download fails', async () => {
-    const component = fixture.componentInstance;
-    cryptoService.changeSecurityPhrase.calls.reset();
-    cryptoService.changeSecurityPhrase.and.resolveTo();
-    component.oldPhrase.set('old phrase');
-    component.newPhrase.set('new phrase');
-    component.confirmPhrase.set('new phrase');
-    anchorClickSpy.and.throwError('download blocked');
-
-    await component.changeSecurityPhrase();
-
-    expect(component.changePhraseSuccess()).toContain('arquivo de recuperação anterior');
-    expect(component.changePhraseWarning()).toContain('novo arquivo de recuperação');
-    expect(component.changePhraseWarning()).toContain('frase antiga');
-    expect(component.changePhraseError()).toBe('');
-  });
-
   it('keeps the existing topbar actions wired', () => {
     const component = fixture.componentInstance;
     const unlock = jasmine.createSpy('unlock');
-    const lock = jasmine.createSpy('lock');
     component.unlockRequested.subscribe(unlock);
-    component.lockRequested.subscribe(lock);
 
     expect(component.getAccountName('maria@example.com')).toBe('Maria');
     expect(component.getBubbleColorClass('maria@example.com')).toContain('bubble-');
     component.onUnlockClick();
-    (fixture.nativeElement.querySelector('.lock-btn') as HTMLButtonElement).click();
+    component.lockVault();
     component.onDocumentClick({ target: document.createElement('button') } as unknown as MouseEvent);
     component.logout();
 
     expect(unlock).toHaveBeenCalledTimes(1);
-    expect(lock).toHaveBeenCalledTimes(1);
-    expect(cryptoService.lockVault).not.toHaveBeenCalled();
-    expect(appState.lock).not.toHaveBeenCalled();
+    expect(cryptoService.lockVault).toHaveBeenCalled();
+    expect(appState.lock).toHaveBeenCalled();
     expect(authService.logout).toHaveBeenCalled();
-  });
-
-  it('A19-LOCK-001 emits lock intent without owning Vault teardown', () => {
-    const component = fixture.componentInstance as any;
-    const lock = jasmine.createSpy('lock');
-    cryptoService.lockVault.calls.reset();
-    appState.lock.calls.reset();
-
-    expect(component.lockRequested).toBeDefined();
-    component.lockRequested.subscribe(lock);
-    (fixture.nativeElement.querySelector('.lock-btn') as HTMLButtonElement).click();
-
-    expect(lock).toHaveBeenCalledTimes(1);
-    expect(cryptoService.lockVault).not.toHaveBeenCalled();
-    expect(appState.lock).not.toHaveBeenCalled();
-  });
-
-  it('A19-LOCK-C07 clears security phrase fields before emitting lock intent', () => {
-    const component = fixture.componentInstance as any;
-    component.oldPhrase.set('old secret');
-    component.newPhrase.set('new secret');
-    component.confirmPhrase.set('new secret');
-    component.changePhraseError.set('error');
-    component.changePhraseSuccess.set('success');
-    component.changePhraseWarning.set('warning');
-    expect(component.lockRequested).toBeDefined();
-
-    (fixture.nativeElement.querySelector('.lock-btn') as HTMLButtonElement).click();
-
-    expect(component.oldPhrase()).toBe('');
-    expect(component.newPhrase()).toBe('');
-    expect(component.confirmPhrase()).toBe('');
-    expect(component.changePhraseError()).toBe('');
-    expect(component.changePhraseSuccess()).toBe('');
-    expect(component.changePhraseWarning()).toBe('');
-  });
-
-  it('uses a fallback when a linked account picture is missing or broken', () => {
-    driveStore.linkedAccounts.set([
-      { id: 1, accountEmail: 'alice@example.com', accountPicture: 'https://example.test/alice.png' },
-      { id: 2, accountEmail: 'bob@example.com' },
-      { id: 3, accountEmail: 'carol@example.com', accountPicture: 'https://example.test/carol.png' },
-    ] as any);
-    const component = fixture.componentInstance;
-    component.isProfileMenuOpen.set(true);
-    component.isAccountsExpanded.set(true);
-    fixture.detectChanges();
-
-    expect(fixture.nativeElement.querySelectorAll('.profile-card-subrow img').length).toBe(2);
-    const broken = fixture.nativeElement.querySelector('img[src="https://example.test/carol.png"]') as HTMLImageElement;
-    broken.dispatchEvent(new Event('error'));
-    fixture.detectChanges();
-
-    expect(fixture.nativeElement.querySelector('img[src="https://example.test/carol.png"]')).toBeNull();
-    expect(fixture.nativeElement.querySelector('.profile-card-subrow .bubble-blue, .profile-card-subrow .bubble-purple, .profile-card-subrow .bubble-teal')).not.toBeNull();
-    expect(fixture.nativeElement.querySelector('img[src="https://example.test/alice.png"]')).not.toBeNull();
   });
 
   it('opens the existing settings modal from the compact entry', () => {

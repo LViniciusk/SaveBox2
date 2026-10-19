@@ -46,7 +46,7 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     std::string valid_token = auth.generate_token(static_cast<uint64_t>(fake_user_id));
     std::string other_token = auth.generate_token(static_cast<uint64_t>(other_user_id));
 
-    auto create_test_folder = [&](const std::string& token, int parent_id = -1) -> int {
+    auto create_test_folder = [&](int user_id, const std::string& token, int parent_id = -1) -> int {
         crow::request req;
         req.add_header("Authorization", "Bearer " + token);
         std::string unique_hash = "hash_x_" + std::to_string(rand());
@@ -64,7 +64,7 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     };
 
     SECTION("1. Basic Soft Delete (Files & Folders)") {
-        int folder_id = create_test_folder(valid_token);
+        int folder_id = create_test_folder(fake_user_id, valid_token);
         REQUIRE(folder_id != -1);
 
         crow::request trash_req;
@@ -81,7 +81,7 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     }
 
     SECTION("2. State Isolation (Trash Security)") {
-        int folder_id = create_test_folder(valid_token);
+        int folder_id = create_test_folder(fake_user_id, valid_token);
         
         crow::request trash_req;
         trash_req.add_header("Authorization", "Bearer " + valid_token);
@@ -97,7 +97,7 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     }
 
     SECTION("3. Restoration (Restore)") {
-        int folder_id = create_test_folder(valid_token);
+        int folder_id = create_test_folder(fake_user_id, valid_token);
         
         crow::request trash_req;
         trash_req.add_header("Authorization", "Bearer " + valid_token);
@@ -116,8 +116,8 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     }
 
     SECTION("4. Cascaded Soft Delete") {
-        int parent_id = create_test_folder(valid_token);
-        create_test_folder(valid_token, parent_id);
+        int parent_id = create_test_folder(fake_user_id, valid_token);
+        int child_id = create_test_folder(fake_user_id, valid_token, parent_id);
 
         crow::request trash_req;
         trash_req.add_header("Authorization", "Bearer " + valid_token);
@@ -132,7 +132,7 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     }
 
     SECTION("5. Hard Delete (Empty Trash)") {
-        int folder_id = create_test_folder(valid_token);
+        int folder_id = create_test_folder(fake_user_id, valid_token);
         
         crow::request trash_req;
         trash_req.add_header("Authorization", "Bearer " + valid_token);
@@ -152,7 +152,7 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     }
 
     SECTION("6. Security and IDOR in Trash") {
-        int folder_id = create_test_folder(valid_token);
+        int folder_id = create_test_folder(fake_user_id, valid_token);
         
 
         crow::request bad_trash_req;
@@ -217,7 +217,7 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     }
 
     SECTION("8. Restore Limbo Prevention - Ficheiro cuja pasta-mãe foi apagada volta à raiz") {
-        int folder_id = create_test_folder(valid_token);
+        int folder_id = create_test_folder(fake_user_id, valid_token);
         REQUIRE(folder_id != -1);
 
         int file_id = 0;
@@ -260,7 +260,7 @@ TEST_CASE("API de Lixeira (Soft Delete)", "[api][trash]") {
     }
 
     SECTION("9. IDOR e JWT Signature Tampering") {
-        int folder_id = create_test_folder(valid_token);
+        int folder_id = create_test_folder(fake_user_id, valid_token);
 
         std::string tampered_token = valid_token;
         size_t dot_pos = tampered_token.find('.');

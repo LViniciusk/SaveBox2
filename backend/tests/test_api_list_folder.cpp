@@ -25,6 +25,7 @@ TEST_CASE("API de Listagem de Diretórios", "[api][list_folder]") {
     int user_b_id = 0;
     int folder_1_id = 0;
     int folder_2_id = 0;
+    int folder_3_id = 0;
     int file_complete_id = 0;
     int file_ghost_id = 0;
 
@@ -63,6 +64,7 @@ TEST_CASE("API de Listagem de Diretórios", "[api][list_folder]") {
             "VALUES ($1, 'enc_folder_3', 'hash_folder_3') RETURNING id",
             pqxx::params{user_b_id}
         );
+        folder_3_id = f3[0][0].as<int>();
 
         auto file1 = txn.exec(
             "INSERT INTO files (user_id, folder_id, encrypted_name, name_hash, encrypted_fdk, size_bytes, total_chunks, is_upload_complete) "

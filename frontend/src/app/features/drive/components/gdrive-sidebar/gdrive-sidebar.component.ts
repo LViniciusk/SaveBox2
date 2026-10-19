@@ -2,7 +2,6 @@ import { Component, HostListener, input, output, signal } from '@angular/core';
 import { QuotaState } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
 import { PinnedFoldersSectionComponent } from '../pinned-folders-section/pinned-folders-section.component';
-import { formatBytes } from '../../../../shared/utils/format-bytes';
 
 @Component({
   selector: 'app-gdrive-sidebar',
@@ -39,6 +38,14 @@ import { formatBytes } from '../../../../shared/utils/format-bytes';
         <button class="nav-item" [class.active]="currentView() === 'drive'" (click)="changeView('drive')" id="nav-my-vault">
           <span class="material-symbols-outlined">folder</span>
           Meu Drive
+        </button>
+        <button class="nav-item" id="nav-shared">
+          <span class="material-symbols-outlined">group</span>
+          Compartilhados
+        </button>
+        <button class="nav-item" id="nav-recent">
+          <span class="material-symbols-outlined">schedule</span>
+          Recentes
         </button>
         <button class="nav-item" [class.active]="currentView() === 'trash'" (click)="changeView('trash')" id="nav-trash">
           <span class="material-symbols-outlined">delete</span>
@@ -109,7 +116,6 @@ import { formatBytes } from '../../../../shared/utils/format-bytes';
   `],
 })
 export class GDriveSidebarComponent {
-  readonly formatSize = formatBytes;
   readonly currentView = input.required<DriveView>();
   readonly currentFolderId = input<number | null>(null);
   readonly locked = input(false);
@@ -171,4 +177,10 @@ export class GDriveSidebarComponent {
     if (!target.closest('.new-dropdown-container')) this.isNewMenuOpen.set(false);
   }
 
+  private formatSize(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const index = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${parseFloat((bytes / Math.pow(1024, index)).toFixed(1))} ${sizes[index]}`;
+  }
 }

@@ -2,7 +2,6 @@
 # Ignora a pasta build inteira (onde ficam os .obj, .exe e arquivos do CMake)
 backend/include/crow_all.h
 nanika_storage/
-backend/vcpkg_installed/
 build/
 build-*/
 bin/
@@ -67,18 +66,6 @@ coverage/
 *.gcov
 lcov.info
 coverage.xml
-
-# Quality tooling outputs
-.quality/
-docs/quality-baseline.json
-docs/quality-baseline.md
-docs/storage-moves.md
-frontend/playwright-report/
-frontend/test-results/
-frontend/reports/stryker/
-frontend/reports/mutation/
-frontend/.stryker-tmp/
-__pycache__/
 
 
 # repomix

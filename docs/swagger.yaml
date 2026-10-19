@@ -23,9 +23,6 @@ tags:
   - name: Compartilhamento
   - name: Lixeira
   - name: Google Drive
-    description: Provedor privado. Operações autenticadas são suportadas, mas compartilhamento público não é oferecido e o backend não atua como proxy de mídia. Arquivos armazenados no Google Drive não podem criar links públicos Nanika.
-  - name: Armazenamento
-    description: Projeção lógica dos provedores e movimentações físicas de arquivos criptografados.
 
 components:
   securitySchemes:
@@ -39,8 +36,6 @@ components:
       type: object
       properties:
         error:
-          type: string
-        error_code:
           type: string
       required: [error]
 
@@ -80,22 +75,6 @@ components:
         message:
           type: string
         token:
-          type: string
-
-    VaultVerificationRequest:
-      type: object
-      required: [vault_verification]
-      properties:
-        vault_verification:
-          type: string
-          maxLength: 16384
-          description: Ciphertext de verificação; nunca contém a frase ou a Vault Key em claro.
-
-    VaultVerificationResponse:
-      type: object
-      required: [vault_verification]
-      properties:
-        vault_verification:
           type: string
 
     GoogleLoginRequest:
@@ -160,38 +139,19 @@ components:
           type: integer
         storage_provider:
           type: string
-    BatchInitUploadItemRequest:
-      allOf:
-        - $ref: '#/components/schemas/InitUploadRequest'
-        - type: object
-          required: [client_ref]
-          properties:
-            client_ref:
-              type: string
-              minLength: 1
-              maxLength: 128
-              description: Identificador opaco transitório usado apenas para correlacionar o item dentro da requisição em lote.
-
     BatchInitUploadRequest:
       type: object
       required: [files]
       properties:
         files:
           type: array
-          minItems: 1
           items:
-            $ref: '#/components/schemas/BatchInitUploadItemRequest'
+            $ref: '#/components/schemas/InitUploadRequest'
           maxItems: 100
 
     BatchInitUploadItemResponse:
       type: object
-      required: [client_ref, file_id, name_hash, storage_provider]
       properties:
-        client_ref:
-          type: string
-          minLength: 1
-          maxLength: 128
-          description: Mesmo identificador opaco recebido no item correspondente da requisição.
         file_id:
           type: integer
         name_hash:
@@ -199,6 +159,12 @@ components:
         storage_provider:
           type: string
           enum: [local, google_drive]
+        root_folder_id:
+          type: string
+          description: Apenas para google_drive
+        access_token:
+          type: string
+          description: Apenas para google_drive
 
     BatchInitUploadResponse:
       type: object
@@ -245,81 +211,6 @@ components:
         share_uuid:
           type: string
           description: codigo de 7 caracteres para acesso público.
-
-    SharedFileMetadata:
-      type: object
-      required: [encrypted_name, size_bytes, storage_provider]
-      properties:
-        encrypted_name:
-          type: string
-          description: Nome protegido pela FDK do compartilhamento.
-        size_bytes:
-          type: integer
-          format: int64
-        storage_provider:
-          type: string
-          enum: [local]
-
-    GoogleDriveSharingUnsupported:
-      type: object
-      required: [error, code]
-      properties:
-        error:
-          type: string
-          example: Compartilhamento publico nao esta disponivel para arquivos armazenados no Google Drive.
-        code:
-          type: string
-          enum: [GOOGLE_DRIVE_SHARING_UNSUPPORTED]
-
-    StorageTarget:
-      type: object
-      required: [key, provider, label, used_bytes, nanika_used_bytes, status]
-      properties:
-        key: { type: string, example: local }
-        provider: { type: string, enum: [local, google_drive] }
-        label: { type: string }
-        external_storage_id: { type: integer, format: int64, nullable: true }
-        account_email: { type: string }
-        account_picture: { type: string, format: uri, nullable: true }
-        used_bytes: { type: integer, format: int64 }
-        max_bytes: { type: integer, format: int64, nullable: true }
-        available_bytes: { type: integer, format: int64, nullable: true }
-        nanika_used_bytes: { type: integer, format: int64 }
-        status: { type: string, enum: [ready, unavailable, unlinking] }
-
-    StorageMoveItem:
-      type: object
-      required: [id, file_id, role, total_bytes, transferred_bytes, status]
-      properties:
-        id: { type: integer, format: int64 }
-        file_id: { type: integer, format: int64 }
-        role: { type: string, enum: [original, proxy] }
-        source_external_file_id: { type: string }
-        target_external_file_id: { type: string }
-        total_bytes: { type: integer, format: int64 }
-        transferred_bytes: { type: integer, format: int64 }
-        status: { type: string, enum: [prepared, transferring, target_uploaded, completed, cancelled, failed] }
-
-    StorageMoveJob:
-      type: object
-      required: [id, file_id, status, source_provider, target_provider, total_bytes, transferred_bytes, is_retryable, items]
-      properties:
-        id: { type: integer, format: int64 }
-        file_id: { type: integer, format: int64 }
-        status: { type: string, enum: [prepared, transferring, paused, target_uploaded, committing, cleanup_pending, completed, cancelled, failed] }
-        source_provider: { type: string, enum: [local, google_drive] }
-        source_external_storage_id: { type: integer, format: int64, nullable: true }
-        target_provider: { type: string, enum: [local, google_drive] }
-        target_external_storage_id: { type: integer, format: int64, nullable: true }
-        total_bytes: { type: integer, format: int64 }
-        transferred_bytes: { type: integer, format: int64 }
-        is_retryable: { type: boolean }
-        failure_stage: { type: string, nullable: true, enum: [prepare, source_metadata, source_read, target_session, target_write, target_ack, commit, cleanup] }
-        error_code: { type: string }
-        error_detail: { type: string }
-        items:
-          type: array
-          items: { $ref: '#/components/schemas/StorageMoveItem' }
 
 paths:
   /api/docs:
@@ -393,12 +284,6 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '429':
           description: Limite de criação de contas por IP
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '503':
-          description: Falha temporária no envio do e-mail; a tentativa de cadastro não foi retida e pode ser repetida
           content:
             application/json:
               schema:
@@ -539,40 +424,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-
-  /api/vault/init:
-    post:
-      tags: [Autenticação]
-      summary: Cria ou atualiza a verificação criptografada do cofre
-      security: [{ bearerAuth: [] }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/VaultVerificationRequest' }
-      responses:
-        '204': { description: Verificação persistida }
-        '400': { description: vault_verification ausente, vazio, inválido ou excedendo o limite }
-        '401': { description: Token ausente ou inválido }
-
-  /api/vault/verification:
-    get:
-      tags: [Autenticação]
-      summary: Obtém a verificação criptografada do cofre
-      security: [{ bearerAuth: [] }]
-      responses:
-        '200':
-          description: Ciphertext de verificação; não contém a frase nem material de chave em claro.
-          headers:
-            Cache-Control:
-              schema: { type: string, example: no-store }
-            Pragma:
-              schema: { type: string, example: no-cache }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/VaultVerificationResponse' }
-        '401': { description: Token ausente ou inválido }
-        '404': { description: Cofre ainda não inicializado }
 
   /users/me/quota:
     get:
@@ -914,13 +765,6 @@ paths:
       responses:
         '201':
           description: Uploads inicializados
-          headers:
-            Cache-Control:
-              description: Presente quando a resposta contém credenciais efêmeras do Google Drive; respostas Local não carregam credenciais.
-              schema: { type: string, example: no-store }
-            Pragma:
-              description: Presente quando a resposta contém credenciais efêmeras do Google Drive.
-              schema: { type: string, example: no-cache }
           content:
             application/json:
               schema:
@@ -931,14 +775,8 @@ paths:
           description: Token ausente ou inválido
         '402':
           description: Quota excedida
-        '507':
-          description: Capacidade insuficiente nas contas Google Drive vinculadas
         '409':
-          description: Arquivo já existe na pasta ou a conta Google foi desvinculada durante a inicialização
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          description: Arquivo já existe na pasta
 
   /files/batch-delete:
     delete:
@@ -984,13 +822,6 @@ paths:
       responses:
         '201':
           description: Upload inicializado
-          headers:
-            Cache-Control:
-              description: Presente quando a resposta contém credenciais efêmeras do Google Drive; respostas Local não carregam credenciais.
-              schema: { type: string, example: no-store }
-            Pragma:
-              description: Presente quando a resposta contém credenciais efêmeras do Google Drive.
-              schema: { type: string, example: no-cache }
           content:
             application/json:
               schema:
@@ -1002,11 +833,7 @@ paths:
         '402':
           description: Quota excedida
         '409':
-          description: Arquivo já existe na pasta ou a conta Google foi desvinculada durante a inicialização
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+          description: Arquivo já existe na pasta
         '500':
           description: Erro interno
 
@@ -1042,7 +869,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChunkUploadStatus'
         '400':
-          description: Chunk inválido, incluindo cabeçalho ou índice inválido e tamanho incompatível com o upload reservado
+          description: Cabeçalho X-Chunk-Index ausente
         '401':
           description: Token ausente ou inválido
         '500':
@@ -1113,61 +940,6 @@ paths:
         '500':
           description: Erro interno
 
-  /files/{fileId}/pending-upload-recovery-prefix:
-    get:
-      tags: [Arquivos]
-      summary: Recupera prefixo limitado de um upload Local pendente
-      description: >
-        Endpoint de recuperação owner-scoped para retomar um upload Local incompleto.
-        Exige exclusivamente um Range no formato bytes=0-N, lê somente ciphertext do
-        arquivo físico e não altera o estado do upload. Não substitui nem flexibiliza
-        o endpoint normal de download. O limite de N é FileChunker::MAX_CHUNK_SIZE - 1
-        (4 MiB - 1 nesta configuração).
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: fileId
-          in: path
-          required: true
-          schema: { type: integer }
-        - name: Range
-          in: header
-          required: true
-          schema: { type: string, example: bytes=0-131071 }
-          description: Somente um prefixo fechado bytes=0-N; sem suffix, range aberto ou multi-range.
-      responses:
-        '206':
-          description: Prefixo de ciphertext retornado
-          headers:
-            Content-Range:
-              description: Intervalo real retornado e tamanho físico atual.
-              schema: { type: string, example: bytes 0-131071/1048576 }
-            Content-Length:
-              schema: { type: integer, format: int64 }
-            Accept-Ranges:
-              schema: { type: string, example: bytes }
-            Cache-Control:
-              schema: { type: string, example: no-store }
-            Pragma:
-              schema: { type: string, example: no-cache }
-          content:
-            application/octet-stream:
-              schema: { type: string, format: binary }
-        '400':
-          description: Range ausente ou arquivo não pertence ao armazenamento Local
-        '401':
-          description: Token ausente ou inválido
-        '404':
-          description: Arquivo não encontrado ou não pertence ao usuário
-        '409':
-          description: Upload concluído, chunk zero/contexto indisponível ou arquivo físico ausente
-        '416':
-          description: Range inválido, não prefixado em zero ou acima do limite
-        '503':
-          description: Recurso de armazenamento indisponível
-        '500':
-          description: Erro interno
-
   /files/{fileId}/download:
     get:
       tags: [Arquivos]
@@ -1188,14 +960,7 @@ paths:
           description: Exemplo bytes=0-1023
       responses:
         '200':
-          description: Conteúdo completo Local ou metadados de download Google. Cache-Control no-store/Pragma no-cache são presentes quando a resposta contém access_token.
-          headers:
-            Cache-Control:
-              description: Presente quando a resposta contém credenciais efêmeras do Google Drive; respostas Local não carregam credenciais.
-              schema: { type: string, example: no-store }
-            Pragma:
-              description: Presente quando a resposta contém credenciais efêmeras do Google Drive.
-              schema: { type: string, example: no-cache }
+          description: Conteúdo completo ou estratégia de download (para google_drive)
           content:
             application/octet-stream:
               schema:
@@ -1303,8 +1068,7 @@ paths:
   /files/{fileId}/share:
     post:
       tags: [Compartilhamento]
-      summary: Gera link compartilhável para arquivo local
-      description: Somente arquivos no armazenamento local podem ser compartilhados publicamente. Arquivos privados do Google Drive não são publicados nem transferidos pelo backend.
+      summary: Gera link compartilhável para arquivo
       security:
         - bearerAuth: []
       parameters:
@@ -1313,17 +1077,6 @@ paths:
           required: true
           schema:
             type: integer
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [encrypted_name_fdk]
-              properties:
-                encrypted_name_fdk:
-                  type: string
-                  minLength: 1
       responses:
         '200':
           description: codigo de compartilhamento gerado
@@ -1331,27 +1084,19 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ShareResponse'
-        '400':
-          description: Corpo inválido ou encrypted_name_fdk ausente
         '401':
           description: Token ausente ou inválido
         '404':
           description: Não encontrado ou acesso negado
-        '422':
-          description: Compartilhamento público indisponível para arquivos do Google Drive
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/GoogleDriveSharingUnsupported'
         '500':
           description: Erro interno
 
   /share/{token}:
     get:
       tags: [Compartilhamento]
-      summary: Obtém metadados criptografados de um compartilhamento local
+      summary: Baixa arquivo por link público
       parameters:
-        - name: token
+        - name: codigo
           in: path
           required: true
           schema:
@@ -1359,43 +1104,12 @@ paths:
             description: codigo de 7 caracteres
       responses:
         '200':
-          description: Metadados retornados
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SharedFileMetadata'
-        '404':
-          description: Link inválido ou expirado
-        '500':
-          description: Erro interno
-
-  /share/{token}/download:
-    get:
-      tags: [Compartilhamento]
-      summary: Baixa bytes criptografados de um compartilhamento local
-      parameters:
-        - name: token
-          in: path
-          required: true
-          schema:
-            type: string
-            description: codigo de 7 caracteres
-        - name: Range
-          in: header
-          required: false
-          schema:
-            type: string
-            example: bytes=0-4194319
-      responses:
-        '200':
-          description: Conteúdo criptografado completo
-          content:
-            application/octet-stream:
+          description: Arquivo retornado
+          headers:
+            X-Encrypted-Name:
+              description: Nome criptografado do arquivo
               schema:
                 type: string
-                format: binary
-        '206':
-          description: Conteúdo criptografado parcial
           content:
             application/octet-stream:
               schema:
@@ -1403,8 +1117,6 @@ paths:
                 format: binary
         '404':
           description: Link inválido ou expirado
-        '416':
-          description: Intervalo solicitado inválido
         '500':
           description: Erro interno
 
@@ -1427,12 +1139,6 @@ paths:
           schema:
             type: integer
             default: 0
-        - name: include_folders
-          in: query
-          required: false
-          schema:
-            type: boolean
-            default: true
       responses:
         '200':
           description: Estrutura retornada
@@ -1451,8 +1157,6 @@ paths:
                     items:
                       type: object
                       additionalProperties: true
-                  has_more:
-                    type: boolean
         '400':
           description: Parâmetros de paginação inválidos
         '401':
@@ -1768,8 +1472,6 @@ paths:
           description: Token ausente ou inválido
         '404':
           description: Conta não encontrada ou não pertence ao usuário
-        '409':
-          description: Conta possui transferências de armazenamento ativas ou uploads Google pendentes
         '500':
           description: Erro interno
 
@@ -1811,151 +1513,7 @@ paths:
         '404':
           description: Arquivo não encontrado
         '409':
-          description: Upload já concluído ou conflito no ciclo de vida do armazenamento externo
-        '500':
-          description: Erro interno
-
-  /files/{fileId}/external-upload-recovery-context:
-    get:
-      tags: [Google Drive]
-      summary: Retorna contexto efêmero para recuperar upload Google pendente
-      description: >
-        Retorna apenas o contexto mínimo e efêmero necessário ao frontend para retomar
-        um upload Google Drive pendente. É owner-scoped, não retorna refresh_token ou
-        client_secret, usa Cache-Control no-store e Pragma no-cache e não transporta
-        bytes de mídia nem funciona como proxy.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: fileId
-          in: path
-          required: true
-          schema: { type: integer }
-      responses:
-        '200':
-          description: Contexto efêmero de recovery
-          headers:
-            Cache-Control:
-              schema: { type: string, example: no-store }
-            Pragma:
-              schema: { type: string, example: no-cache }
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [storage_provider, external_storage_id, name_hash]
-                properties:
-                  storage_provider: { type: string, example: google_drive }
-                  external_storage_id: { type: integer }
-                  name_hash: { type: string, description: Identificador opaco do nome criptografado }
-        '400':
-          description: Arquivo não pertence ao Google Drive
-        '401':
-          description: Token ausente ou inválido
-        '404':
-          description: Arquivo não encontrado
-        '409':
-          description: Upload, conta ou armazenamento externo indisponível
-        '500':
-          description: Erro interno
-
-  /files/{fileId}/external-upload-session:
-    post:
-      tags: [Google Drive]
-      summary: Reconcilia um upload Google pendente e cria uma sessão resumable
-      description: >
-        Consulta primeiro objetos externos associados ao arquivo pendente. Retorna
-        um objeto concluído quando há exatamente um candidato válido ou uma sessão
-        resumable e um token efêmero para o upload direto do navegador ao Google Drive.
-        O backend não transporta os bytes do arquivo.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: fileId
-          in: path
-          required: true
-          schema: { type: integer }
-      responses:
-        '200':
-          description: Resultado da reconciliação e da criação da sessão
-          headers:
-            Cache-Control:
-              schema: { type: string, example: no-store }
-            Pragma:
-              schema: { type: string, example: no-cache }
-          content:
-            application/json:
-              schema:
-                oneOf:
-                  - type: object
-                    required: [status, session_uri, access_token]
-                    properties:
-                      status: { type: string, enum: [upload] }
-                      session_uri: { type: string, format: uri }
-                      access_token: { type: string, description: Token efêmero para o upload direto ao Google Drive }
-                  - type: object
-                    required: [status, external_file_id]
-                    properties:
-                      status: { type: string, enum: [completed] }
-                      external_file_id: { type: string }
-        '401':
-          description: Token ausente ou inválido
-        '403':
-          description: Origem não permitida
-        '404':
-          description: Arquivo não encontrado
-        '409':
-          description: Upload já concluído, storage indisponível ou reconciliação ambígua
-        '502':
-          description: Falha ao reconciliar ou criar sessão no Google Drive
-        '500':
-          description: Erro interno
-
-  /files/{fileId}/external-upload-cancel:
-    post:
-      tags: [Google Drive]
-      summary: Marca um upload Google pendente para cleanup assíncrono
-      description: >
-        Registra o cancelamento no control plane local. O backend não recebe
-        sessão resumable, token, FDK ou bytes de mídia; a reconciliação e a
-        eventual remoção do objeto externo são realizadas pelo Garbage Collector.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: fileId
-          in: path
-          required: true
-          schema: { type: integer }
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-      responses:
-        '202':
-          description: Cancelamento registrado para cleanup posterior
-          headers:
-            Cache-Control:
-              schema: { type: string, example: no-store }
-            Pragma:
-              schema: { type: string, example: no-cache }
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [status]
-                properties:
-                  status: { type: string, enum: [cleanup_pending] }
-        '400':
-          description: Arquivo não pertence ao Google Drive
-        '401':
-          description: Token ausente ou inválido
-        '404':
-          description: Arquivo não encontrado
-        '409':
-          description: Upload já finalizado ou conta Google indisponível
+          description: Upload já estava concluído
         '500':
           description: Erro interno
 
@@ -2029,296 +1587,3 @@ paths:
           description: Token ausente ou inválido
         '500':
           description: Erro interno
-
-  /api/storage/targets:
-    get:
-      tags: [Armazenamento]
-      summary: Lista o armazenamento local e todas as contas Google vinculadas
-      security: [{ bearerAuth: [] }]
-      responses:
-        '200':
-          description: Destinos e quotas disponíveis
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  targets:
-                    type: array
-                    items: { $ref: '#/components/schemas/StorageTarget' }
-        '401': { description: Token ausente ou inválido }
-
-  /api/storage/tree:
-    get:
-      tags: [Armazenamento]
-      summary: Projeta a árvore lógica de um armazenamento
-      description: Retorna apenas metadados criptografados pertencentes ao usuário; não lê bytes do provedor.
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: provider, in: query, required: true, schema: { type: string, enum: [local, google_drive] } }
-        - { name: external_storage_id, in: query, schema: { type: integer, format: int64 } }
-        - { name: folder_id, in: query, schema: { type: integer, format: int64 } }
-        - { name: file_limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
-        - { name: file_offset, in: query, schema: { type: integer, default: 0 } }
-      responses:
-        '200': { description: Árvore projetada }
-        '400': { description: Parâmetros inválidos }
-        '401': { description: Token ausente ou inválido }
-        '404': { description: Armazenamento ou pasta não encontrado }
-
-  /files/{fileId}/storage-moves:
-    post:
-      tags: [Armazenamento]
-      summary: Inicia a movimentação física de um arquivo criptografado
-      description: Reserva quota e cria um job persistente. Pastas e lotes não são aceitos nesta versão.
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: fileId, in: path, required: true, schema: { type: integer, format: int64 } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [target_provider]
-              properties:
-                target_provider: { type: string, enum: [local, google_drive] }
-                target_external_storage_id: { type: integer, format: int64 }
-      responses:
-        '201': { description: Job criado, content: { application/json: { schema: { $ref: '#/components/schemas/StorageMoveJob' } } } }
-        '400': { description: Destino inválido ou quota insuficiente }
-        '401': { description: Token ausente ou inválido }
-        '404': { description: Arquivo ou destino não encontrado }
-        '409': { description: Arquivo compartilhado, mesmo destino ou job já ativo }
-        '502': { description: Provedor indisponível }
-
-  /storage-moves/active:
-    get:
-      tags: [Armazenamento]
-      summary: Lista movimentações ainda recuperáveis pelo cliente
-      security: [{ bearerAuth: [] }]
-      responses:
-        '200':
-          description: Jobs ativos
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  moves: { type: array, items: { $ref: '#/components/schemas/StorageMoveJob' } }
-        '401': { description: Token ausente ou inválido }
-
-  /storage-moves/{moveId}:
-    parameters:
-      - { name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }
-    get:
-      tags: [Armazenamento]
-      summary: Consulta uma movimentação
-      security: [{ bearerAuth: [] }]
-      responses:
-        '200': { description: Estado persistido, content: { application/json: { schema: { $ref: '#/components/schemas/StorageMoveJob' } } } }
-        '404': { description: Job não encontrado }
-    delete:
-      tags: [Armazenamento]
-      summary: Cancela uma movimentação de forma idempotente
-      description: A origem permanece válida. IDs Google conhecidos pelo cliente são revalidados antes da limpeza; mesmo sem um ID, o backend mantém reconciliação tardia por markers opacos. A limpeza pode continuar após esta resposta e não transforma o backend em proxy de arquivos.
-      security: [{ bearerAuth: [] }]
-      requestBody:
-        description: IDs de alvos Google conhecidos apenas em memória; cada ID é revalidado pelo backend.
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                items:
-                  type: array
-                  items:
-                    type: object
-                    required: [item_id, target_external_file_id]
-                    properties:
-                      item_id: { type: integer, format: int64 }
-                      target_external_file_id: { type: string }
-      responses:
-        '200': { description: Job cancelado; a operação é idempotente e o cleanup tardio pode continuar, content: { application/json: { schema: { $ref: '#/components/schemas/StorageMoveJob' } } } }
-        '404': { description: Job não encontrado }
-        '409': { description: Estado incompatível }
-
-  /storage-moves/{moveId}/pause:
-    post:
-      tags: [Armazenamento]
-      summary: Pausa uma movimentação
-      security: [{ bearerAuth: [] }]
-      parameters: [{ name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }]
-      responses:
-        '200': { description: Job pausado, content: { application/json: { schema: { $ref: '#/components/schemas/StorageMoveJob' } } } }
-        '409': { description: Estado incompatível }
-
-  /storage-moves/{moveId}/resume:
-    post:
-      tags: [Armazenamento]
-      summary: Retoma uma movimentação
-      security: [{ bearerAuth: [] }]
-      parameters: [{ name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }]
-      responses:
-        '200': { description: Job retomado, content: { application/json: { schema: { $ref: '#/components/schemas/StorageMoveJob' } } } }
-        '409': { description: Estado incompatível }
-
-  /storage-moves/{moveId}/clear:
-    delete:
-      tags: [Armazenamento]
-      summary: Remove um job terminal já limpo
-      description: Retorna 409 enquanto houver staging, deleção externa ou reconciliação Google tardia pendente. O job não pode ser removido antes de o GC manter a capacidade de encontrar targets materializados posteriormente.
-      security: [{ bearerAuth: [] }]
-      parameters: [{ name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }]
-      responses:
-        '204': { description: Job removido }
-        '409': { description: Job não terminal ou limpeza ainda pendente }
-
-  /storage-moves/{moveId}/failure:
-    post:
-      tags: [Armazenamento]
-      summary: Persiste uma falha recuperável ou terminal
-      security: [{ bearerAuth: [] }]
-      parameters: [{ name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [error_code, stage, retryable]
-              properties:
-                error_code: { type: string, enum: [SOURCE_READ_FAILED, GOOGLE_TARGET_SESSION_FAILED, GOOGLE_TARGET_WRITE_FAILED, GOOGLE_TARGET_ACK_FAILED, LOCAL_TARGET_WRITE_FAILED, STORAGE_MOVE_NETWORK_FAILED, STORAGE_MOVE_TARGET_INCOMPLETE, STORAGE_MOVE_INVALID_STATE] }
-                stage: { type: string, enum: [prepare, source_metadata, source_read, target_session, target_write, target_ack, commit, cleanup] }
-                retryable: { type: boolean }
-                items: { type: array, items: { type: object, required: [item_id, target_external_file_id], properties: { item_id: { type: integer, format: int64 }, target_external_file_id: { type: string } } } }
-      responses:
-        '200': { description: Estado canônico persistido, content: { application/json: { schema: { $ref: '#/components/schemas/StorageMoveJob' } } } }
-        '409': { description: Falha inválida ou estado incompatível }
-
-  /storage-moves/{moveId}/progress:
-    post:
-      tags: [Armazenamento]
-      summary: Persiste o progresso de um item
-      security: [{ bearerAuth: [] }]
-      parameters: [{ name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [item_id, transferred_bytes]
-              properties:
-                item_id: { type: integer, format: int64 }
-                transferred_bytes: { type: integer, format: int64 }
-      responses:
-        '200': { description: Progresso persistido, content: { application/json: { schema: { $ref: '#/components/schemas/StorageMoveJob' } } } }
-
-  /storage-moves/{moveId}/items/{itemId}/chunks/{chunkIndex}:
-    put:
-      tags: [Armazenamento]
-      summary: Envia um chunk criptografado para staging local
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: itemId, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: chunkIndex, in: path, required: true, schema: { type: integer } }
-      requestBody:
-        required: true
-        content:
-          application/octet-stream: { schema: { type: string, format: binary } }
-      responses:
-        '200': { description: Chunk persistido }
-        '400': { description: Chunk maior que 4 MiB ou estado inválido }
-
-  /storage-moves/{moveId}/items/{itemId}/uploaded-chunks:
-    get:
-      tags: [Armazenamento]
-      summary: Lista chunks locais já persistidos
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: itemId, in: path, required: true, schema: { type: integer, format: int64 } }
-      responses:
-        '200': { description: Índices dos chunks }
-
-  /storage-moves/{moveId}/items/{itemId}/source:
-    get:
-      tags: [Armazenamento]
-      summary: Lê um Range local ou obtém autorização curta para leitura direta do Google
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: itemId, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: Range, in: header, schema: { type: string, example: bytes=0-4194303 } }
-      responses:
-        '200':
-          description: Metadados de origem Google para transferência direta no navegador
-          headers:
-            Cache-Control:
-              schema: { type: string, example: no-store }
-            Pragma:
-              schema: { type: string, example: no-cache }
-        '206': { description: Range criptografado da origem local; exige `bytes=início-fim` único de até 4 MiB. }
-        '416': { description: "Range inválido ou maior que 4 MiB; retorna `Content-Range: bytes */total`." }
-
-  /storage-moves/{moveId}/items/{itemId}/google-session:
-    post:
-      tags: [Armazenamento]
-      summary: Cria uma sessão resumível na raiz Google de destino
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: itemId, in: path, required: true, schema: { type: integer, format: int64 } }
-      responses:
-        '200':
-          description: URI da sessão e autorização curta; não são persistidas nem registradas em log
-          headers:
-            Cache-Control:
-              schema: { type: string, example: no-store }
-            Pragma:
-              schema: { type: string, example: no-cache }
-        '502': { description: Google Drive indisponível }
-
-  /storage-moves/{moveId}/items/{itemId}/target-uploaded:
-    post:
-      tags: [Armazenamento]
-      summary: Confirma um destino já enviado
-      security: [{ bearerAuth: [] }]
-      parameters:
-        - { name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: itemId, in: path, required: true, schema: { type: integer, format: int64 } }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                target_external_file_id: { type: string, description: Obrigatório para destino Google; omitido para destino local. }
-      responses:
-        '200': { description: ACK idempotente com estado canônico, content: { application/json: { schema: { $ref: '#/components/schemas/StorageMoveJob' } } } }
-        '409': { description: Destino ausente, divergente ou inválido }
-
-  /storage-moves/{moveId}/reconcile:
-    post:
-      tags: [Armazenamento]
-      summary: Reconcilia alvos Google após interrupção
-      security: [{ bearerAuth: [] }]
-      parameters: [{ name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }]
-      responses:
-        '200': { description: Estado reconciliado, content: { application/json: { schema: { $ref: '#/components/schemas/StorageMoveJob' } } } }
-        '502': { description: Falha ao consultar o Google Drive }
-
-  /storage-moves/{moveId}/complete:
-    post:
-      tags: [Armazenamento]
-      summary: Valida o alvo e troca atomicamente o provedor do arquivo
-      security: [{ bearerAuth: [] }]
-      parameters: [{ name: moveId, in: path, required: true, schema: { type: integer, format: int64 } }]
-      responses:
-        '200': { description: Commit concluído ou limpeza assíncrona agendada, content: { application/json: { schema: { $ref: '#/components/schemas/StorageMoveJob' } } } }
-        '400': { description: Destino incompleto }
-        '409': { description: Estado incompatível }
-        '500': { description: Falha interna de commit; detalhes do filesystem não são expostos }

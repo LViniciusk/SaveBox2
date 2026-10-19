@@ -5,7 +5,7 @@ import { AuthService } from '../../../../core/auth/auth.service';
 import { AppStateService, AppStatus } from '../../../../core/state/app-state.service';
 import { Router, ActivatedRoute } from '@angular/router';
 import { signal } from '@angular/core';
-import { of, Subject, throwError } from 'rxjs';
+import { of, throwError } from 'rxjs';
 
 describe('LoginComponent', () => {
   let component: LoginComponent;
@@ -80,23 +80,6 @@ describe('LoginComponent', () => {
       await component.doLogin();
       
       expect(routerSpy.navigate).toHaveBeenCalledWith(['/drive/home']);
-    });
-
-    it('does not navigate before credential login settles', async () => {
-      component.username.set('test');
-      component.password.set('pass');
-      const login = new Subject<boolean>();
-      authServiceSpy.loginWithCredentials.and.returnValue(login);
-
-      const loginPromise = component.doLogin();
-
-      expect(routerSpy.navigate).not.toHaveBeenCalled();
-      mockStatus.set(AppStatus.Locked);
-      login.next(true);
-      login.complete();
-      await loginPromise;
-
-      expect(routerSpy.navigate).toHaveBeenCalledOnceWith(['/drive/home']);
     });
 
     it('should show verify view if error 403', async () => {

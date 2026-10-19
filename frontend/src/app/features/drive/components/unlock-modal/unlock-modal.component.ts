@@ -209,19 +209,16 @@ export class UnlockModalComponent {
   }
 
   async onSubmit() {
-    if (this.loading()) return;
-
     this.error.set(null);
     this.loading.set(true);
 
     // Yield to let the UI update the spinner before blocking the main thread with Argon2id
     await new Promise(resolve => setTimeout(resolve, 50));
 
-    let unlocked = false;
     try {
       await this.cryptoService.unlockVault(this.phrase);
       this.appState.unlock();
-      unlocked = true;
+      this.close();
     } catch (e: any) {
       console.error(e);
       if (e?.message === 'WRONG_PASSPHRASE') {
@@ -229,9 +226,7 @@ export class UnlockModalComponent {
       } else {
         this.error.set('Falha ao verificar a frase de segurança.');
       }
-    } finally {
       this.loading.set(false);
-      if (unlocked) this.close();
     }
   }
 }

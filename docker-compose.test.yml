@@ -1,5 +1,0 @@
-services:
-  postgres-db:
-    # Local native-test override only; keeps PostgreSQL loopback-bound.
-    ports:
-      - "127.0.0.1:5433:5432"

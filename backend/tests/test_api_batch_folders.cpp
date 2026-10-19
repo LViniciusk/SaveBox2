@@ -146,7 +146,7 @@ TEST_CASE("API de pastas em lote - hierarquia e merge", "[api][folders][batch]")
 
         const auto deleted_body = R"({"root_parent_id":)" + std::to_string(deleted_folder) + R"(,"folders":[{"client_ref":"child","parent_client_ref":null,"encrypted_name":"c","name_hash":"c-hash-2"}]})";
         REQUIRE(send_batch(router, token, deleted_body).code == 404);
-        REQUIRE(send_batch(router, token, R"({"root_parent_id":null,"folders":[{"client_ref":"deleted-conflict","parent_client_ref":null,"encrypted_name":"new-cipher","name_hash":"deleted-hash"}]})").code == 200);
+        REQUIRE(send_batch(router, token, R"({"root_parent_id":null,"folders":[{"client_ref":"deleted-conflict","parent_client_ref":null,"encrypted_name":"new-cipher","name_hash":"deleted-hash"}]})").code == 409);
         REQUIRE(send_batch(router, token, R"({"root_parent_id":999999999,"folders":[{"client_ref":"child","parent_client_ref":null,"encrypted_name":"c","name_hash":"c-hash-3"}]})").code == 404);
     }
 

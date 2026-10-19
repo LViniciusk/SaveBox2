@@ -5,11 +5,9 @@ import { DriveFile, QuotaState } from '../../state/drive.store';
 import { DriveView } from '../../state/drive.types';
 import { PinnedFoldersSectionComponent } from '../../components/pinned-folders-section/pinned-folders-section.component';
 import { DroppedItems } from '../../services/data-transfer-reader.service';
-import { FilePreviewRequest } from '../../services/file-preview-resolver';
-import { formatBytes } from '../../../../shared/utils/format-bytes';
 
 interface BreadcrumbSegment {
-  id: number | string | null;
+  id: number | null;
   name: string;
 }
 
@@ -37,15 +35,13 @@ interface BreadcrumbSegment {
             <button class="address-segment address-root" (click)="navigateAddressSegment(null); $event.stopPropagation()">Nanika</button>
             @for (segment of currentPath().slice(1); track segment.id) {
               <span class="address-separator" aria-hidden="true">&gt;</span>
-              <button class="address-segment" [class.current]="$last" [disabled]="$last" (click)="navigateAddressSegment($index + 1); $event.stopPropagation()">{{ segment.name }}</button>
+              <button class="address-segment" [class.current]="$last" [disabled]="$last" (click)="navigateAddressSegment(segment.id); $event.stopPropagation()">{{ segment.name }}</button>
             }
           }
         </div>
-        @if (currentView() !== 'computer') {
-          <button class="toolbar-action" (click)="uploadFileRequested.emit()" aria-label="Novo upload"><span class="material-symbols-outlined">upload</span> Upload</button>
-          <button class="toolbar-action" [disabled]="locked()" (click)="uploadFolderRequested.emit()" aria-label="Upload de pasta"><span class="material-symbols-outlined">drive_folder_upload</span> Pasta</button>
-          <button class="toolbar-action" (click)="createFolderRequested.emit()" aria-label="Nova pasta"><span class="material-symbols-outlined">create_new_folder</span> Nova pasta</button>
-        }
+        <button class="toolbar-action" (click)="uploadFileRequested.emit()" aria-label="Novo upload"><span class="material-symbols-outlined">upload</span> Upload</button>
+        <button class="toolbar-action" [disabled]="locked()" (click)="uploadFolderRequested.emit()" aria-label="Upload de pasta"><span class="material-symbols-outlined">drive_folder_upload</span> Pasta</button>
+        <button class="toolbar-action" (click)="createFolderRequested.emit()" aria-label="Nova pasta"><span class="material-symbols-outlined">create_new_folder</span> Nova pasta</button>
         @if (locked()) {
           <button class="toolbar-action" (click)="unlockRequested.emit()" aria-label="Desbloquear"><span class="material-symbols-outlined">lock_open</span> Desbloquear</button>
         } @else {
@@ -57,7 +53,7 @@ interface BreadcrumbSegment {
       <div class="explorer-body">
         <aside class="explorer-sidebar" aria-label="Navegação do Explorer">
           <button class="explorer-nav" [class.active]="currentView() === 'drive'" (click)="changeView('drive')"><span class="material-symbols-outlined">home</span> Meu Drive</button>
-          <button class="explorer-nav" [class.active]="currentView() === 'computer'" (click)="changeView('computer')"><span class="material-symbols-outlined">computer</span> Este Computador</button>
+          <button class="explorer-nav" [class.active]="currentView() === 'storage'" (click)="changeView('storage')"><span class="material-symbols-outlined">computer</span> Este Computador</button>
           <app-pinned-folders-section
             [currentFolderId]="currentFolderId()"
             [locked]="locked()"
@@ -83,12 +79,11 @@ interface BreadcrumbSegment {
           <app-drive-workspace
             [currentView]="currentView()"
             [locked]="locked()"
-            [movingFileIds]="movingFileIds()"
             (createFolderRequested)="createFolderRequested.emit()"
             (uploadFileRequested)="uploadFileRequested.emit()"
-            (previewRequested)="previewRequested.emit($event)"
+            (videoSelected)="videoSelected.emit($event)"
+            (imageSelected)="imageSelected.emit($event)"
             (shareRequested)="shareRequested.emit($event)"
-            (storageMoveRequested)="storageMoveRequested.emit($event)"
             (emptyTrashRequested)="emptyTrashRequested.emit()"
             (dropStarted)="dropStarted.emit()"
             (externalDrop)="externalDrop.emit($event)"
@@ -99,13 +94,13 @@ interface BreadcrumbSegment {
     </div>
   `,
   styles: [`
-    :host { display: block; height: 100vh; height: 100dvh; min-height: 0; color: var(--text-primary); overflow: hidden; }
-    .default-shell { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--default-window-bg); font-family: 'Segoe UI', sans-serif; overflow: hidden; }
-    .explorer-titlebar { height: 40px; flex: 0 0 40px; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; background: var(--default-titlebar-bg); border-bottom: 1px solid var(--default-border); }
+    :host { display: block; height: 100vh; color: var(--text-primary); }
+    .default-shell { height: 100%; display: flex; flex-direction: column; background: var(--default-window-bg); font-family: 'Segoe UI', sans-serif; }
+    .explorer-titlebar { height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 16px; background: var(--default-titlebar-bg); border-bottom: 1px solid var(--default-border); }
     .window-title { display: flex; align-items: center; gap: 8px; font-size: 13px; }
     .window-title .material-symbols-outlined { color: var(--default-accent); font-size: 18px; }
     .window-actions { display: flex; gap: 20px; color: var(--default-muted); font-size: 16px; }
-    .explorer-toolbar { min-height: 52px; height: 52px; flex: 0 0 52px; box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--default-toolbar-bg); border-bottom: 1px solid var(--default-border); }
+    .explorer-toolbar { min-height: 52px; display: flex; align-items: center; gap: 6px; padding: 8px 12px; background: var(--default-toolbar-bg); border-bottom: 1px solid var(--default-border); }
     .toolbar-icon, .toolbar-action { border: 1px solid transparent; background: transparent; border-radius: 4px; color: var(--default-muted); min-height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; }
     .toolbar-icon:not(:disabled):hover, .toolbar-action:hover { background: var(--default-hover); border-color: var(--default-border); color: var(--default-text); }
     .toolbar-icon:disabled { opacity: .45; cursor: default; }
@@ -118,8 +113,8 @@ interface BreadcrumbSegment {
     .address-segment.current { color: var(--default-text); cursor: default; }
     .address-separator { color: var(--default-muted); }
     .address-bar input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; }
-    .explorer-body { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
-    .explorer-sidebar { width: 220px; flex: 0 0 220px; min-height: 0; box-sizing: border-box; padding: 12px 8px; background: var(--default-sidebar-bg); border-right: 1px solid var(--default-border); overflow: hidden; }
+    .explorer-body { flex: 1; min-height: 0; display: flex; }
+    .explorer-sidebar { width: 220px; flex-shrink: 0; padding: 12px 8px; background: var(--default-sidebar-bg); border-right: 1px solid var(--default-border); overflow-y: auto; }
     .sidebar-heading { padding: 8px 12px 5px; color: var(--default-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
     .explorer-nav { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 4px; padding: 8px 12px; background: transparent; color: var(--default-text); text-align: left; font-size: 13px; }
     .explorer-nav:hover, .explorer-nav.active { background: var(--default-hover); }
@@ -131,13 +126,11 @@ interface BreadcrumbSegment {
     .storage-track.gdrive { background: #33463a; }
     .storage-track.gdrive span { background: #4caf70; }
     .storage-provider-label { margin-top: 12px; }
-    .explorer-content { min-width: 0; min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; position: relative; overflow: hidden; background: var(--default-content-bg); }
-    .explorer-content app-drive-workspace { flex: 1 1 auto; min-width: 0; min-height: 0; }
+    .explorer-content { min-width: 0; min-height: 0; flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; background: var(--default-content-bg); }
     @media (max-width: 680px) { .explorer-sidebar { display: none; } .toolbar-action { padding: 0 4px; font-size: 0; } }
   `],
 })
 export class DefaultShellComponent {
-  readonly formatSize = formatBytes;
   readonly currentView = input.required<DriveView>();
   readonly currentFolderId = input<number | null>(null);
   readonly currentPath = input<readonly BreadcrumbSegment[]>([{ id: null, name: 'Meu Drive' }]);
@@ -145,7 +138,6 @@ export class DefaultShellComponent {
   readonly canGoForward = input(false);
   readonly canGoUp = input(false);
   readonly locked = input(false);
-  readonly movingFileIds = input<ReadonlySet<number>>(new Set<number>());
   readonly quota = input.required<QuotaState>();
   readonly unlockRequested = output<void>();
   readonly lockRequested = output<void>();
@@ -154,9 +146,9 @@ export class DefaultShellComponent {
   readonly uploadFileRequested = output<void>();
   readonly uploadFolderRequested = output<void>();
   readonly pinnedFolderNavigate = output<number>();
-  readonly previewRequested = output<FilePreviewRequest>();
+  readonly videoSelected = output<DriveFile>();
+  readonly imageSelected = output<{ file: DriveFile; playlist: DriveFile[] }>();
   readonly shareRequested = output<DriveFile>();
-  readonly storageMoveRequested = output<DriveFile>();
   readonly emptyTrashRequested = output<void>();
   readonly externalDrop = output<DroppedItems>();
   readonly dropStarted = output<void>();
@@ -198,14 +190,21 @@ export class DefaultShellComponent {
     this.addressEditing.set(true);
   }
 
-  navigateAddressSegment(segmentIndex: number | null): void {
+  navigateAddressSegment(folderId: number | null): void {
     this.addressEditing.set(false);
-    if (segmentIndex === null) {
+    if (folderId === null) {
       this.addressNavigate.emit('Nanika');
       return;
     }
+    const segmentIndex = this.currentPath().findIndex(segment => segment.id === folderId);
     const path = this.currentPath().slice(1, segmentIndex + 1).map(segment => segment.name).join('/');
     this.addressNavigate.emit(path ? `Nanika/${path}` : 'Nanika');
   }
 
+  formatSize(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), sizes.length - 1);
+    return `${parseFloat((bytes / Math.pow(1024, index)).toFixed(1))} ${sizes[index]}`;
+  }
 }

@@ -1,91 +1,14 @@
 #pragma once
+#include <string>
+#include <map>
+#include <fstream>
+#include <cstdlib>
 #include <algorithm>
 #include <cctype>
-#include <cstdlib>
-#include <filesystem>
-#include <fstream>
-#include <map>
-#include <optional>
 #include <regex>
+#include <unordered_set>
 #include <iostream>
 #include <stdexcept>
-#include <system_error>
-#include <string>
-#include <unordered_set>
-#include <vector>
-
-namespace NanikaConfig {
-
-inline std::string validate_bind_address(const std::string& value) {
-    if (value == "0.0.0.0" || value == "127.0.0.1") return value;
-    throw std::runtime_error("Invalid NANIKA_BIND_ADDRESS");
-}
-
-inline constexpr std::size_t kMaxDotenvAncestors = 32;
-
-inline bool readable_regular_file(const std::filesystem::path& candidate) {
-    std::error_code ec;
-    const auto status = std::filesystem::symlink_status(candidate, ec);
-    if (ec || status.type() == std::filesystem::file_type::symlink ||
-        !std::filesystem::is_regular_file(status)) {
-        return false;
-    }
-
-    std::ifstream probe(candidate, std::ios::binary);
-    return probe.good();
-}
-
-inline std::optional<std::filesystem::path> find_dotenv_upwards(
-    const std::filesystem::path& start_path) {
-    std::error_code ec;
-    std::filesystem::path current = std::filesystem::absolute(start_path, ec);
-    if (ec) return std::nullopt;
-    current = current.lexically_normal();
-
-    for (std::size_t level = 0; level <= kMaxDotenvAncestors; ++level) {
-        const auto candidate = current / ".env";
-        ec.clear();
-        const auto status = std::filesystem::symlink_status(candidate, ec);
-        if (ec) {
-            if (ec == std::errc::no_such_file_or_directory) {
-                // The candidate is absent; continuing upward is safe.
-            } else {
-                // An inaccessible candidate is not bypassed by searching above it.
-                return std::nullopt;
-            }
-        } else if (status.type() != std::filesystem::file_type::not_found) {
-            if (!readable_regular_file(candidate)) return std::nullopt;
-            return candidate;
-        }
-
-        const auto parent = current.parent_path();
-        if (parent.empty() || parent == current) return std::nullopt;
-        current = parent;
-    }
-
-    return std::nullopt;
-}
-
-inline std::map<std::string, std::string> read_dotenv(
-    const std::filesystem::path& path) {
-    std::map<std::string, std::string> values;
-    std::ifstream file(path);
-    if (!file.is_open()) return values;
-
-    std::string line;
-    while (std::getline(file, line)) {
-        if (line.empty() || line[0] == '#') continue;
-        const auto pos = line.find('=');
-        if (pos == std::string::npos) continue;
-
-        std::string value = line.substr(pos + 1);
-        if (!value.empty() && value.back() == '\r') value.pop_back();
-        values[line.substr(0, pos)] = value;
-    }
-    return values;
-}
-
-} // namespace NanikaConfig
 
 class Utils {
 private:
@@ -93,25 +16,24 @@ private:
     std::unordered_set<std::string> blocked_domains;
 
     Utils() {
-        const auto env_path = NanikaConfig::find_dotenv_upwards(std::filesystem::current_path());
-        if (env_path) env_vars = NanikaConfig::read_dotenv(*env_path);
+        std::ifstream file("../../.env");
+        if (file.is_open()) {
+            std::string line;
+            while (std::getline(file, line)) {
+                if (line.empty() || line[0] == '#') continue;
+                auto pos = line.find('=');
+                if (pos != std::string::npos) {
+                    std::string key = line.substr(0, pos);
+                    std::string value = line.substr(pos + 1);
+                    if (!value.empty() && value.back() == '\r') {
+                        value.pop_back();
+                    }
+                    env_vars[key] = value;
+                }
+            }
+        }
 
-        std::ifstream domain_file;
-        std::vector<std::filesystem::path> domain_paths;
-        if (env_path) domain_paths.push_back(env_path->parent_path() / "config" / "disposable_domains.txt");
-        for (const char* path : {
-            "config/disposable_domains.txt",
-            "../config/disposable_domains.txt",
-            "../../config/disposable_domains.txt",
-            "/app/config/disposable_domains.txt"
-        }) {
-            domain_paths.emplace_back(path);
-        }
-        for (const auto& path : domain_paths) {
-            domain_file.open(path);
-            if (domain_file.is_open()) break;
-            domain_file.clear();
-        }
+        std::ifstream domain_file("../../config/disposable_domains.txt");
         if (domain_file.is_open()) {
             std::string line;
             while (std::getline(domain_file, line)) {
@@ -168,11 +90,6 @@ public:
 
 namespace DotEnv{
 
-    inline std::string get_bind_address() {
-        auto& cfg = Utils::get();
-        return NanikaConfig::validate_bind_address(cfg.get_var("NANIKA_BIND_ADDRESS", "0.0.0.0"));
-    }
-
     inline std::string get_secure_conn_string() {
         auto& cfg = Utils::get();
         std::string user = cfg.get_required_var("DB_USER");
@@ -222,10 +139,6 @@ namespace DotEnv{
         } catch (...) {
             return 8080;
         }
-    }
-
-    inline bool trust_proxy_headers() {
-        return Utils::get().get_var("TRUST_PROXY_HEADERS", "false") == "true";
     }
 }
 

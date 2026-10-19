@@ -1,20 +1,11 @@
 {
   "name": "nanikaserver",
   "version": "2.0.0",
-  "builtin-baseline": "7ff71c68261ecf3b60cdb8772f2e6759ee0a71b1",
   "dependencies": [
     "nlohmann-json",
     "libpqxx",
+    "libzip",
     "libsodium",
-    "cpr",
-    "openssl",
-    "catch2",
-    "asio"
-  ],
-  "overrides": [
-    {
-      "name": "libpqxx",
-      "version": "7.10.5"
-    }
+    "crow"
   ]
 }

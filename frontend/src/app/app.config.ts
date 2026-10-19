@@ -15,7 +15,7 @@ import { errorInterceptor } from './core/interceptors/error.interceptor';
 import { AuthService } from './core/auth/auth.service';
 import { ThemeService } from './core/theme/theme.service';
 
-function initializeApp() {
+export function initializeApp() {
   const authService = inject(AuthService);
   inject(ThemeService);
   return () => firstValueFrom(authService.restoreSession());

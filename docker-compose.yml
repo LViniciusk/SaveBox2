@@ -11,6 +11,8 @@ services:
       POSTGRES_DB: ${DB_NAME}
     volumes:
       - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
     networks:
       - nanika_network
 
@@ -19,11 +21,12 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: nanika_api
+    user: "root"
     restart: unless-stopped
     depends_on:
       - postgres-db
     ports:
-      - "127.0.0.1:8080:8080"
+      - "8080:8080"
     environment:
       DB_HOST: postgres-db
       DB_PORT: 5432
@@ -42,14 +45,8 @@ services:
       NANIKA_STORAGE_PATH: /app/nanika_storage/
       CORS_ORIGIN: ${CORS_ORIGIN}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
-      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
-      NANIKA_BIND_ADDRESS: ${NANIKA_BIND_ADDRESS:-0.0.0.0}
     volumes:
-      - type: bind
-        source: ./nanika_storage
-        target: /app/nanika_storage
-        bind:
-          create_host_path: false
+      - ./nanika_storage:/app/nanika_storage
     networks:
       - nanika_network
 
@@ -62,7 +59,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "127.0.0.1:${FRONTEND_PORT:-6742}:80"
+      - "${FRONTEND_PORT:-6742}:80"
     networks:
       - nanika_network
 

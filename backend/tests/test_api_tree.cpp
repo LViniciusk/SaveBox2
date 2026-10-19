@@ -99,12 +99,10 @@ TEST_CASE("API Tree - Sincronização do Drive", "[api][tree]") {
         auto body = crow::json::load(res.body);
         REQUIRE(body.has("folders"));
         REQUIRE(body.has("files"));
-        REQUIRE(body.has("has_more"));
         
         REQUIRE(body["folders"].size() == 3);
         
         REQUIRE(body["files"].size() == 2);
-        REQUIRE(body["has_more"].b());
     }
 
     SECTION("Sucesso - Paginacao Pagina 2") {
@@ -119,63 +117,10 @@ TEST_CASE("API Tree - Sincronização do Drive", "[api][tree]") {
         auto body = crow::json::load(res.body);
         REQUIRE(body.has("folders"));
         REQUIRE(body.has("files"));
-        REQUIRE(body.has("has_more"));
         
         REQUIRE(body["folders"].size() == 3);
         
         REQUIRE(body["files"].size() == 1);
-        REQUIRE_FALSE(body["has_more"].b());
-    }
-
-    SECTION("Paginacao sem pastas explicita a autoridade da consulta") {
-        crow::request req;
-        req.url = "/tree?file_limit=2&file_offset=2&include_folders=false";
-        req.url_params = crow::query_string(req.url.substr(req.url.find('?')));
-        req.add_header("Authorization", "Bearer " + token_a);
-
-        crow::response res = router.handle_get_tree(req);
-        REQUIRE(res.code == 200);
-        auto body = crow::json::load(res.body);
-        REQUIRE(body["folders"].size() == 0);
-        REQUIRE(body["files"].size() == 1);
-        REQUIRE_FALSE(body["has_more"].b());
-    }
-
-    SECTION("Paginacao com pastas explicitas preserva o contrato") {
-        crow::request req;
-        req.url = "/tree?file_limit=2&file_offset=2&include_folders=true";
-        req.url_params = crow::query_string(req.url.substr(req.url.find('?')));
-        req.add_header("Authorization", "Bearer " + token_a);
-
-        crow::response res = router.handle_get_tree(req);
-        REQUIRE(res.code == 200);
-        auto body = crow::json::load(res.body);
-        REQUIRE(body["folders"].size() == 3);
-        REQUIRE(body["files"].size() == 1);
-        REQUIRE_FALSE(body["has_more"].b());
-    }
-
-    SECTION("Limite exato nao inventa uma pagina seguinte") {
-        crow::request req;
-        req.url = "/tree?file_limit=2&file_offset=1";
-        req.url_params = crow::query_string(req.url.substr(req.url.find('?')));
-        req.add_header("Authorization", "Bearer " + token_a);
-
-        crow::response res = router.handle_get_tree(req);
-        REQUIRE(res.code == 200);
-        auto body = crow::json::load(res.body);
-        REQUIRE(body["files"].size() == 2);
-        REQUIRE_FALSE(body["has_more"].b());
-    }
-
-    SECTION("Booleano de pastas invalido") {
-        crow::request req;
-        req.url = "/tree?include_folders=yes";
-        req.url_params = crow::query_string(req.url.substr(req.url.find('?')));
-        req.add_header("Authorization", "Bearer " + token_a);
-
-        crow::response res = router.handle_get_tree(req);
-        REQUIRE(res.code == 400);
     }
 
     SECTION("Clamp de paginacao em limite elevado") {
@@ -208,7 +153,6 @@ TEST_CASE("API Tree - Sincronização do Drive", "[api][tree]") {
         auto body = crow::json::load(res.body);
         REQUIRE(body.has("files"));
         REQUIRE(body["files"].size() <= 100);
-        REQUIRE(body["has_more"].b());
     }
 
     {

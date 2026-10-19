@@ -1,5 +1,6 @@
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, inject, OnInit, effect, untracked } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { AuthService } from '../../../../core/auth/auth.service';
 
 /**
@@ -8,8 +9,9 @@ import { AuthService } from '../../../../core/auth/auth.service';
  * Google redirects here after authentication:
  *   /auth/callback#id_token=<jwt>&state=<nonce>&...
  *
- * This component dispatches exactly one of the two supported callbacks:
- * authorization-code linking or implicit-flow login.
+ * This component reads the URL fragment (hash), extracts the id_token
+ * and state (nonce), and delegates to AuthService.handleOAuthCallback()
+ * which sends them to the backend for validation.
  */
 @Component({
   selector: 'app-auth-callback',
@@ -127,34 +129,49 @@ export class AuthCallbackComponent implements OnInit {
   protected readonly authService = inject(AuthService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly fragment = toSignal(this.route.fragment);
 
-  ngOnInit(): void {
-    const { queryParams, fragment } = this.route.snapshot;
-    const code = queryParams['code'];
-    const state = queryParams['state'];
-    const error = queryParams['error'];
-    const hasState = typeof state === 'string' && state.length > 0;
-    const hasCode = typeof code === 'string' && code.length > 0;
-    const hasError = typeof error === 'string' && error.length > 0;
-
-    // Provider errors belong to the Drive-link flow only when state is present.
-    if (hasError && hasState) {
-      void this.router.navigate(['/drive/home'], { replaceUrl: true });
-      return;
-    }
-
-    // Code + state is the exclusive Google Drive linking contract for this route.
-    if (hasCode && hasState) {
-      void this.authService.linkGoogleDrive(code, state);
-      return;
-    }
-
-    // The fragment belongs exclusively to Google login. Query parameters are
-    // never converted into a pseudo-fragment.
-    void this.authService.handleOAuthCallback(fragment ?? '');
+  constructor() {
+    effect(() => {
+      const fragment = this.fragment();
+      if (fragment !== undefined) {
+        untracked(() => {
+          this.handleFragment(fragment);
+        });
+      }
+    });
   }
 
-  goToLogin(): void {
-    void this.router.navigate(['/login']);
+  ngOnInit() {
+    const queryParams = this.route.snapshot.queryParams;
+
+    // Se recebemos 'code' e 'state', estamos no fluxo de vinculação do Google Drive
+    if (queryParams['code'] && queryParams['state']) {
+      console.log("[AuthCallback] Google Drive Auth Code received, linking account...");
+      this.authService.linkGoogleDrive(queryParams['code'], queryParams['state']);
+      return;
+    }
+  }
+
+  private handleFragment(fragment: string | null) {
+    console.log("[AuthCallback] Fragment received:", fragment);
+
+    if (fragment) {
+      this.authService.handleOAuthCallback(fragment);
+    } else {
+      const queryParams = this.route.snapshot.queryParams;
+      // Fallback for cases where fragment is empty but data might be in queryParams
+      if (Object.keys(queryParams).length > 0) {
+        const simulatedFragment = new URLSearchParams(queryParams as any).toString();
+        this.authService.handleOAuthCallback(simulatedFragment);
+      } else {
+        console.error("[AuthCallback] Fragment is empty!");
+        this.authService.handleOAuthCallback('');
+      }
+    }
+  }
+
+  goToLogin() {
+    this.router.navigate(['/login']);
   }
 }

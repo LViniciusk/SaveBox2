@@ -4,12 +4,6 @@
 
 #include <string>
 
-enum class EmailValidationResult {
-    Accepted,
-    Rejected,
-    Unavailable,
-};
-
 class EmailService {
 public:
     EmailService(const std::string& resend_api_key, const std::string& validation_api_key);
@@ -17,7 +11,7 @@ public:
     virtual ~EmailService() = default;
 
     bool send_verification_email(const std::string& to_email, const std::string& token) const;
-    EmailValidationResult validate_email_via_api(const std::string& email) const;
+    bool is_domain_valid_via_api(const std::string& domain) const;
 
 protected:
     virtual cpr::Response make_post_request(const std::string& url,

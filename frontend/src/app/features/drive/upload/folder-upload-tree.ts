@@ -1,16 +1,22 @@
 import { FolderUploadFile, FolderUploadNode, FolderUploadSourceFile, FolderUploadTree } from './upload.models';
 
-const FOLDER_BATCH_LIMIT = 1000;
-const FOLDER_TREE_DEPTH_LIMIT = 128;
+export const FOLDER_BATCH_LIMIT = 1000;
+export const FOLDER_TREE_DEPTH_LIMIT = 128;
 
-export function parseDirectoryFiles(files: readonly File[]): FolderUploadFile[] {
+export interface FolderUploadLimits {
+  maxFolders?: number;
+  maxDepth?: number;
+}
+
+export function parseDirectoryFiles(files: readonly File[], limits: FolderUploadLimits = {}): FolderUploadFile[] {
   return parseDirectorySources(files.map(file => ({
     file,
     relativePath: (file as File & { webkitRelativePath?: string }).webkitRelativePath ?? '',
-  })));
+  })), limits);
 }
 
-export function parseDirectorySources(sources: readonly FolderUploadSourceFile[]): FolderUploadFile[] {
+export function parseDirectorySources(sources: readonly FolderUploadSourceFile[], limits: FolderUploadLimits = {}): FolderUploadFile[] {
+  const maxDepth = limits.maxDepth ?? FOLDER_TREE_DEPTH_LIMIT;
   const paths = new Set<string>();
   return sources.map(source => {
     const { file, relativePath } = source;
@@ -19,7 +25,7 @@ export function parseDirectorySources(sources: readonly FolderUploadSourceFile[]
     }
     const segments = relativePath.split(/[\\/]/);
     if (segments.some(segment => !segment || segment === '.' || segment === '..')) throw new Error('Caminho de pasta inválido');
-    if (segments.at(-1) !== file.name || segments.length > FOLDER_TREE_DEPTH_LIMIT) throw new Error('Caminho de pasta inválido');
+    if (segments.at(-1) !== file.name || segments.length > maxDepth) throw new Error('Caminho de pasta inválido');
     const normalized = segments.join('/');
     if (paths.has(normalized)) throw new Error('Caminho de arquivo duplicado');
     paths.add(normalized);
