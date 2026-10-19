@@ -225,8 +225,9 @@ Quando houver emissão formal de aprovação pelo Diretor Científico, o operado
 
 | Workflow | Resultado | Run | SHA |
 |---|---|---|---|
-| **Quality Baseline** (quality-report, e2e) | **Sucesso** (2m18s) | [39231317047](https://github.com/LViniciusk/SaveBox2/actions/runs/39231317047) | `e6cefd70b2d2c61e00a07cde308bec26717e478c` |
-| **Frontend CI** (Linux, Windows) | **Sucesso** (2m05s) | [39231477233](https://github.com/LViniciusk/SaveBox2/actions/runs/39231477233) | `e6cefd70b2d2c61e00a07cde308bec26717e478c` |
-| **Backend CI** (Linux GCC, Linux Coverage, Windows MSVC) | **Sucesso** (7m10s) | [39231317073](https://github.com/LViniciusk/SaveBox2/actions/runs/39231317073) | `e6cefd70b2d2c61e00a07cde308bec26717e478c` |
+| **Quality Baseline** (quality-report, e2e) | **Sucesso** (3m00s) | [39232599231](https://github.com/LViniciusk/SaveBox2/actions/runs/39232599231) | `c0473c66f10c3d424103ee60a5cc79d9f550435b` |
+| **Frontend CI** (Linux, Windows) | **Sucesso** (2m08s) | [39232706888](https://github.com/LViniciusk/SaveBox2/actions/runs/39232706888) | `c0473c66f10c3d424103ee60a5cc79d9f550435b` |
+| **Backend CI** (Linux GCC, Linux Coverage, Windows MSVC) | **Sucesso** (6m21s) | [39232599192](https://github.com/LViniciusk/SaveBox2/actions/runs/39232599192) | `c0473c66f10c3d424103ee60a5cc79d9f550435b` |
+| *Runs de validação intermediária (commit `e6cefd70`)* | *Sucesso* | [*Quality Baseline*](https://github.com/LViniciusk/SaveBox2/actions/runs/39231317047) / [*Frontend*](https://github.com/LViniciusk/SaveBox2/actions/runs/39231477233) / [*Backend*](https://github.com/LViniciusk/SaveBox2/actions/runs/39231317073) | `e6cefd70b2d2c61e00a07cde308bec26717e478c` |
 
 **Pull Request:** [PR #43](https://github.com/LViniciusk/SaveBox2/pull/43) direcionado à base `frontend`. Nenhum merge automático foi executado.
