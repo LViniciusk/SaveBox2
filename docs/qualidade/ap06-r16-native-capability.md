@@ -6,7 +6,7 @@
 - **Branch:** `investigation/ap06-r16-native-capability`
 - **Base:** `frontend`
 - **PR:** [#43](https://github.com/LViniciusk/SaveBox2/pull/43)
-- **HEAD:** `27666091`
+- **HEAD:** `b18c26b6`
 
 ---
 
@@ -240,15 +240,15 @@ Executado sob Python 3.12 (Windows x64) com aquecimento prévio descartado, proc
 | **Segurança** | Gitleaks e verificações | **PASS** | Gitleaks: 0 segredos; `git diff --check`: 0 erros |
 | **Desempenho** | Benchmark comparável, 8 repetições | **PASS** | Protocolo de 8 repetições concluído e tabelado |
 
-### 7.2 Resultados no GitHub Actions (Commit `fcb7022b`)
+### 7.2 Resultados no GitHub Actions (Commit `b18c26b6`)
 
 | Workflow | Job | Status | Duração | URL |
 |---|---|---|---|---|
-| **Backend CI** | Linux Coverage | **PASS** | 7m04s | [Run 39273227645](https://github.com/LViniciusk/SaveBox2/actions/runs/39273227645/job/118130728673) |
-| **Backend CI** | Linux GCC | **PASS** | 6m01s | [Run 39273227645](https://github.com/LViniciusk/SaveBox2/actions/runs/39273227645/job/118130728022) |
-| **Backend CI** | Windows MSVC | **PASS** | 6m22s | [Run 39273227645](https://github.com/LViniciusk/SaveBox2/actions/runs/39273227645/job/118130728789) |
-| **Quality Baseline** | e2e | **PASS** | 2m53s | [Run 39273227578](https://github.com/LViniciusk/SaveBox2/actions/runs/39273227578/job/118130729519) |
-| **Quality Baseline** | quality-report | **PASS** | 2m03s | [Run 39273227578](https://github.com/LViniciusk/SaveBox2/actions/runs/39273227578/job/118130729096) |
+| **Backend CI** | Linux Coverage | **PASS** | 7m12s | [Run 39279897846](https://github.com/LViniciusk/SaveBox2/actions/runs/39279897846/job/118152003092) |
+| **Backend CI** | Linux GCC | **PASS** | 5m54s | [Run 39279897846](https://github.com/LViniciusk/SaveBox2/actions/runs/39279897846/job/118152003122) |
+| **Backend CI** | Windows MSVC | **PASS** | 7m11s | [Run 39279897846](https://github.com/LViniciusk/SaveBox2/actions/runs/39279897846/job/118152002893) |
+| **Quality Baseline** | e2e | **PASS** | 2m12s | [Run 39279897771](https://github.com/LViniciusk/SaveBox2/actions/runs/39279897771/job/118152001805) |
+| **Quality Baseline** | quality-report | **PASS** | 3m07s | [Run 39279897771](https://github.com/LViniciusk/SaveBox2/actions/runs/39279897771/job/118152001987) |
 
 ---
 
