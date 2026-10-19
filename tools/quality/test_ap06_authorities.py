@@ -72,5 +72,23 @@ class AuthoritiesTests(unittest.TestCase):
                 authorities.checked_path(link/'child'/'file')
         finally: link.rmdir() if os.name == 'nt' else link.unlink()
 
+    def test_r16_campaign_authority_isolation(self):
+        r16_root = Path(self.temp.name) / 'persistent-r16'
+        identity = secrets.token_hex(32)
+        authorities.initialize(r16_root, identity, campaign='AP-06-R12-R16-native')
+        self.assertTrue((r16_root / '.owned-ap06-r12-r16-native').is_file())
+        self.assertEqual((r16_root / '.owned-ap06-r12-r16-native').read_text(encoding='ascii'), identity)
+        meta = json.loads((r16_root / 'authority.json').read_text())
+        self.assertEqual(meta.get('campaign'), 'AP-06-R12-R16-native')
+        # Isolation: markers from R9, R10, R13, R14 do not exist in R16 authority
+        for camp, marker in authorities.CAMPAIGNS.items():
+            if camp != 'AP-06-R12-R16-native':
+                self.assertFalse((r16_root / marker).exists())
+        # Publish and readback in R16 authority
+        res = authorities.publish_authorities(self.source, r16_root, self.manifest, identity, 'r16-test')
+        self.assertEqual(res['status'], 'PASS')
+        readback = authorities.verify_publication(r16_root, identity, 'r16-test')
+        self.assertEqual(readback, self.manifest)
+
 
 if __name__ == '__main__': unittest.main()

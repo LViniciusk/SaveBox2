@@ -164,7 +164,7 @@ def validate_freeze_preflight(wave,unit,output):
 def publication_namespace(wave):
     name=wave.output.name
     if name=='readiness-wave10-r3':return 'r10-r3'
-    if re.fullmatch(r'readiness-wave(?:11(?:-r[23])?|12(?:-r(?:[2-9]|1[0-4])-(?:factorial|native))?)',name):
+    if re.fullmatch(r'readiness-wave(?:11(?:-r[23])?|12(?:-r(?:[2-9]|1[0-6])-(?:factorial|native))?)',name):
         return name.replace('readiness-wave','r')
     return ''
 
@@ -182,7 +182,7 @@ def collect_freeze_inputs(wave, products, extra_files=()):
     files={path:wave.root/path for path in tracked}
     if publication_namespace(wave):
         header=wave.root/'backend/include/crow_all.h'
-        if re.fullmatch(r'readiness-wave12-r(?:8|9|1[0-4])-(factorial|native)',wave.output.name):
+        if re.fullmatch(r'readiness-wave12-r(?:8|9|1[0-6])-(factorial|native)',wave.output.name):
             from ap06_freeze import validate_native_build_authority
             backend=validate_native_build_authority(wave)
             if header.is_file():files['backend/include/crow_all.h']=header
@@ -239,7 +239,7 @@ def freeze_implementation(wave, *, output=OUTPUT, harness='frontend/tools/ap06-r
     prefix = prefix+'-' if prefix else ''
     implementation_name = prefix+'implementation'
     freeze_name = prefix+'freeze'
-    freeze={'campaign':'AP-06-R12-R13-native' if wave.output.name=='readiness-wave12-r13-native' else 'AP-06-R9-R2',
+    freeze={'campaign':'AP-06-R12-R16-native' if wave.output.name=='readiness-wave12-r16-native' else ('AP-06-R12-R14-native' if wave.output.name=='readiness-wave12-r14-native' else ('AP-06-R12-R13-native' if wave.output.name=='readiness-wave12-r13-native' else 'AP-06-R9-R2')),
         'status':'FROZEN','implementationHead':wave.git('rev-parse','HEAD').strip(),
         'implementationPublication':implementation_name,'freezePublication':freeze_name,
         'sourceHash':owner._tree_sha256(wave.root,'frontend/src'),'fixtureHash':fixture_hash,

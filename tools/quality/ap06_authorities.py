@@ -11,7 +11,8 @@ import subprocess
 _VERIFIED_ACLS = {}
 CAMPAIGNS = {'AP-06-R9-R2': '.owned-ap06-r9-r2', 'AP-06-R10': '.owned-ap06-r10',
     'AP-06-R12-R13-native': '.owned-ap06-r12-r13-native',
-    'AP-06-R12-R14-native': '.owned-ap06-r12-r14-native'}
+    'AP-06-R12-R14-native': '.owned-ap06-r12-r14-native',
+    'AP-06-R12-R16-native': '.owned-ap06-r12-r16-native'}
 
 
 def windows_descriptor(path):
