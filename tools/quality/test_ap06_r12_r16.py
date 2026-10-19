@@ -653,7 +653,9 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
         for name in NATIVE_FILES.values():
             (backend_build / name).write_text('dummy')
 
-        self.wave.command = lambda *args, **kwargs: None
+        def fake_command(name, *args, **kwargs):
+            self.wave.save(f'pipeline/commands/{name}.json', {'name': name, 'exitCode': 0, 'status': 'PASS'})
+        self.wave.command = fake_command
 
         with patch('ap06_browser_identity.verify_identity', return_value={'status': 'PASS'}), \
              patch('run_backend_shards.parse_catch_report', return_value={'assertion_failures': 0, 'case_failures': 0, 'expected_failures': 0, 'assertion_successes': 1, 'case_successes': 1}), \
@@ -673,6 +675,9 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
         self.assertNotIn('scientificAuthorizationPresent', res)
         self.assertNotIn('authorizationVerified', res)
         self.assertFalse((self.output / 'pipeline/capability-reservation.json').exists())
+        tests_data = json.loads((self.output / 'baseline/tests.json').read_text(encoding='utf-8'))
+        self.assertEqual(tests_data.get('global', {}).get('status'), 'PASS')
+        self.assertIn('receiptSha256', tests_data.get('global', {}))
 
     # Caso 19: CLI separa --run e --run-capability e exige --source-output
     def test_case_19_cli_action_separation_and_arguments(self):
@@ -723,6 +728,12 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
         # In R11/R12, DOCUMENTED_EXCEPTION for global is accepted
         r11_out = Path('.quality/readiness-wave12-r11-factorial')
         validate_test_receipt(r11_out, tests_with_global_ex)
+
+        # In R13 and R14, global is not required at all (historical preservation)
+        r13_out = Path('.quality/readiness-wave12-r13-native')
+        r14_out = Path('.quality/readiness-wave12-r14-native')
+        validate_test_receipt(r13_out, valid_tests)
+        validate_test_receipt(r14_out, valid_tests)
 
     # Caso 21: Integração sintética ponta a ponta (Mock CDP -> trace -> validate -> decision -> readback)
     def test_case_21_end_to_end_synthetic_integration(self):
@@ -1096,6 +1107,96 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
                         p.wait(timeout=5)
                     except Exception:
                         pass
+
+    # Caso 22: Falha na suíte global bloqueia offline_preflight na R16
+    def test_case_22_global_suite_failure_blocks_offline_preflight(self):
+        source_dir = self.base / 'source'
+        (source_dir / 'final').mkdir(parents=True, exist_ok=True)
+        (source_dir / 'final/decision.json').write_text(json.dumps({
+            'status': 'R12R12_FACTORIAL_CONFIRMED', 'campaign': 'AP-06-R12-R12-factorial'
+        }))
+        (source_dir / 'tooling').mkdir(parents=True, exist_ok=True)
+        (source_dir / 'tooling/kasumi.cjs').write_text('// kasumi')
+
+        (self.output / 'baseline/browser-identity.json').write_text(json.dumps({
+            'chromiumVersion': '151.0.7922.34', 'playwrightVersion': '1.62.1', 'executablePath': 'c.exe', 'executableSha256': 'a' * 64
+        }))
+        for f in ('experimental-backend.json', 'backend-isolation.json', 'listener-isolation.json',
+                  'network-spoof-guard.json', 'network-spoof-recovery.json', 'startup-rejections.json',
+                  'backend-runtime.local.json', 'player-auth.local.json', 'backend-authority.json',
+                  'runtime-credentials.dpapi', 'runtime-credentials-custody.json', 'runtime-credentials-readback.json'):
+            (self.output / 'baseline' / f).write_text(json.dumps({'crowHeaderSha256': 'a' * 64}))
+        for name in ('native-production.xml', 'native-experimental.xml'):
+            (self.output / 'baseline' / name).write_text('<catch></catch>')
+        task_file = self.base / TASK_PATH
+        task_file.parent.mkdir(parents=True, exist_ok=True)
+        task_file.write_text('synthetic')
+        (self.output / 'baseline/task.md').write_text('synthetic')
+        (self.output / 'baseline/task-provenance.json').write_text(json.dumps({'sourceSha256': sha256(task_file)}))
+        (self.output / 'baseline/historical-factorial-gate.json').write_text(json.dumps({'status': 'PASS'}))
+        (self.output / 'fixtures/manifest.json').parent.mkdir(parents=True, exist_ok=True)
+        (self.output / 'fixtures/manifest.json').write_text('{}')
+        (self.base / 'docs/qualidade').mkdir(parents=True, exist_ok=True)
+        (self.base / 'docs/qualidade/ap06-r9-r2.json').write_text('{}')
+
+        backend_build = self.output / 'tooling/backend-build'
+        backend_build.mkdir(parents=True, exist_ok=True)
+        from ap06_freeze import NATIVE_FILES
+        for name in NATIVE_FILES.values():
+            (backend_build / name).write_text('dummy')
+
+        def fake_failing_command(name, *args, **kwargs):
+            if 'global-suite' in name:
+                self.wave.save(f'pipeline/commands/{name}.json', {'name': name, 'exitCode': 1, 'status': 'FAIL'})
+            else:
+                self.wave.save(f'pipeline/commands/{name}.json', {'name': name, 'exitCode': 0, 'status': 'PASS'})
+        self.wave.command = fake_failing_command
+
+        with patch('ap06_browser_identity.verify_identity', return_value={'status': 'PASS'}), \
+             patch('run_backend_shards.parse_catch_report', return_value={'assertion_failures': 0, 'case_failures': 0, 'expected_failures': 0, 'assertion_successes': 1, 'case_successes': 1}), \
+             patch.object(runner, 'validate_native_build_authority'), \
+             patch('run_ap06_r12_r2.validate_r8_native_tests'), \
+             patch.object(runner, 'native_source_files', return_value={}), \
+             patch('run_ap06_integration_probe.build_products', return_value=([], {}, {})), \
+             patch.object(runner, 'verify_historical_factorial'), \
+             patch('ap06_key_custody.readback', return_value={'status': 'PASS'}), \
+             patch('sys.platform', 'win32'), patch('os.name', 'nt'):
+            with self.assertRaises(ValueError) as cm:
+                runner.offline_preflight(self.wave, source_dir)
+            self.assertIn('R16_GLOBAL_TESTS_FAILED', str(cm.exception))
+
+    # Caso 23: scan_staged_changes funciona em checkout limpo inspecionando HEAD^1..HEAD
+    def test_case_23_clean_checkout_scan_staged(self):
+        gitleaks_path = self.base / 'fake-gitleaks.exe'
+        gitleaks_path.write_text('binary')
+        gitleaks_version = 'mod github.com/zricethezav/gitleaks/v8 v8.30.1\n'
+
+        def fake_git(cmd, *args):
+            if cmd == 'diff' and '--cached' in args:
+                return ''
+            if cmd == 'diff' and 'HEAD^1' in args:
+                return 'README.md\n'
+            if cmd == 'ls-files':
+                return 'README.md\n'
+            return ''
+
+        self.wave.git = fake_git
+        (self.base / 'README.md').write_text('# SaveBox2')
+
+        with patch('subprocess.run') as mock_run:
+            def side_effect(cmd, *a, **kw):
+                if cmd[0] == 'go':
+                    return subprocess.CompletedProcess(cmd, 0, stdout=gitleaks_version)
+                report_path = self.output / 'baseline/secret-scan.json'
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text('[]')
+                return subprocess.CompletedProcess(cmd, 0, stdout='')
+            mock_run.side_effect = side_effect
+
+            res = runner.scan_staged_changes(self.wave, executable=gitleaks_path)
+            self.assertEqual(res['status'], 'PASS')
+            self.assertEqual(res['findings'], 0)
+            self.assertEqual(res['scannedStagedFiles'], 1)
 
 
 
