@@ -339,58 +339,46 @@ def publish_capability_pass_decision(wave, capability):
 
 @contextmanager
 def execution_lock(wave):
-    lock_file = wave.output / 'pipeline/.execution.lock'
-    lock_file.parent.mkdir(parents=True, exist_ok=True)
-    my_pid = os.getpid()
-    acquired = False
+    lock_path = wave.output / 'pipeline/.execution.lock'
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, 'O_BINARY', 0)
+    fd = os.open(str(lock_path), flags, 0o600)
+    locked = False
     try:
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        fd = os.open(str(lock_file), flags)
-        try:
-            with open(fd, 'w', encoding='utf-8') as f:
-                f.write(json.dumps({'pid': my_pid, 'timestamp': time.time()}))
-            acquired = True
-        except Exception:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            raise
-    except FileExistsError:
-        is_alive = False
-        try:
-            content = json.loads(lock_file.read_text(encoding='utf-8'))
-            lock_pid = content.get('pid')
-            if lock_pid and isinstance(lock_pid, int):
-                if sys.platform == 'win32':
-                    import ctypes
-                    h = ctypes.windll.kernel32.OpenProcess(0x1000, False, lock_pid)
-                    if h:
-                        ctypes.windll.kernel32.CloseHandle(h)
-                        is_alive = True
-                else:
-                    os.kill(lock_pid, 0)
-                    is_alive = True
-        except Exception:
-            is_alive = False
-        if is_alive:
-            raise NativeContractFailure('R16_CONCURRENT_INVOCATION_REJECTED')
-        try:
-            lock_file.unlink()
-        except OSError:
-            pass
-        fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        with open(fd, 'w', encoding='utf-8') as f:
-            f.write(json.dumps({'pid': my_pid, 'timestamp': time.time()}))
-        acquired = True
+        if sys.platform == 'win32':
+            import msvcrt
 
-    try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise NativeContractFailure('R16_CONCURRENT_INVOCATION_REJECTED') from exc
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (BlockingIOError, OSError) as exc:
+                raise NativeContractFailure('R16_CONCURRENT_INVOCATION_REJECTED') from exc
+        locked = True
         yield
     finally:
-        if acquired:
+        try:
+            if locked:
+                if sys.platform == 'win32':
+                    try:
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        pass
+                else:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+        finally:
             try:
-                if lock_file.exists():
-                    lock_file.unlink()
+                os.close(fd)
             except OSError:
                 pass
 
