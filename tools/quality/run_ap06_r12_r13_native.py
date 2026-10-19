@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 from ap06_authorities import checked_path, private_permissions, sha256, verify_publication
-from ap06_native import PHASES, aggregate_trace, trace_events
+from ap06_native import PHASES, aggregate_trace, inspect_trace, trace_events, _proof_matches
 from prepare_ap06_r12_r13 import NATIVE_BUDGET, OUTPUT, CAMPAIGN, prepare, verify_historical_factorial
 from run_readiness_wave1 import Wave, WaveFailure
 from run_ap06_r9 import (freeze_implementation, publish, validate_freeze_readiness,
@@ -55,6 +55,74 @@ def require(value, reason):
         raise ValueError(reason)
 
 
+def diagnose_trace(path, receipt, acceptance):
+    try:
+        with path.open(encoding='utf-8') as stream:
+            inventory = inspect_trace(trace_events(stream), receipt.get('rendererPid'), receipt.get('checkpoints'))
+    except (UnicodeError, ValueError, OSError):
+        return {'scope': 'sanitized_counts_only', 'status': 'UNVERIFIED',
+            'reason': 'NATIVE_DIAGNOSTIC_TRACE_UNAVAILABLE', 'profilerActivationEvidence': 'UNVERIFIED'}
+
+    dumps, heaps = inventory['dumpEvents'], inventory['heapsV2']
+    checkpoints = receipt.get('checkpoints')
+    successful = sum(1 for item in checkpoints if isinstance(item, dict) and item.get('success') is True) \
+        if isinstance(checkpoints, list) else 0
+    attempts = receipt.get('requestAttempts')
+    if type(attempts) is not int or attempts < 0:
+        attempts = None
+    pid = receipt.get('rendererPid')
+    renderer_matches = dumps['rendererCheckpointGuidsMatched']
+    if type(pid) is not int or pid <= 0:
+        renderer_correlation = 'UNVERIFIED'
+    elif successful == 0:
+        renderer_correlation = 'NO_SUCCESSFUL_REQUEST_RECEIPTS'
+    elif renderer_matches >= successful:
+        renderer_correlation = 'COMPLETE'
+    elif renderer_matches:
+        renderer_correlation = 'PARTIAL'
+    else:
+        renderer_correlation = 'MISSING'
+
+    proof_present = isinstance(receipt.get('rendererIdentityProof'), dict)
+    try:
+        identity = 'PROVEN' if _proof_matches(receipt, pid) else ('REJECTED' if proof_present else 'MISSING')
+    except (AttributeError, TypeError, ValueError):
+        identity = 'REJECTED' if proof_present else 'MISSING'
+    reason = acceptance.get('reason')
+    if acceptance.get('status') == 'NATIVE_CAPABILITY_PASS':
+        heaps_status = 'VALIDATED'
+    elif reason == 'NATIVE_HEAPS_V2_NOT_EMITTED' or heaps['eventsPresent'] == 0:
+        heaps_status = 'ABSENT'
+    elif reason == 'NATIVE_HEAPS_V2_INCOMPLETE' or heaps['checkpointMatchesMissing'] or \
+        heaps['checkpointMatches'] < successful:
+        heaps_status = 'PARTIAL'
+    elif reason == 'NATIVE_HEAPS_V2_EMPTY':
+        heaps_status = 'EMPTY'
+    elif isinstance(reason, str) and reason.startswith(('NATIVE_HEAPS_V2_', 'NATIVE_HEAP_')):
+        heaps_status = 'STRUCTURALLY_REJECTED'
+    else:
+        heaps_status = 'PRESENT_UNVERIFIED'
+
+    before = receipt.get('browserIdentity', {}).get('before') if isinstance(receipt.get('browserIdentity'), dict) else None
+    flags = before.get('nativeFlagsValidated') if isinstance(before, dict) else None
+    if type(flags) is not bool:
+        flags = 'UNVERIFIED'
+    category = receipt.get('memoryInfraCategoryAvailable')
+    if type(category) is not bool:
+        category = 'UNVERIFIED'
+    return {'scope': 'sanitized_counts_only', 'status': 'OBSERVED',
+        'acceptanceStatus': acceptance.get('status'), 'acceptanceReason': reason,
+        'memoryInfraCategoryAvailable': category, 'browserProcessFlagsAttested': flags,
+        'profilerActivationEvidence': 'OBSERVED_HEAPS_V2' if heaps['eventsPresent'] else 'UNVERIFIED',
+        'requestAttempts': attempts, 'successfulCheckpointRequests': successful,
+        'correlatedRendererDumps': renderer_matches, 'rendererCorrelation': renderer_correlation,
+        'rendererIdentityProof': identity,
+        'heapsV2Status': heaps_status,
+        'heapsV2': {key: heaps[key] for key in ('eventsPresent', 'rendererEvents', 'checkpointMatches',
+            'checkpointMatchesMissing', 'schemaVersions', 'schemaVersion1WithAllocatorMap',
+            'validAllocatorArraySets', 'dumpEventsWithoutHeapsV2')}}
+
+
 def validate_trace(path, receipt_path, *, synthetic=False):
     path = checked_path(Path(os.path.abspath(path)))
     receipt_path = checked_path(Path(os.path.abspath(receipt_path)))
@@ -91,7 +159,8 @@ def validate_trace(path, receipt_path, *, synthetic=False):
         result = {'status': 'NATIVE_STOP', 'reason': 'NATIVE_TRACE_SCHEMA_INVALID'}
     if result.get('status') == 'NATIVE_CAPABILITY_PASS':
         result['heapProfilingEffective'] = True
-    return {**result, 'traceSha256': digest, 'traceBytes': path.stat().st_size}
+    return {**result, 'diagnostic': diagnose_trace(path, trace, result),
+        'traceSha256': digest, 'traceBytes': path.stat().st_size}
 
 
 def validate_budget(budget, expected=NATIVE_BUDGET):
@@ -1163,7 +1232,7 @@ def main():
             result = validate_trace(args.validate_synthetic_trace or args.validate_trace, args.receipt,
                 synthetic=args.validate_synthetic_trace is not None)
             result = {key: result[key] for key in
-                ('status', 'reason', 'heapProfilingEffective', 'traceSha256', 'traceBytes') if key in result}
+                ('status', 'reason', 'heapProfilingEffective', 'diagnostic', 'traceSha256', 'traceBytes') if key in result}
         else:
             require(args.source_output is not None, 'R12R13_HISTORICAL_SOURCE_REQUIRED')
             result = run_capability(wave, args.source_output)

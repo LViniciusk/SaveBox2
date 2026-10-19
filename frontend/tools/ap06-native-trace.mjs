@@ -4,6 +4,7 @@ import {getAttestedBrowserProof,NATIVE_ARGS} from './ap06-browser-identity.mjs';
 
 export {NATIVE_ARGS};
 export const CHECKPOINTS=Object.freeze(['baseline','cycle-6-close','idle-120s','forced-GC-final']);
+const validGuid=value=>typeof value==='string'&&/^(?:0x)?[a-f\d]+$/i.test(value);
 async function bounded(promise,ms=30000){
   let timer;try{return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('NATIVE_CDP_TIMEOUT')),ms);})]);}
   finally{clearTimeout(timer);}
@@ -42,7 +43,7 @@ export async function writeTraceStream(cdp,handle,path,maxBytes=512*1024*1024){
 }
 export class NativeTrace {
   constructor(path){this.path=path;this.receipt={tracingStarted:false,memoryInfraCategoryAvailable:false,heapProfilingEffective:null,
-    complete:false,dataLossOccurred:null,streamEof:false,activatedBeforeWorkload:false,checkpoints:[],flags:[...NATIVE_ARGS],samplingIntervalBytes:16384};}
+    complete:false,dataLossOccurred:null,streamEof:false,activatedBeforeWorkload:false,requestAttempts:0,checkpoints:[],flags:[...NATIVE_ARGS],samplingIntervalBytes:16384};}
   async start(browser){
     if(this.cdp||this.started)throw new Error('NATIVE_TRACE_ALREADY_STARTED');
     const proof=getAttestedBrowserProof(browser);
@@ -56,12 +57,14 @@ export class NativeTrace {
     this.receipt.tracingStarted=true;this.receipt.activatedBeforeWorkload=true;this.receipt.startedAt=new Date().toISOString();this.started=true;
   }
   async dump(phase,processes){
+    if(this.receipt.requestAttempts!==this.receipt.checkpoints.length)throw new Error('NATIVE_CHECKPOINT_RETRY_FORBIDDEN');
     if(phase!==CHECKPOINTS[this.receipt.checkpoints.length])throw new Error('NATIVE_CHECKPOINT_ORDER_INVALID');
     const renderer=processes.processes.filter(p=>p.type==='renderer');
     if(renderer.length!==1||this.receipt.rendererPid&&this.receipt.rendererPid!==renderer[0].pid)throw new Error('NATIVE_RENDERER_IDENTITY_CHANGED');
     this.receipt.rendererPid=renderer[0].pid;
-    const at=performance.now(),result=await bounded(this.cdp.send('Tracing.requestMemoryDump',{deterministic:false,levelOfDetail:'detailed'}));
-    if(result.success!==true||typeof result.dumpGuid!=='string'||! /^(?:0x)?[a-f\d]+$/i.test(result.dumpGuid)||
+    const at=performance.now();this.receipt.requestAttempts++;
+    const result=await bounded(this.cdp.send('Tracing.requestMemoryDump',{deterministic:false,levelOfDetail:'detailed'}));
+    if(result.success!==true||!validGuid(result.dumpGuid)||
       this.receipt.checkpoints.some(item=>item.dumpGuid.toLowerCase()===result.dumpGuid.toLowerCase()))throw new Error('NATIVE_DUMP_RECEIPT_INVALID');
     this.receipt.checkpoints.push({phase,...result,timestamp:performance.now(),wallTime:new Date().toISOString(),dumpDurationMs:performance.now()-at,
       rendererPrivateBytes:renderer[0].privateBytes,totalPrivateBytes:processes.privateBytes});
@@ -75,7 +78,16 @@ export class NativeTrace {
       this.receipt.dataLossOccurred=event.dataLossOccurred;this.receipt.traceFormat=event.traceFormat??'json';
       if(!event.stream)throw new Error('NATIVE_STREAM_MISSING');
       Object.assign(this.receipt,await writeTraceStream(this.cdp,event.stream,this.path));
-      this.receipt.complete=this.receipt.tracingStarted&&this.receipt.traceFormat==='json'&&this.receipt.dataLossOccurred===false&&this.receipt.streamEof===true;
+      const checkpoints=this.receipt.checkpoints;
+      const checkpointGuids=new Set();
+      const checkpointsComplete=this.receipt.requestAttempts===CHECKPOINTS.length&&Array.isArray(checkpoints)&&
+        checkpoints.length===CHECKPOINTS.length&&CHECKPOINTS.every((phase,index)=>{
+        const checkpoint=checkpoints[index];
+        if(checkpoint?.phase!==phase||checkpoint.success!==true||!validGuid(checkpoint.dumpGuid))return false;
+        const key=checkpoint.dumpGuid.toLowerCase();if(checkpointGuids.has(key))return false;checkpointGuids.add(key);return true;
+      });
+      this.receipt.complete=this.receipt.tracingStarted&&checkpointsComplete&&this.receipt.traceFormat==='json'&&
+        this.receipt.dataLossOccurred===false&&this.receipt.streamEof===true;
       this.receipt.completedAt=new Date().toISOString();return this.receipt;
     }finally{
       this.started=false;const cdp=this.cdp;this.cdp=undefined;await cdp.detach();
