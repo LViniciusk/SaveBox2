@@ -25,13 +25,16 @@ TRACE_SHA256 = 'da8d207b98b0979fb280ac821fde04c1a09ef3178acc22835d92ba9281798df6
 TRACE_BYTES = 4_430_975
 PHASES = ['baseline', 'cycle-6-close', 'idle-120s', 'forced-GC-final']
 NATIVE_BUDGET = {'capability': 1, 'profiledA': 1, 'profiledB': 1, 'maximum': 3, 'retries': 0}
+R16_BUDGET = {'capability': 1, 'profiledA': 0, 'profiledB': 0, 'maximum': 1, 'retries': 0}
 
 
-def configure_campaign(campaign, output, task_path):
-    global CAMPAIGN, OUTPUT, TASK_PATH
+def configure_campaign(campaign, output, task_path, budget=None):
+    global CAMPAIGN, OUTPUT, TASK_PATH, NATIVE_BUDGET
     CAMPAIGN = campaign
     OUTPUT = output
     TASK_PATH = task_path
+    if budget is not None:
+        NATIVE_BUDGET = budget
 
 
 def require(value, reason):
@@ -293,14 +296,20 @@ def prepare(wave, source):
         'historicalSourceOutput': 'external-private-worktree', 'sourceCopiedAsRuntime': False})
     wave.save('baseline/historical-native-diagnosis.json', diagnosis)
     wave.save('baseline/native-budget.json', {'approved': True, **NATIVE_BUDGET, 'approvedByTaskSha256': task_hash})
-    wave.save('baseline/preregistered-protocol.json', {'campaign': CAMPAIGN, 'implementationHead': wave.git('rev-parse', 'HEAD').strip(),
+    protocol = {'campaign': CAMPAIGN, 'implementationHead': wave.git('rev-parse', 'HEAD').strip(),
         'historicalDecisionSha256': historical['decisionSha256'], 'historicalFreezeSha256': historical['freezeSha256'],
-        'conditionA': {'id': PAIR[0], 'transport': 'XHR/XHR'}, 'conditionB': {'id': PAIR[1], 'transport': 'XHR/Fetch'},
         'budget': NATIVE_BUDGET, 'checkpoints': PHASES, 'samplingIntervalBytes': 16384,
         'traceLimitsBytes': {'stream': 536870912, 'event': 33554432}, 'retries': 0,
         'rendererAlternativeIdentityProof': {'preRegistered': True, 'requiredFields': ['rendererPid', 'creationTime',
             'rolesIncludesRenderer', 'retainedWin32ProcessHandles', 'linkedToProfiledProcess', 'oneStableIdentity', 'allCheckpoints']},
-        'allocationInterpretation': 'Tracked requested bytes and allocator stats remain separate; no total-coverage, individual lifetime, or leak claim.'})
+        'allocationInterpretation': 'Tracked requested bytes and allocator stats remain separate; no total-coverage, individual lifetime, or leak claim.'}
+    if CAMPAIGN == 'AP-06-R12-R16-native':
+        protocol['scope'] = 'capability-only'
+        protocol['abAuthorized'] = False
+    else:
+        protocol['conditionA'] = {'id': PAIR[0], 'transport': 'XHR/XHR'}
+        protocol['conditionB'] = {'id': PAIR[1], 'transport': 'XHR/Fetch'}
+    wave.save('baseline/preregistered-protocol.json', protocol)
     wave.save('baseline/custody.json', {'status': 'PASS', 'newIdentity': True, 'newAuthority': True,
         'newDpapiSeal': True, 'historicalIdentityReused': False, 'historicalRuntimeCopied': False,
         'sourceCorpusPublicationSha256': corpus_publication['manifestSha256'], 'sourceCustodyReadback': previous['status'],

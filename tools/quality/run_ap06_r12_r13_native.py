@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+from contextlib import contextmanager
 from ap06_authorities import checked_path, private_permissions, sha256, verify_publication
 from ap06_native import PHASES, aggregate_trace, guid, inspect_trace, trace_events, _proof_matches
 from prepare_ap06_r12_r13 import NATIVE_BUDGET, OUTPUT, CAMPAIGN, prepare, verify_historical_factorial
@@ -28,26 +30,35 @@ class NativeContractFailure(ValueError):
         super().__init__(reason)
 
 
+R16_BUDGET = {'capability': 1, 'profiledA': 0, 'profiledB': 0, 'maximum': 1, 'retries': 0}
+
+
 def campaign_tag():
     parts = CAMPAIGN.split('-')
     return parts[3].upper() if len(parts) > 3 else 'R13'
 
 
-def configure_campaign(campaign, output, task_path, runner_path=None):
-    global CAMPAIGN, OUTPUT, TASK_PATH, RUNNER_PATH, COMPLETED_STATUSES
+def configure_campaign(campaign, output, task_path, runner_path=None, budget=None):
+    global CAMPAIGN, OUTPUT, TASK_PATH, RUNNER_PATH, COMPLETED_STATUSES, NATIVE_BUDGET
     CAMPAIGN = campaign
     OUTPUT = output
     TASK_PATH = task_path
     if runner_path:
         RUNNER_PATH = runner_path
+    if budget is not None:
+        NATIVE_BUDGET = budget
     tag = campaign_tag()
-    COMPLETED_STATUSES = frozenset({
+    statuses = {
         'PASS',
         'NATIVE_CAPABILITY_PASS',
-        f'R12{tag}_NATIVE_TRACKED_AGGREGATES_OBSERVED',
-        f'R12{tag}_NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT',
         f'R12{tag}_NATIVE_CAPABILITY_INCONCLUSIVE',
-    })
+    }
+    if tag == 'R16':
+        statuses.add('R12R16_NATIVE_CAPABILITY_PASS')
+    else:
+        statuses.add(f'R12{tag}_NATIVE_TRACKED_AGGREGATES_OBSERVED')
+        statuses.add(f'R12{tag}_NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT')
+    COMPLETED_STATUSES = frozenset(statuses)
 
 
 def require(value, reason):
@@ -154,15 +165,15 @@ def diagnose_trace(path, receipt, acceptance):
 
 
 def validate_trace(path, receipt_path, *, synthetic=False):
+    tag = campaign_tag()
     path = checked_path(Path(os.path.abspath(path)))
     receipt_path = checked_path(Path(os.path.abspath(receipt_path)))
     if synthetic:
         temp_root = Path(os.path.abspath(tempfile.gettempdir()))
         require(path.is_relative_to(temp_root) and receipt_path.is_relative_to(temp_root) and
-            path.stat().st_size <= 1024 * 1024, 'R12R13_SYNTHETIC_TRACE_PATH_INVALID')
+            path.stat().st_size <= 1024 * 1024, f'R12{tag}_SYNTHETIC_TRACE_PATH_INVALID')
     else:
         root = receipt_path.parent.parent
-        tag = campaign_tag()
         require(receipt_path.is_relative_to(root), f'R12{tag}_RECEIPT_PATH_INVALID')
         config_path = root / 'baseline/authority-config.local.json'
         if config_path.is_file():
@@ -172,7 +183,7 @@ def validate_trace(path, receipt_path, *, synthetic=False):
         else:
             require(path.is_relative_to(root / 'authority'), f'R12{tag}_TRACE_PATH_INVALID')
         private_permissions(path.parent)
-    require(path.is_file() and path.stat().st_size <= 512 * 1024 * 1024, 'R12R13_TRACE_SIZE_INVALID')
+    require(path.is_file() and path.stat().st_size <= 512 * 1024 * 1024, f'R12{tag}_TRACE_SIZE_INVALID')
     receipt = json.loads(receipt_path.read_text(encoding='utf-8-sig'))
     trace = dict(receipt.get('trace', receipt))
     if receipt is not trace:
@@ -181,7 +192,7 @@ def validate_trace(path, receipt_path, *, synthetic=False):
                 trace[k] = v
     digest = sha256(path)
     require(trace.get('bytes') == path.stat().st_size and trace.get('sha256') == digest,
-        'R12R13_TRACE_CHECKSUM_INVALID')
+        f'R12{tag}_TRACE_CHECKSUM_INVALID')
     try:
         with path.open(encoding='utf-8') as stream:
             result = aggregate_trace(trace_events(stream), trace, detailed=True)
@@ -241,15 +252,18 @@ def verify_frozen_campaign(wave, source):
 verify_frozen_r13 = verify_frozen_campaign
 
 
-def run_capability(wave, source):
+def capture_capability_once(wave, source, frozen=None, native=None):
     output = wave.output
     tag = campaign_tag()
     require(not any((output / path).exists() for path in ('pipeline/capability-reservation.json',
         'final/STOP.json', 'final/decision.json')), f'R12{tag}_NATIVE_NO_RETRY_OR_RESUME')
     task_hash = sha256(output / 'baseline/task.md') if (output / 'baseline/task.md').is_file() else None
-    load_native_budget(output / 'baseline/native-budget.json', NATIVE_BUDGET, task_hash)
-    frozen = verify_frozen_campaign(wave, source)
-    native = configure_native(source)
+    budget_to_check = R16_BUDGET if tag == 'R16' else NATIVE_BUDGET
+    load_native_budget(output / 'baseline/native-budget.json', budget_to_check, task_hash)
+    if frozen is None:
+        frozen = verify_frozen_campaign(wave, source)
+    if native is None:
+        native = configure_native(source)
     reservation = output / 'pipeline/capability-reservation.json'
     with reservation.open('x', encoding='utf-8') as stream:
         json.dump({'campaign': CAMPAIGN, 'maximum': 1, 'retries': 0,
@@ -278,14 +292,111 @@ def run_capability(wave, source):
     wave.save('baseline/native-capability.json', capability)
     publish(wave, 'capability-complete', {'evidence/capability-receipt.json': receipt_path,
         'evidence/capability.json': output / 'baseline/native-capability.json'})
-    status = capability.get('status')
-    if status == 'NATIVE_CAPABILITY_PASS':
-        return run_profiled_pair(wave, source, frozen, native)
-    if status == 'NATIVE_INCONCLUSIVE':
-        return publish_inconclusive_decision(wave, capability)
-    if status == 'NATIVE_STOP':
-        raise NativeContractFailure(capability.get('reason', 'NATIVE_TRACE_CONTRACT_INVALID'))
-    raise ValueError('NATIVE_CAPABILITY_STATUS_INVALID')
+    return capability, frozen, native
+
+
+def publish_capability_pass_decision(wave, capability):
+    output = wave.output
+    tag = campaign_tag()
+    if tag != 'R16':
+        raise NativeContractFailure('NATIVE_DECISION_STATUS_INVALID')
+    if capability.get('status') != 'NATIVE_CAPABILITY_PASS':
+        raise NativeContractFailure('NATIVE_CAPABILITY_STATUS_INVALID')
+    if capability.get('heapProfilingEffective') is not True:
+        raise NativeContractFailure('NATIVE_HEAP_PROFILING_NOT_EFFECTIVE')
+
+    trace_sha = capability.get('traceSha256')
+    if not isinstance(trace_sha, str) or not re.fullmatch(r'[0-9a-f]{64}', trace_sha):
+        raise NativeContractFailure('NATIVE_TRACE_CHECKSUM_INVALID')
+
+    cleanup = stop_and_verify_backend_cleanup(wave)
+    if cleanup.get('status') != 'PASS':
+        raise NativeContractFailure(f"BACKEND_CLEANUP_{cleanup.get('status', 'FAILED')}")
+
+    state = execution_state(output)
+    capability_chromium, measurement_chromium, retries = _decision_consumption(state)
+
+    if capability_chromium != 1 or measurement_chromium != 0 or retries != 0:
+        raise NativeContractFailure('NATIVE_CONSUMPTION_ACCOUNTING_MISMATCH')
+
+    decision = {
+        'status': f'R12{tag}_NATIVE_CAPABILITY_PASS',
+        'capabilityChromium': capability_chromium,
+        'measurementChromium': measurement_chromium,
+        'retries': retries,
+        'abAuthorized': False,
+        'cleanupStatus': cleanup.get('status'),
+        'capability': {
+            'traceSha256': trace_sha,
+            'heapProfilingEffective': True,
+        },
+    }
+    validate_decision_consumption(output, decision)
+    wave.save('final/decision.json', decision)
+    publish(wave, 'decision', {'evidence/decision.json': output / 'final/decision.json'})
+    return decision
+
+
+@contextmanager
+def execution_lock(wave):
+    lock_path = wave.output / 'pipeline/.execution.lock'
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, 'O_BINARY', 0)
+    fd = os.open(str(lock_path), flags, 0o600)
+    locked = False
+    try:
+        if sys.platform == 'win32':
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise NativeContractFailure('R16_CONCURRENT_INVOCATION_REJECTED') from exc
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (BlockingIOError, OSError) as exc:
+                raise NativeContractFailure('R16_CONCURRENT_INVOCATION_REJECTED') from exc
+        locked = True
+        yield
+    finally:
+        try:
+            if locked:
+                if sys.platform == 'win32':
+                    try:
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        pass
+                else:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def run_capability(wave, source):
+    tag = campaign_tag()
+    with execution_lock(wave):
+        capability, frozen, native = capture_capability_once(wave, source)
+        status = capability.get('status')
+        if status == 'NATIVE_CAPABILITY_PASS':
+            if tag == 'R16':
+                return publish_capability_pass_decision(wave, capability)
+            return run_profiled_pair(wave, source, frozen, native)
+        if status == 'NATIVE_INCONCLUSIVE':
+            return publish_inconclusive_decision(wave, capability)
+        if status == 'NATIVE_STOP':
+            raise NativeContractFailure(capability.get('reason', 'NATIVE_TRACE_CONTRACT_INVALID'))
+        raise ValueError('NATIVE_CAPABILITY_STATUS_INVALID')
 
 
 def classify_native_aggregate(aggregate):
@@ -309,17 +420,27 @@ def expected_decision_launches(decision):
     tag = campaign_tag()
     status = decision.get('status')
     rows = decision.get('results', [])
-    if status == f'R12{tag}_NATIVE_CAPABILITY_INCONCLUSIVE':
+    if status == 'R12R16_NATIVE_CAPABILITY_PASS':
+        if tag != 'R16':
+            raise NativeContractFailure('NATIVE_DECISION_STATUS_INVALID')
+        if decision.get('abAuthorized') is not False or rows != [] or decision.get('measurementChromium') != 0:
+            raise NativeContractFailure('NATIVE_DECISION_RESULTS_INVALID')
+        conditions = []
+    elif status == f'R12{tag}_NATIVE_CAPABILITY_INCONCLUSIVE':
         if decision.get('abAuthorized') is not False or rows != []:
             raise NativeContractFailure('NATIVE_DECISION_RESULTS_INVALID')
         conditions = []
     elif status == f'R12{tag}_NATIVE_ALLOCATION_COVERAGE_INSUFFICIENT':
+        if tag == 'R16':
+            raise NativeContractFailure('NATIVE_DECISION_STATUS_INVALID')
         if decision.get('abAuthorized') is not False or not isinstance(rows, list) or len(rows) not in (1, 2):
             raise NativeContractFailure('NATIVE_DECISION_RESULTS_INVALID')
         conditions = ['r12r2.0', 'r12r2.2'][:len(rows)]
         aggregate_statuses = ['NATIVE_INCONCLUSIVE'] if len(rows) == 1 else [
             'NATIVE_CAPABILITY_PASS', 'NATIVE_INCONCLUSIVE']
     elif status == f'R12{tag}_NATIVE_TRACKED_AGGREGATES_OBSERVED':
+        if tag == 'R16':
+            raise NativeContractFailure('NATIVE_DECISION_STATUS_INVALID')
         if decision.get('abAuthorized') is not True or not isinstance(rows, list) or len(rows) != 2:
             raise NativeContractFailure('NATIVE_DECISION_RESULTS_INVALID')
         conditions = ['r12r2.0', 'r12r2.2']
@@ -449,27 +570,30 @@ def offline_preflight(wave, source_output):
     from run_ap06_integration_probe import build_products
     from ap06_key_custody import readback
 
+    tag = campaign_tag()
     require(not any((wave.output / path).exists() for path in ('pipeline/capability-reservation.json',
-        'final/STOP.json', 'final/decision.json')), 'R12R13_OFFLINE_AFTER_SCIENCE_FORBIDDEN')
+        'final/STOP.json', 'final/decision.json')), f'R12{tag}_OFFLINE_AFTER_SCIENCE_FORBIDDEN')
     identity = json.loads((wave.output / 'baseline/browser-identity.json').read_text(encoding='utf-8-sig'))
     verify_identity(identity)
     require(identity.get('chromiumVersion') == '151.0.7922.34' and identity.get('playwrightVersion') == '1.62.1',
-        'R12R13_BROWSER_IDENTITY_INVALID')
+        f'R12{tag}_BROWSER_IDENTITY_INVALID')
+    if tag == 'R16':
+        require(os.name == 'nt', 'R16_PLATFORM_WINDOWS_REQUIRED')
     for relative in ('experimental-backend.json', 'backend-isolation.json', 'listener-isolation.json',
         'network-spoof-guard.json', 'network-spoof-recovery.json', 'startup-rejections.json',
         'backend-runtime.local.json',
         'player-auth.local.json', 'backend-authority.json', 'runtime-credentials.dpapi',
         'runtime-credentials-custody.json', 'runtime-credentials-readback.json'):
         path = wave.output / ('baseline/' + relative)
-        require(path.is_file(), 'R12R13_OFFLINE_BACKEND_OR_CUSTODY_INCOMPLETE')
+        require(path.is_file(), f'R12{tag}_OFFLINE_BACKEND_OR_CUSTODY_INCOMPLETE')
     for name in ('native-production.xml', 'native-experimental.xml'):
         path = wave.output / 'baseline' / name
         report = parse_catch_report(path)
         require(report['assertion_failures'] == report['case_failures'] == report['expected_failures'] == 0,
-            'R12R13_NATIVE_TESTS_FAILED')
+            f'R12{tag}_NATIVE_TESTS_FAILED')
     artifacts = {key: sha256(wave.output / 'tooling/backend-build' / name) for key, name in NATIVE_FILES.items()}
     backend = json.loads((wave.output / 'baseline/experimental-backend.json').read_text())
-    reuse = {'status': 'PASS', 'method': 'fresh isolated R13 CMake/Ninja build', 'artifacts': artifacts,
+    reuse = {'status': 'PASS', 'method': f'fresh isolated {tag} CMake/Ninja build', 'artifacts': artifacts,
         'sourceFiles': native_source_files(wave), 'crowHeaderSha256': backend['crowHeaderSha256']}
     wave.save('baseline/native-binary-reuse.json', reuse)
     summaries = {}
@@ -491,13 +615,13 @@ def offline_preflight(wave, source_output):
         'unitBrowserLaunches': 0, 'browserLaunches': 0, 'appProducts': products,
         'workerHashes': worker_hashes, 'fixtureHash': fixture_hash})
     task_hash = sha256(wave.output / 'baseline/task.md')
-    wave.save('baseline/budget.json', {'approved': True, **NATIVE_BUDGET, 'approvedByTaskSha256': task_hash})
+    budget_to_save = R16_BUDGET if tag == 'R16' else NATIVE_BUDGET
+    wave.save('baseline/budget.json', {'approved': True, **budget_to_save, 'approvedByTaskSha256': task_hash})
     wave.save('baseline/dependency-audit.json', {'status': 'RECORDED_NO_UPGRADES', 'upgradePerformed': False,
         'findings': {'moderate': 7, 'high': 20, 'critical': 3, 'total': 30},
         'sourceReport': 'docs/qualidade/ap06-r12-r12.json'})
     wave.save('baseline/historical-r9.json', json.loads((wave.root / 'docs/qualidade/ap06-r9-r2.json').read_text(encoding='utf-8')))
     source = json.loads((wave.output / 'baseline/historical-factorial-gate.json').read_text())
-    tag = campaign_tag()
     source_task = wave.root / TASK_PATH
     require(sha256(source_task) == json.loads((wave.output / 'baseline/task-provenance.json').read_text())['sourceSha256'],
         f'R12{tag}_TASK_AUTHORITY_CHANGED')
@@ -513,7 +637,7 @@ def offline_preflight(wave, source_output):
     shutil.copyfile(kasumi_source, wave.output / 'tooling/kasumi.cjs')
     runner_test = f'tools/quality/test_ap06_r12_{tag.lower()}.py'
     if not (wave.root / runner_test).is_file():
-        runner_test = 'tools/quality/test_ap06_r12_r13.py'
+        runner_test = 'tools/quality/test_ap06_r12_r14.py' if (wave.root / 'tools/quality/test_ap06_r12_r14.py').is_file() else 'tools/quality/test_ap06_r12_r13.py'
     commands = (
         ('python-native-parser', [sys.executable, 'tools/quality/test_ap06_native.py'], wave.root),
         ('python-runner', [sys.executable, runner_test], wave.root),
@@ -537,8 +661,11 @@ def offline_preflight(wave, source_output):
     identity_record.update(headSha=wave.git('rev-parse', 'HEAD').strip(),
         manifestSha256=sha256(wave.output / 'baseline/browser-identity.json'))
     wave.save('baseline/playwright-identity-preflight.json', identity_record)
-    return {'status': 'PASS', 'scientificChromium': 0, 'reservationCreated': False,
+    result = {'status': 'PASS', 'scientificChromium': 0, 'reservationCreated': False,
         'implementationHead': wave.git('rev-parse', 'HEAD').strip(), 'sourceGate': source.get('status')}
+    if tag == 'R16':
+        result['classification'] = 'R16_ENGINEERING_READY_FOR_CAPABILITY'
+    return result
 
 
 def scan_staged_changes(wave, executable=None):
@@ -1230,7 +1357,7 @@ def _record_decision_validation_incident(wave, reason):
         pass
 
 
-def main():
+def main(wave_root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     actions = parser.add_mutually_exclusive_group(required=True)
     actions.add_argument('--prepare', action='store_true')
@@ -1240,34 +1367,56 @@ def main():
     actions.add_argument('--freeze', action='store_true')
     actions.add_argument('--scan-staged', action='store_true')
     actions.add_argument('--run', action='store_true')
+    actions.add_argument('--run-capability', action='store_true')
+    actions.add_argument('--verify-publication', action='store_true')
     parser.add_argument('--source-output', type=Path)
     parser.add_argument('--receipt', type=Path)
     args = parser.parse_args()
-    wave = Wave(Path(__file__).resolve().parents[2]); wave.output = wave.root / OUTPUT
-    temporary = tempfile.TemporaryDirectory(prefix='ap06-r13-logs-')
+    wave = Wave(wave_root or Path(__file__).resolve().parents[2]); wave.output = wave.root / OUTPUT
+    tag = campaign_tag().lower()
+    tag_str = campaign_tag()
+    temporary = tempfile.TemporaryDirectory(prefix=f'ap06-{tag}-logs-')
     wave.temp = Path(temporary.name)
+    reservation_already_existed = (wave.output / 'pipeline/capability-reservation.json').is_file()
     try:
         if args.prepare:
-            require(args.source_output is not None, 'R12R13_HISTORICAL_SOURCE_REQUIRED')
+            require(args.source_output is not None, f'R12{tag_str}_HISTORICAL_SOURCE_REQUIRED')
             result = prepare(wave, args.source_output)
         elif args.offline_preflight:
-            require(args.source_output is not None, 'R12R13_HISTORICAL_SOURCE_REQUIRED')
+            require(args.source_output is not None, f'R12{tag_str}_HISTORICAL_SOURCE_REQUIRED')
             result = offline_preflight(wave, args.source_output)
         elif args.scan_staged:
             result = scan_staged_changes(wave)
         elif args.freeze:
-            result = freeze_r13(wave)
+            result = freeze_campaign(wave)
         elif args.validate_trace or args.validate_synthetic_trace:
-            require(args.receipt is not None, 'R12R13_RECEIPT_REQUIRED')
+            require(args.receipt is not None, f'R12{tag_str}_RECEIPT_REQUIRED')
             result = validate_trace(args.validate_synthetic_trace or args.validate_trace, args.receipt,
                 synthetic=args.validate_synthetic_trace is not None)
             result = {key: result[key] for key in
                 ('status', 'reason', 'heapProfilingEffective', 'diagnostic', 'traceSha256', 'traceBytes') if key in result}
-        else:
-            require(args.source_output is not None, 'R12R13_HISTORICAL_SOURCE_REQUIRED')
+        elif args.verify_publication:
+            config = json.loads((wave.output / 'baseline/authority-config.local.json').read_text(encoding='utf-8-sig'))
+            authority = checked_path(Path(config['AP06_AUTHORITY_ROOT']))
+            from prepare_ap06_r12_r13 import verify_all_publications_once
+            count, rows = verify_all_publications_once(authority, config['identity'], CAMPAIGN)
+            result = {'status': 'PASS', 'publicationsVerified': count, 'files': len(rows)}
+        elif args.run_capability:
+            if tag_str != 'R16':
+                raise NativeContractFailure(f'R12{tag_str}_RUN_CAPABILITY_NOT_SUPPORTED')
+            require(args.source_output is not None, f'R12{tag_str}_HISTORICAL_SOURCE_REQUIRED')
             result = run_capability(wave, args.source_output)
+        elif args.run:
+            if tag_str == 'R16':
+                raise NativeContractFailure('R12R16_RUN_NOT_SUPPORTED_USE_RUN_CAPABILITY')
+            require(args.source_output is not None, f'R12{tag_str}_HISTORICAL_SOURCE_REQUIRED')
+            result = run_capability(wave, args.source_output)
+        else:
+            raise ValueError('ACTION_REQUIRED')
         print(json.dumps(result))
         status = result.get('status')
+        if args.verify_publication:
+            return 0 if status == 'PASS' else 1
         if args.validate_trace or args.validate_synthetic_trace:
             return 0 if status in ('PASS', 'NATIVE_CAPABILITY_PASS') else 1
         if args.freeze:
@@ -1306,7 +1455,40 @@ def main():
             return 0
         return 1
     except (WaveFailure, OSError, ValueError, KeyError, TypeError) as error:
-        reason = str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+', str(error)) else 'R12R13_NATIVE_EXECUTION_FAILED'
+        if tag_str == 'R16':
+            if reservation_already_existed:
+                state = execution_state(wave.output)
+                reason = str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+', str(error)) else 'R16_EXISTING_SCIENTIFIC_STATE'
+                report = {
+                    'status': 'ERROR',
+                    'reason': reason,
+                    'stage': 'prelaunch',
+                    'classification': 'R16_EXISTING_SCIENTIFIC_STATE',
+                    'reservationCreated': True,
+                    'newLaunchAuthorized': False,
+                    'newLaunchPerformed': False,
+                    'scientificChromium': state['browserLaunches'] if not state['unverifiedConsumption'] else 'UNVERIFIED',
+                }
+                print(json.dumps(report))
+                return 1
+
+            reservation_file = wave.output / 'pipeline/capability-reservation.json'
+            if not reservation_file.exists() or not (args.run_capability or args.run):
+                reason = str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+', str(error)) else 'R16_ENGINEERING_PRELAUNCH_BLOCKED'
+                report = {
+                    'status': 'ERROR',
+                    'reason': reason,
+                    'stage': 'prelaunch',
+                    'classification': 'R16_ENGINEERING_PRELAUNCH_BLOCKED',
+                    'reservationCreated': False,
+                    'newLaunchAuthorized': False,
+                    'newLaunchPerformed': False,
+                    'scientificChromium': 0,
+                }
+                print(json.dumps(report))
+                return 1
+
+        reason = str(error) if re.fullmatch(r'[A-Z][A-Z0-9_:]+', str(error)) else f'R12{tag_str}_NATIVE_EXECUTION_FAILED'
         stop_record = record_durable_stop(wave, reason, error=error)
         print(json.dumps(stop_record))
         return 1

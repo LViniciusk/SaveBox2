@@ -323,7 +323,7 @@ def _proof_matches(receipt,pid,*,allow_legacy=False):
     proof=receipt.get('rendererIdentityProof')
     if not isinstance(proof,dict):return False
     if not (proof.get('status')=='PASS' and proof.get('preRegistered') is True and \
-        proof.get('campaign') in ('AP-06-R12-R14-native','AP-06-R12-R13-native') and \
+        proof.get('campaign') in ('AP-06-R12-R16-native','AP-06-R12-R14-native','AP-06-R12-R13-native') and \
         proof.get('rendererPid')==pid and \
         isinstance(proof.get('roles'),list) and proof['roles']==['renderer'] and \
         proof.get('attestationMethod')=='retained-win32-process-handles' and \
