@@ -57,7 +57,10 @@ O pico permaneceu próximo de 272 KiB nos três tamanhos, além dos buffers e do
 | Suíte Python global | 629 testes executados, 4 skips, resultado OK. Discovery foi executado da raiz do worktree. |
 | Invocação de discovery recuperada | A primeira chamada foi iniciada dentro de tools/quality e falhou ao importar tools; a execução da suíte passou ao iniciar da raiz SaveBox2-ap06-r15-native-capability. |
 | Sintaxe e diff | py_compile e git diff --check passaram. |
-| TSC, build, Gitleaks e workflows | A validar no SHA publicado; nenhum resultado será marcado como PASS antes do término dos jobs. |
+| Gitleaks | Passou no intervalo de 4 commits do PR; nenhum segredo detectado. |
+| Frontend CI | Linux e Windows passaram, incluindo testes unitários e builds de produção. |
+| Quality Baseline | quality-report e e2e passaram. |
+| Backend CI | Linux GCC, Linux Coverage e Windows MSVC passaram. |
 
 ## Segurança de dependências
 
@@ -85,8 +88,8 @@ Freeze R14 0297ac698a7583b2d6f6d031e7438ee24af97948, trace SHA-256 aefcdf7073eb9
 
 | Workflow | Resultado | Run | SHA |
 |---|---|---|---|
-| Backend CI | Pendente | — | — |
-| Frontend CI | Pendente | — | — |
-| Quality Baseline | Pendente | — | — |
+| Backend CI — Linux GCC, Linux Coverage, Windows MSVC | Sucesso | [39191490193](https://github.com/LViniciusk/SaveBox2/actions/runs/39191490193) | `34ecc1d9a9330043ff288a18f05e0cb07555a8cf` |
+| Frontend CI — Linux, Windows | Sucesso | [39191493670](https://github.com/LViniciusk/SaveBox2/actions/runs/39191493670) | `34ecc1d9a9330043ff288a18f05e0cb07555a8cf` |
+| Quality Baseline — quality-report, e2e | Sucesso | [39191490076](https://github.com/LViniciusk/SaveBox2/actions/runs/39191490076) | `34ecc1d9a9330043ff288a18f05e0cb07555a8cf` |
 
-Nenhum merge foi executado; o PR permanece direcionado a frontend.
+Os três workflows passaram no HEAD de implementação acima. Este relatório registra esses resultados; após este commit documental, os workflows serão executados novamente no HEAD final e os resultados serão registrados na descrição do PR. Nenhum merge foi executado; o PR permanece direcionado a frontend.
