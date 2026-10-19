@@ -1198,7 +1198,31 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
             self.assertEqual(res['findings'], 0)
             self.assertEqual(res['scannedStagedFiles'], 1)
 
+    # Caso 24: validate_freeze_preflight aceita preflight build-only para R16 sem browser
+    def test_case_24_r16_freeze_preflight_validation(self):
+        from run_ap06_r9 import validate_freeze_preflight
+        unit = {
+            'status': 'PASS',
+            'preflightMode': 'build-only',
+            'unitBrowserLaunches': 0,
+            'browserLaunches': 0,
+            'appProducts': ['app.js'],
+            'workerHashes': {'worker': 'hash123'},
+            'fixtureHash': 'fixhash123'
+        }
+        (self.output / 'fixtures').mkdir(parents=True, exist_ok=True)
+        (self.output / 'fixtures/manifest.json').write_text('[]')
+        manifest_hash = sha256(self.output / 'fixtures/manifest.json')
+        unit['fixtureHash'] = manifest_hash
+
+        with patch('run_ap06_r9.build_products', return_value=([], ['app.js'], {'worker': {'sha256': 'hash123'}})):
+            assets, products, workers, fixture_hash = validate_freeze_preflight(self.wave, unit, str(self.output))
+            self.assertEqual(products, ['app.js'])
+            self.assertEqual(fixture_hash, manifest_hash)
+
 
 
 if __name__ == '__main__':
     unittest.main()
+
+
