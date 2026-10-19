@@ -143,11 +143,24 @@ def validate_compile_scope(commands):
 
 
 def validate_test_receipt(output, tests):
-    required=('python','node','typescript','angularBuild','native')
-    if Path(output).name not in ('readiness-wave12-r13-native','readiness-wave12-r14-native','readiness-wave12-r16-native'):required+=('global',)
-    if tests.get('status')!='PASS' or any(tests.get(name,{}).get('status') not in
-            (('PASS','DOCUMENTED_EXCEPTION') if name=='global' else ('PASS',)) for name in required):
+    is_r16 = Path(output).name == 'readiness-wave12-r16-native'
+    required = ['python', 'node', 'typescript', 'angularBuild', 'native']
+    if Path(output).name not in ('readiness-wave12-r13-native', 'readiness-wave12-r14-native', 'readiness-wave12-r16-native'):
+        required.append('global')
+    if is_r16 and 'global' in tests:
+        required.append('global')
+    if tests.get('status') != 'PASS':
         raise ValueError('AP06_FREEZE_TEST_AUTHORITY_INVALID')
+    for name in required:
+        status = tests.get(name, {}).get('status')
+        if is_r16 and name == 'global':
+            allowed = ('PASS',)
+        elif name == 'global':
+            allowed = ('PASS', 'DOCUMENTED_EXCEPTION')
+        else:
+            allowed = ('PASS',)
+        if status not in allowed:
+            raise ValueError('AP06_FREEZE_TEST_AUTHORITY_INVALID')
 
 
 def validate_native_build_authority(wave):
