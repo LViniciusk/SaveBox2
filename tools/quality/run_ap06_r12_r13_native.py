@@ -1188,7 +1188,7 @@ def main():
                 except NativeContractFailure as error:
                     _record_decision_validation_incident(wave, error.reason)
                     return 1
-                if 'cleanupStatus' in decision_data and decision_data['cleanupStatus'] != 'PASS':
+                if decision_data.get('cleanupStatus') != 'PASS':
                     return 1
                 config = json.loads((wave.output / 'baseline/authority-config.local.json').read_text(encoding='utf-8-sig'))
                 authority = checked_path(Path(config['AP06_AUTHORITY_ROOT']))

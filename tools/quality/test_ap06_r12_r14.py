@@ -353,6 +353,60 @@ class R12R14PreparationTests(unittest.TestCase):
                     self.assertEqual(published_decision_sha256(), published_before)
                     self.assertTrue((output / 'final/decision-validation-incident.json').is_file())
 
+    def test_main_terminal_gate_requires_explicit_cleanup_pass(self):
+        cases = [('missing', None), *((repr(value), value) for value in
+            (None, 'UNVERIFIED', 'FAIL', 'NOT_PERFORMED', False, 0, ''))]
+        for label, cleanup_status in [('PASS', 'PASS'), *cases]:
+            with self.subTest(cleanup_status=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); output = root / OUTPUT
+                for name in ('baseline', 'pipeline', 'final'):
+                    (output / name).mkdir(parents=True, exist_ok=True)
+                authority = root / 'authority'; identity = 'a' * 64
+                initialize(authority, identity, campaign=CAMPAIGN)
+                (output / 'baseline/authority-config.local.json').write_text(json.dumps({
+                    'AP06_AUTHORITY_ROOT': str(authority), 'identity': identity}), encoding='utf-8')
+                decision = self._accounted_decision(output, 'R12R14_NATIVE_CAPABILITY_INCONCLUSIVE')
+                if label == 'missing':
+                    decision.pop('cleanupStatus', None)
+                else:
+                    decision['cleanupStatus'] = cleanup_status
+                decision_path = output / 'final/decision.json'
+                decision_path.write_text(json.dumps(decision), encoding='utf-8')
+                wave = SimpleNamespace(root=root, output=output, node='node', save=lambda name, value: (
+                    (output / name).parent.mkdir(parents=True, exist_ok=True) or
+                    (output / name).write_text(json.dumps(value), encoding='utf-8')))
+                namespace = publication_namespace(wave)
+                decision_publication = f'{namespace}-decision' if namespace else 'decision'
+                decision_relative = f'{namespace}/evidence/decision.json' if namespace else 'evidence/decision.json'
+                runner.publish(wave, 'decision', {'evidence/decision.json': decision_path})
+
+                historical_stop = root / 'historical-stop.json'
+                historical_stop.write_text('{"status":"STOP","reason":"historical"}', encoding='utf-8')
+                stop_publication = f'{namespace}-stop' if namespace else 'stop'
+                stop_relative = f'{namespace}/evidence/STOP.json' if namespace else 'evidence/STOP.json'
+                runner.publish(wave, 'stop', {'evidence/STOP.json': historical_stop})
+
+                def published_sha(publication, relative):
+                    manifest = verify_publication(authority, identity, publication)
+                    return next(item['sha256'] for item in manifest['files'] if item['path'] == relative)
+
+                decision_before = decision_path.read_bytes()
+                decision_sha_before = published_sha(decision_publication, decision_relative)
+                stop_sha_before = published_sha(stop_publication, stop_relative)
+                self.assertEqual(decision_sha_before, sha256(decision_path))
+                self.assertFalse((output / 'final/STOP.json').exists())
+
+                with patch.object(runner, 'OUTPUT', OUTPUT), patch.object(runner, 'Wave', return_value=wave), \
+                     patch.object(runner, 'run_capability', return_value=decision) as run_mock, \
+                     patch.object(sys, 'argv', ['run_ap06_r12_r13_native.py', '--run', '--source-output', str(root)]):
+                    self.assertEqual(runner.main(), 0 if label == 'PASS' else 1)
+
+                run_mock.assert_called_once_with(wave, root)
+                self.assertEqual(decision_path.read_bytes(), decision_before)
+                self.assertEqual(published_sha(decision_publication, decision_relative), decision_sha_before)
+                self.assertEqual(published_sha(stop_publication, stop_relative), stop_sha_before)
+                self.assertFalse((output / 'final/STOP.json').exists())
+
     def test_native_budget_is_exact_and_requires_task_approval(self):
         budget = {'approved': True, **NATIVE_BUDGET, 'approvedByTaskSha256': 'a' * 64}
         validate_budget(budget)

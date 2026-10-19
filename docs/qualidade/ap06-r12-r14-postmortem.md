@@ -261,3 +261,12 @@ O gate de decisão aceita somente os três estados terminais da campanha, confer
 Os testes de regressão reproduziram status desconhecido e ausência do gate como RED antes da implementação; ficaram GREEN depois. Validação desta rodada: `test_ap06_r12_r14.py` 40/40, `test_ap06_r12_r13.py` 9/9, native/freeze 24/24, Node AP-06 identity/native/integration 21/21, `tsc --noEmit` sem erros e Angular build concluído com warnings de budget. Gitleaks v8.30.1 encontrou zero achados nos quatro arquivos alterados. O gate também aceitou a decisão R14 preservada em modo somente leitura, com 1 capability, 0 A/B e 0 retries. Os jobs C++ e os três workflows no SHA final estão registrados na descrição do PR #39.
 
 Antes/depois desta rodada, a verificação somente leitura confirmou as publicações R14 (9 manifests, 709 entradas) e R13 (6 manifests, 700 entradas). Permanecem idênticos os hashes da decisão R14 (`d078c297e752f6e39757dc3bb9c59cd7eb0d9d35acbade3fbf3e3b38c069aa81`) e do STOP R13 (`97081f17bc48ba55914f61d4a8ce98b7040a58dad1421caae11f0b524ffd04d5`). Nenhum Chromium foi consumido e nenhum resultado científico foi reclassificado.
+
+
+## 12. Gate Final Explícito de Cleanup
+
+O `main()` agora só aprova decisões terminais com `cleanupStatus` exatamente igual a `PASS`; campo ausente, `None`, booleanos, zero, vazio e estados de falha retornam exit 1. Os produtores continuam verificando o helper de cleanup antes de publicar decisões. O teste do caminho real de `main()` reproduziu RED (campo ausente retornava 0) e ficou GREEN para `PASS` e todos os valores inválidos, sem alterar a decisão publicada nem um STOP histórico temporário.
+
+Validação local: Python R13/R14 50/50; native/freeze 24/24; Node AP-06 21/21; TypeScript sem erros; Angular build concluído com warnings de budget; Gitleaks v8.30.1 sem achados nos três arquivos staged. O CI final será registrado no novo HEAD e na descrião do PR #39. Nenhum Chromium científico foi executado.
+
+Readback somente leitura confirmou R13 (6 manifests) e R14 (9 manifests); STOP R13 `97081f17bc48ba55914f61d4a8ce98b7040a58dad1421caae11f0b524ffd04d5` e decisão R14 `d078c297e752f6e39757dc3bb9c59cd7eb0d9d35acbade3fbf3e3b38c069aa81` coincidem com as autoridades. O diretório histórico R12-R12 não existe no worktree nem no workspace principal, portanto seus bytes não puderam ser rechecados nesta rodada; esta alteração não escreve nele.
