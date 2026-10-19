@@ -142,7 +142,7 @@ def validate_condition(raw, condition, stage, freeze, fixtures):
 
 
 def validate_freeze_preflight(wave,unit,output):
-    if wave.output.name in ('readiness-wave12-r13-native', 'readiness-wave12-r14-native'):
+    if wave.output.name in ('readiness-wave12-r13-native', 'readiness-wave12-r14-native', 'readiness-wave12-r16-native'):
         if (unit.get('status')!='PASS' or unit.get('preflightMode')!='build-only' or
                 unit.get('unitBrowserLaunches')!=0 or unit.get('browserLaunches')!=0):
             raise WaveFailure('R12R13_BUILD_PREFLIGHT_INVALID')
