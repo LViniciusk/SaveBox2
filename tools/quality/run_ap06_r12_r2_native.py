@@ -22,7 +22,8 @@ def validate_condition(raw,condition,stage,freeze,fixtures):
 
 
 def native_since(first):
-    return TRACE_PREFIX in tuple(f'r12-r{i}-native' for i in range(first,15))
+    match = re.search(r'r12-r(\d+)-native', TRACE_PREFIX)
+    return int(match.group(1)) >= first if match else False
 
 
 def configure_campaign(output,publisher):
