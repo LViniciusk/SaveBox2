@@ -1281,6 +1281,27 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
                 runner.scan_staged_changes(self.wave, executable=gitleaks_path)
             self.assertIn('R12R13_GITLEAKS_INPUT_INVALID', str(cm.exception))
 
+        # Cenário 7: Passa --config quando .gitleaks.toml existe no root
+        (self.base / '.gitleaks.toml').write_text('[allowlist]\npaths = ["test"]\n')
+        self.wave.git = fake_git_clean
+        captured_cmds = []
+        with patch('subprocess.run') as mock_run:
+            def side_effect_config(cmd, *a, **kw):
+                captured_cmds.append(list(cmd))
+                if cmd[0] == 'go':
+                    return subprocess.CompletedProcess(cmd, 0, stdout=gitleaks_version)
+                report_path = self.output / 'baseline/secret-scan.json'
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text('[]')
+                return subprocess.CompletedProcess(cmd, 0, stdout='')
+            mock_run.side_effect = side_effect_config
+            res_cfg = runner.scan_staged_changes(self.wave, executable=gitleaks_path)
+            self.assertEqual(res_cfg['status'], 'PASS')
+            dir_cmd = [c for c in captured_cmds if len(c) > 1 and c[1] == 'dir'][0]
+            self.assertIn('--config', dir_cmd)
+            cfg_idx = dir_cmd.index('--config')
+            self.assertEqual(dir_cmd[cfg_idx + 1], str(self.wave.root / '.gitleaks.toml'))
+
 
     # Caso 24: validate_freeze_preflight aceita preflight build-only para R16 sem browser
     def test_case_24_r16_freeze_preflight_validation(self):

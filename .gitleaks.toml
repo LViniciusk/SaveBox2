@@ -1,0 +1,9 @@
+title = "SaveBox2 Gitleaks Configuration"
+
+[allowlist]
+description = "Allowlist for unit test synthetic tokens, DPAPI test fixtures, and historical quality documentation"
+paths = [
+    '''(?i)backend[\\/]tests[\\/]''',
+    '''(?i)docs[\\/]qualidade[\\/]''',
+    '''(?i)tools[\\/]quality[\\/]'''
+]

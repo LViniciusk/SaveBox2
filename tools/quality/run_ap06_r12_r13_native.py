@@ -715,9 +715,12 @@ def scan_staged_changes(wave, executable=None):
             scanned_count += 1
         report = wave.output / 'baseline/secret-scan.json'
         report.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run([str(executable), 'dir', str(target), '--no-banner', '--no-color', '--redact',
-            '--report-format', 'json', '--report-path', str(report), '--exit-code', '1'],
-            capture_output=True, text=True, timeout=300)
+        scan_cmd = [str(executable), 'dir', str(target), '--no-banner', '--no-color', '--redact',
+            '--report-format', 'json', '--report-path', str(report), '--exit-code', '1']
+        config = wave.root / '.gitleaks.toml'
+        if config.is_file():
+            scan_cmd.extend(['--config', str(config)])
+        result = subprocess.run(scan_cmd, capture_output=True, text=True, timeout=300)
         findings = json.loads(report.read_text(encoding='utf-8')) if report.exists() else []
         require(result.returncode == 0 and findings == [], 'R12R13_GITLEAKS_FINDINGS')
         tracked = {name: sha256(wave.root / name) for name in wave.git('ls-files').splitlines()
