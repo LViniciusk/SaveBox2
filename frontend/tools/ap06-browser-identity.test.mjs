@@ -129,6 +129,28 @@ test('R3 through R7 cannot launch without their pre-registered identity manifest
   const preflight=readFileSync(new URL('ap06-r12-preflight.mjs',import.meta.url),'utf8');
   assert.ok(preflight.indexOf('await launchAttestedBrowser')<preflight.indexOf('await page.goto(origin)'));
 });
+test('R13 through R16 cannot launch without their pre-registered identity manifest',async()=>{
+  const old=process.env.AP06_EXPERIMENT_ROOT,manifest=process.env.AP06_BROWSER_IDENTITY;
+  try{
+    delete process.env.AP06_BROWSER_IDENTITY;
+    for(const root of [
+      '.quality/readiness-wave12-r13-factorial','.quality/readiness-wave12-r13-native',
+      '.quality/readiness-wave12-r14-factorial','.quality/readiness-wave12-r14-native',
+      '.quality/readiness-wave12-r16-factorial','.quality/readiness-wave12-r16-native',
+    ]){
+      process.env.AP06_EXPERIMENT_ROOT=root;
+      let launched=false;
+      await assert.rejects(
+        launchAttestedBrowser({launch:()=>{launched=true;return {};}},{args:AUTOPLAY_ARGS},{}),
+        {message:'AP06_BROWSER_IDENTITY_UNPROVEN'}
+      );
+      assert.equal(launched,false);
+    }
+  }finally{
+    if(manifest!==undefined)process.env.AP06_BROWSER_IDENTITY=manifest;else delete process.env.AP06_BROWSER_IDENTITY;
+    if(old===undefined)delete process.env.AP06_EXPERIMENT_ROOT;else process.env.AP06_EXPERIMENT_ROOT=old;
+  }
+});
 test('R12-R7 attests before and after workload, then audits and releases the disposable process',
   {skip:process.platform!=='win32'},async()=>{
     const root=mkdtempSync(join(tmpdir(),'ap06-identity-integration-')),profileRoot=join(root,'profiles');mkdirSync(profileRoot);
