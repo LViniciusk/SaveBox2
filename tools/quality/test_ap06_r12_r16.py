@@ -1327,6 +1327,46 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
 
 
 
+    # Caso 25: native_since e native.environment propagam AP06_BROWSER_IDENTITY e AP06_R5_PROCESS_HANDLE_AUDIT para R16
+    def test_case_25_r16_native_since_and_environment_propagation(self):
+        import run_ap06_r12_r2_native as native
+
+        with patch.object(native, 'TRACE_PREFIX', 'r12-r16-native'):
+            self.assertTrue(native.native_since(3))
+            self.assertTrue(native.native_since(4))
+            self.assertTrue(native.native_since(5))
+            self.assertTrue(native.native_since(9))
+            self.assertTrue(native.native_since(11))
+            self.assertTrue(native.native_since(16))
+            self.assertFalse(native.native_since(17))
+
+        with patch.object(native, 'TRACE_PREFIX', 'r12-r14-native'):
+            self.assertTrue(native.native_since(3))
+            self.assertTrue(native.native_since(14))
+            self.assertFalse(native.native_since(15))
+
+        with patch.object(native, 'TRACE_PREFIX', 'r12-r2-native'):
+            self.assertFalse(native.native_since(3))
+
+        def fake_read(p):
+            if 'authority-config' in str(p):
+                return {'AP06_AUTHORITY_ROOT': str(self.base / 'auth'), 'identity': 'test_id'}
+            if 'browser-identity' in str(p):
+                return {'launchProtocol': {'profileRoot': str(self.base / 'profile')}}
+            return {}
+
+        with patch.object(native, 'TRACE_PREFIX', 'r12-r16-native'), \
+             patch('run_ap06_r12_r2_native.runtime_environment', return_value=({}, [])), \
+             patch('run_ap06_r12_r2_native.read', side_effect=fake_read), \
+             patch('run_ap06_r12_r2_native.checked_path', side_effect=lambda p: p), \
+             patch('run_ap06_r12_r2_native.validate_owned_destination'), \
+             patch('run_ap06_r12_r2_native.private_permissions'):
+            env, _ = native.environment(self.wave, self.output / 'pipeline', 'r12r2.0')
+            self.assertEqual(Path(env['AP06_BROWSER_IDENTITY']), self.output / 'baseline/browser-identity.json')
+            self.assertEqual(env['AP06_R5_PROCESS_HANDLE_AUDIT'], '1')
+            self.assertEqual(Path(env['AP06_BROWSER_TEMP_ROOT']), self.base / 'profile')
+
+
 if __name__ == '__main__':
     unittest.main()
 
