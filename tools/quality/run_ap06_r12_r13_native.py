@@ -685,9 +685,17 @@ def scan_staged_changes(wave, executable=None):
     version = subprocess.run(['go', 'version', '-m', str(executable)], capture_output=True, text=True, check=True).stdout
     require(re.search(r'(?m)^\s*mod\s+github\.com/zricethezav/gitleaks/v8\s+v8\.30\.1\s', version),
         'R12R13_GITLEAKS_VERSION_INVALID')
-    changed = wave.git('diff', '--cached', '--name-only', '--diff-filter=ACMRTUXB').splitlines()
-    if not changed:
-        changed = wave.git('diff', 'HEAD^1', 'HEAD', '--name-only', '--diff-filter=ACMRTUXB').splitlines()
+    staged = wave.git('diff', '--cached', '--name-only', '--diff-filter=ACMRTUXB').splitlines()
+    if staged:
+        scope = 'staged'
+        changed = staged
+        unstaged = wave.git('diff', '--name-only').splitlines()
+        conflicts = set(staged).intersection(set(unstaged))
+        require(not conflicts, 'R16_SECRET_SCAN_STAGED_WORKING_DIVERGENCE')
+    else:
+        require(not wave.git('status', '--porcelain').strip(), 'R16_SECRET_SCAN_DIRTY_CHECKOUT')
+        scope = 'tracked-head'
+        changed = wave.git('ls-files').splitlines()
     require(bool(changed), 'R12R13_GITLEAKS_EMPTY_DIFF')
     target = wave.output / 'pipeline/secret-scan-target'
     if target.exists():
@@ -695,12 +703,16 @@ def scan_staged_changes(wave, executable=None):
     target.mkdir(parents=True, exist_ok=True)
     private_permissions(target, create=True)
     try:
+        scanned_count = 0
         for relative in changed:
-            source = checked_path((wave.root / relative).absolute())
+            relative_p = Path(relative)
+            require(not relative_p.is_absolute() and '..' not in relative_p.parts, 'R12R13_GITLEAKS_INPUT_INVALID')
+            source = checked_path((wave.root / relative_p).absolute())
             require(source.is_relative_to(wave.root) and source.is_file(), 'R12R13_GITLEAKS_INPUT_INVALID')
-            destination = target / relative
+            destination = target / relative_p
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
+            scanned_count += 1
         report = wave.output / 'baseline/secret-scan.json'
         report.parent.mkdir(parents=True, exist_ok=True)
         result = subprocess.run([str(executable), 'dir', str(target), '--no-banner', '--no-color', '--redact',
@@ -712,10 +724,20 @@ def scan_staged_changes(wave, executable=None):
             if (wave.root / name).is_file()}
         import hashlib
         tree_hash = hashlib.sha256(json.dumps(tracked, sort_keys=True).encode()).hexdigest()
-        wave.save('baseline/secret-scan-receipt.json', {'status': 'PASS', 'scanner': 'gitleaks',
-            'version': 'v8.30.1', 'actionableFindings': 0, 'trackedTreeSha256': tree_hash,
-            'rawReportSha256': sha256(report), 'findings': 0, 'scannedStagedFiles': len(changed)})
-        return {'status': 'PASS', 'version': 'v8.30.1', 'findings': 0, 'scannedStagedFiles': len(changed)}
+        receipt = {
+            'status': 'PASS',
+            'scanner': 'gitleaks',
+            'version': 'v8.30.1',
+            'scanScope': scope,
+            'scannedFiles': scanned_count,
+            'actionableFindings': 0,
+            'trackedTreeSha256': tree_hash,
+            'rawReportSha256': sha256(report),
+            'findings': 0,
+            'scannedStagedFiles': len(staged) if scope == 'staged' else 0,
+        }
+        wave.save('baseline/secret-scan-receipt.json', receipt)
+        return receipt
     finally:
         if target.exists():
             target = checked_path(target.resolve(strict=True))

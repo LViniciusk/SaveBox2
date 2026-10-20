@@ -1165,23 +1165,25 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
                 runner.offline_preflight(self.wave, source_dir)
             self.assertIn('R16_GLOBAL_TESTS_FAILED', str(cm.exception))
 
-    # Caso 23: scan_staged_changes funciona em checkout limpo inspecionando HEAD^1..HEAD
-    def test_case_23_clean_checkout_scan_staged(self):
+    # Caso 23: scan_staged_changes cobertura de clean-checkout, staged e tratamento de conflitos
+    def test_case_23_secret_scan_coverage_contracts(self):
         gitleaks_path = self.base / 'fake-gitleaks.exe'
         gitleaks_path.write_text('binary')
         gitleaks_version = 'mod github.com/zricethezav/gitleaks/v8 v8.30.1\n'
 
-        def fake_git(cmd, *args):
+        # Cenário 1: Checkout limpo -> escopo tracked-head sobre todos os arquivos rastreados
+        def fake_git_clean(cmd, *args):
             if cmd == 'diff' and '--cached' in args:
                 return ''
-            if cmd == 'diff' and 'HEAD^1' in args:
-                return 'README.md\n'
+            if cmd == 'status' and '--porcelain' in args:
+                return ''
             if cmd == 'ls-files':
-                return 'README.md\n'
+                return 'README.md\npackage.json\n'
             return ''
 
-        self.wave.git = fake_git
+        self.wave.git = fake_git_clean
         (self.base / 'README.md').write_text('# SaveBox2')
+        (self.base / 'package.json').write_text('{"name": "savebox2"}')
 
         with patch('subprocess.run') as mock_run:
             def side_effect(cmd, *a, **kw):
@@ -1195,8 +1197,90 @@ class TestAp06R16ControlledCapability(unittest.TestCase):
 
             res = runner.scan_staged_changes(self.wave, executable=gitleaks_path)
             self.assertEqual(res['status'], 'PASS')
+            self.assertEqual(res['scanScope'], 'tracked-head')
+            self.assertEqual(res['scannedFiles'], 2)
+            self.assertEqual(res['scannedStagedFiles'], 0)
             self.assertEqual(res['findings'], 0)
-            self.assertEqual(res['scannedStagedFiles'], 1)
+
+        # Cenário 2: Alterações staged sem divergência local -> escopo staged
+        def fake_git_staged(cmd, *args):
+            if cmd == 'diff' and '--cached' in args:
+                return 'README.md\n'
+            if cmd == 'diff' and '--name-only' in args:
+                return ''
+            if cmd == 'ls-files':
+                return 'README.md\npackage.json\n'
+            return ''
+
+        self.wave.git = fake_git_staged
+        with patch('subprocess.run') as mock_run:
+            mock_run.side_effect = side_effect
+            res_staged = runner.scan_staged_changes(self.wave, executable=gitleaks_path)
+            self.assertEqual(res_staged['status'], 'PASS')
+            self.assertEqual(res_staged['scanScope'], 'staged')
+            self.assertEqual(res_staged['scannedFiles'], 1)
+            self.assertEqual(res_staged['scannedStagedFiles'], 1)
+
+        # Cenário 3: Alterações staged com alterações unstaged conflitantes -> rejeita divergência
+        def fake_git_conflict(cmd, *args):
+            if cmd == 'diff' and '--cached' in args:
+                return 'README.md\n'
+            if cmd == 'diff' and '--name-only' in args:
+                return 'README.md\n'
+            return ''
+
+        self.wave.git = fake_git_conflict
+        with patch('subprocess.run') as mock_run:
+            mock_run.side_effect = side_effect
+            with self.assertRaises(ValueError) as cm:
+                runner.scan_staged_changes(self.wave, executable=gitleaks_path)
+            self.assertIn('R16_SECRET_SCAN_STAGED_WORKING_DIVERGENCE', str(cm.exception))
+
+        # Cenário 4: Checkout sujo sem staged changes -> rejeita dirty checkout
+        def fake_git_dirty(cmd, *args):
+            if cmd == 'diff' and '--cached' in args:
+                return ''
+            if cmd == 'status' and '--porcelain' in args:
+                return ' M untracked_or_modified.txt\n'
+            return ''
+
+        self.wave.git = fake_git_dirty
+        with patch('subprocess.run') as mock_run:
+            mock_run.side_effect = side_effect
+            with self.assertRaises(ValueError) as cm:
+                runner.scan_staged_changes(self.wave, executable=gitleaks_path)
+            self.assertIn('R16_SECRET_SCAN_DIRTY_CHECKOUT', str(cm.exception))
+
+        # Cenário 5: Scanner detecta findings -> rejeita com R12R13_GITLEAKS_FINDINGS
+        self.wave.git = fake_git_clean
+        with patch('subprocess.run') as mock_run:
+            def side_effect_findings(cmd, *a, **kw):
+                if cmd[0] == 'go':
+                    return subprocess.CompletedProcess(cmd, 0, stdout=gitleaks_version)
+                report_path = self.output / 'baseline/secret-scan.json'
+                report_path.parent.mkdir(parents=True, exist_ok=True)
+                report_path.write_text('[{"Description": "generic-api-key"}]')
+                return subprocess.CompletedProcess(cmd, 1, stdout='leak found')
+            mock_run.side_effect = side_effect_findings
+            with self.assertRaises(ValueError) as cm:
+                runner.scan_staged_changes(self.wave, executable=gitleaks_path)
+            self.assertIn('R12R13_GITLEAKS_FINDINGS', str(cm.exception))
+
+        # Cenário 6: Caminho malicioso ou tentativa de traversal -> rejeita com R12R13_GITLEAKS_INPUT_INVALID
+        def fake_git_traversal(cmd, *args):
+            if cmd == 'diff' and '--cached' in args:
+                return '../outside.txt\n'
+            if cmd == 'diff' and '--name-only' in args:
+                return ''
+            return ''
+
+        self.wave.git = fake_git_traversal
+        with patch('subprocess.run') as mock_run:
+            mock_run.side_effect = side_effect
+            with self.assertRaises(ValueError) as cm:
+                runner.scan_staged_changes(self.wave, executable=gitleaks_path)
+            self.assertIn('R12R13_GITLEAKS_INPUT_INVALID', str(cm.exception))
+
 
     # Caso 24: validate_freeze_preflight aceita preflight build-only para R16 sem browser
     def test_case_24_r16_freeze_preflight_validation(self):
